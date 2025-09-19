@@ -1,0 +1,35 @@
+# Git version control files
+.git
+.gitignore
+ 
+# Environment files with secrets
+.env
+.env.*
+ 
+# Local Python virtual environment
+# This is crucial! You don't want to copy your local venv into the image.
+venv/
+.venv/
+env/
+.env/
+ 
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+ 
+# IDE and editor configuration folders
+.vscode/
+.idea/
+*.swp
+ 
+# Application-generated data folders
+# These folders are created by the server when it runs, not needed for the build.
+uploads/
+recording/
+ 
+# OS-specific files
+.DS_Store
+Thumbs.db
+ 
