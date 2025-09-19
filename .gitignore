@@ -1,0 +1,15 @@
+# Ignore Python virtual environments
+venv1/
+__pycache__/
+*.pyc
+
+# Node modules
+IFS_GROOMING_FE/node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temp
+*.log
+*.tmp
