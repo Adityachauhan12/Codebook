@@ -1,4 +1,3 @@
-
 """
 Performs liveliness detection.
 
@@ -7,7 +6,7 @@ Performs liveliness detection.
 """
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 import base64
 import cv2
 import mediapipe as mp
@@ -110,117 +109,123 @@ def _ear_points(eye_points: list) -> float:
 
 @dataclass
 class SessionState:
-    crew_name: str = "Unknown"
+    """Holds the state for a single liveliness check session."""
     iga_code: str  = "Unknown"
+    
+    # Baseline calculation
+    initial_readings: list = field(default_factory=list)
     baseline_ear: Optional[float] = None
-    last_ear: float = 0.0
-    in_blink: bool = False          # currently in a closed-eye state
-    closed_frames: int = 0
-    blink_count: int = 0
     baseline_nose_x: Optional[float] = None
-    head_turned: bool = False
+
+    # State for blink detection
+    in_blink: bool = False
+    closed_frames: int = 0
+    
+    # Flags to remember completed actions
+    has_blinked: bool = False
+    has_turned_left: bool = False
+    has_turned_right: bool = False
+    
     created_at: datetime = field(default_factory=datetime.now)
 
 
 class StreamingLiveliness:
     """
-    Robust per-session detector for low-FPS HTTP streaming (3–6 fps).
-    - Adaptive blink detection: EAR drop relative to baseline EAR (EMA).
-    - Simple head-turn check: nose-tip X deviation vs baseline.
+    More robust and user-friendly liveliness detector.
+    - Uses a stable baseline from the first few frames.
+    - Remembers completed actions (blink, left, right turn).
+    - Provides clear feedback on which actions are still required.
     """
-    LEFT_EYE = [33,160,158,133,153,144]
-    RIGHT_EYE = [362,385,387,263,373,380]
+    LEFT_EYE = [33, 160, 158, 133, 153, 144]
+    RIGHT_EYE = [362, 385, 387, 263, 373, 380]
     NOSE_TIP_IDX = 1
 
     def __init__(
         self,
-        require_head_turn: bool = True,
-        ear_drop_ratio: float = 0.28,      # 28% drop from baseline counts as closed
-        ema_alpha: float = 0.15,           # EMA update when eyes are open
-        min_closed_frames: int = 1,        # works well for ~3–5 fps
-        nose_dx_threshold: float = 0.02    # slightly more sensitive than before
+        ear_drop_ratio: float = 0.25,      # **FIX**: More sensitive blink threshold (25% drop)
+        min_closed_frames: int = 1,        # 1 frame is sufficient for a blink at low FPS
+        nose_dx_threshold: float = 0.028,  # Slightly relaxed head turn threshold
+        baseline_frames: int = 5           # Use 5 frames to establish a stable baseline
     ):
-        self.require_head_turn = require_head_turn
         self.ear_drop_ratio = ear_drop_ratio
-        self.ema_alpha = ema_alpha
         self.min_closed_frames = min_closed_frames
         self.nose_dx_threshold = nose_dx_threshold
+        self.baseline_frames = baseline_frames
 
         self._sessions: Dict[str, SessionState] = {}
         self._face_mesh = mp.solutions.face_mesh.FaceMesh(
             static_image_mode=False, max_num_faces=1, refine_landmarks=True
         )
 
-    def _get_state(self, session_id: str, crew_name: str, iga_code: str) -> SessionState:
-        st = self._sessions.get(session_id)
-        if st is None:
-            st = SessionState(crew_name=crew_name, iga_code=iga_code)
-            self._sessions[session_id] = st
-        return st
+    def _get_state(self, session_id: str, iga_code: str) -> SessionState:
+        if session_id not in self._sessions:
+            self._sessions[session_id] = SessionState(iga_code=iga_code)
+        return self._sessions[session_id]
 
     def end_session(self, session_id: str):
         self._sessions.pop(session_id, None)
 
-    def process_frame(self, session_id: str, frame_bgr: np.ndarray, crew_name: str, iga_code: str) -> Dict[str, Any]:
-        st = self._get_state(session_id, crew_name, iga_code)
+    def process_frame(self, session_id: str, frame_bgr: np.ndarray, iga_code: str, **kwargs) -> Dict[str, Any]:
+        st = self._get_state(session_id, iga_code)
 
-        # Face landmarks
+        # Helper to create a progress report
+        def progress_report():
+            return {
+                "event": "progress",
+                "actions_done": {
+                    "blink": st.has_blinked,
+                    "left": st.has_turned_left,
+                    "right": st.has_turned_right,
+                },
+                "message": "Initializing..." if st.baseline_ear is None else "Perform actions"
+            }
+
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         results = self._face_mesh.process(rgb)
         if not results.multi_face_landmarks:
-            return {"event": "progress", "blink_count": st.blink_count, "ear": st.last_ear, "baseline_ear": st.baseline_ear, "nose_dx": 0.0}
+            return progress_report()
 
         lm = results.multi_face_landmarks[0]
-        L = [lm.landmark[i] for i in self.LEFT_EYE]
-        R = [lm.landmark[i] for i in self.RIGHT_EYE]
-        ear_now = (_ear_points(L) + _ear_points(R)) / 2.0
-        st.last_ear = float(ear_now)
-
-        # Init baseline EAR with first few open-eye frames
-        if st.baseline_ear is None:
-            st.baseline_ear = float(ear_now)
-
-        # Head-turn (nose x deviation)
+        ear_now = (_ear_points([lm.landmark[i] for i in self.LEFT_EYE]) + 
+                   _ear_points([lm.landmark[i] for i in self.RIGHT_EYE])) / 2.0
         nose_x = lm.landmark[self.NOSE_TIP_IDX].x
-        if st.baseline_nose_x is None:
-            st.baseline_nose_x = float(nose_x)
-        nose_dx = abs(nose_x - st.baseline_nose_x)
-        if nose_dx > self.nose_dx_threshold:
-            st.head_turned = True
 
-        # Determine closed vs open using adaptive threshold
-        closed = ear_now < (st.baseline_ear * (1.0 - self.ear_drop_ratio))
+        # --- 1. BASELINE CALCULATION ---
+        if st.baseline_ear is None:
+            st.initial_readings.append({'ear': ear_now, 'nose_x': nose_x})
+            if len(st.initial_readings) >= self.baseline_frames:
+                st.baseline_ear = sum(r['ear'] for r in st.initial_readings) / len(st.initial_readings)
+                st.baseline_nose_x = sum(r['nose_x'] for r in st.initial_readings) / len(st.initial_readings)
+            return progress_report()
 
-        if closed:
-            st.closed_frames += 1
-            st.in_blink = True
-        else:
-            # Update baseline EAR with EMA when eyes are open -> tracks lighting/pose changes
-            st.baseline_ear = (1.0 - self.ema_alpha) * st.baseline_ear + self.ema_alpha * ear_now
-            if st.in_blink:
-                # blink ends; count it if we had enough closed frames
-                if st.closed_frames >= self.min_closed_frames:
-                    st.blink_count += 1
+        # --- 2. ACTION DETECTION ---
+        # Blink Detection
+        if not st.has_blinked:
+            is_closed = ear_now < (st.baseline_ear * (1.0 - self.ear_drop_ratio))
+            if is_closed:
+                st.closed_frames += 1
+                st.in_blink = True
+            else:
+                if st.in_blink and st.closed_frames >= self.min_closed_frames:
+                    st.has_blinked = True # Action completed and remembered
                 st.in_blink = False
                 st.closed_frames = 0
+        
+        # Head Turn Detection
+        deviation = nose_x - st.baseline_nose_x
+        if not st.has_turned_right and deviation > self.nose_dx_threshold:
+            st.has_turned_right = True # Action completed and remembered
+        
+        if not st.has_turned_left and deviation < -self.nose_dx_threshold:
+            st.has_turned_left = True # Action completed and remembered
 
-        # Success condition
-        success = (st.blink_count > 0) and (st.head_turned or not self.require_head_turn)
-        if success:
+        # --- 3. SUCCESS CONDITION ---
+        if st.has_blinked and st.has_turned_left and st.has_turned_right:
             ok, enc = cv2.imencode(".jpg", frame_bgr)
-            if ok:
-                img_bytes = enc.tobytes()
-                return {
-                    "event": "success",
-                    "blink_count": st.blink_count,
-                    "captured_frame_bytes": img_bytes,
-                }
-            return {"event": "error", "message": "Failed to encode success frame."}
+            return {
+                "event": "success",
+                "captured_frame_bytes": enc.tobytes() if ok else None,
+            }
 
-        return {
-            "event": "progress",
-            "blink_count": st.blink_count,
-            "ear": round(float(ear_now), 4),
-            "baseline_ear": round(float(st.baseline_ear or 0.0), 4),
-            "nose_dx": round(float(nose_dx), 4),
-        }
+        # --- 4. RETURN PROGRESS ---
+        return progress_report()
