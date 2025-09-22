@@ -1,2 +1,52 @@
 Grooming Result
-{"display_text":"Overall Assessment: NON-COMPLIANT\n\nDetailed Assessment:\n- Hairstyle: NON-COMPLIANT. The individual has a hairstyle with bangs covering the forehead and has a full beard and mustache. Airline grooming standards for male crew typically require a clean-shaven look and hair that is neatly styled and off the face.\n- Makeup: NON-COMPLIANT. The individual is not wearing any makeup. As per the provided standards for female crew, foundation is mandatory.\n- Nails: NOT VISIBLE.\n- Accessories: NON-COMPLIANT. The individual is wearing an earbud, which is not an approved accessory. No other approved accessories are visible.\n- Uniform: NON-COMPLIANT. The individual is wearing a casual t-shirt, not the specified Indigo Airlines uniform.\n\nIssues Found:\n- **Uniform:** The individual is not in the required uniform.\n- **Hairstyle:** The hairstyle is not a professional, approved style. The presence of a beard and mustache is against typical cabin crew grooming policies.\n- **Accessories:** An unapproved earbud is being worn.\n- **Makeup:** Mandatory makeup standards (as per the provided female crew guidelines) are not met.\n\nRecommendations:\nThe individual does not meet any of the specified grooming standards for Indigo Airlines crew members. To be compliant, the individual would need to:\n1. Wear the complete, clean, and well-fitted official uniform.\n2. Adhere to the male grooming standards, which would involve being clean-shaven and having a neat, professional haircut.\n3. Remove all non-regulation accessories like earbuds.\n4. If applicable, follow any other role-specific grooming requirements.\n\nOverall Score: 0/10\n- Uniform: 0/3\n- Nails: 0/1\n- Hairstyle: 0/2\n- Makeup: 0/2\n- Accessories: 0/2","parsed":{"overall_assessment":"NON-COMPLIANT","overall_score":"0","details":{"hairstyle":"NON-COMPLIANT. The individual has a hairstyle with bangs covering the forehead and has a full beard and mustache. Airline grooming standards for male crew typically require a clean-shaven look and hair that is neatly styled and off the face.","makeup":"NON-COMPLIANT. The individual is not wearing any makeup. As per the provided standards for female crew, foundation is mandatory.","nails":"NOT VISIBLE.","accessories":"NON-COMPLIANT. The individual is wearing an earbud, which is not an approved accessory. No other approved accessories are visible.","uniform":"NON-COMPLIANT. The individual is wearing a casual t-shirt, not the specified Indigo Airlines uniform."},"issues_found":"- **Uniform:** The individual is not in the required uniform.\n- **Hairstyle:** The hairstyle is not a professional, approved style. The presence of a beard and mustache is against typical cabin crew grooming policies.\n- **Accessories:** An unapproved earbud is being worn.\n- **Makeup:** Mandatory makeup standards (as per the provided female crew guidelines) are not met.\n\nRecommendations:\nThe individual does not meet any of the specified grooming standards for Indigo Airlines crew members. To be compliant, the individual would need to:\n1. Wear the complete, clean, and well-fitted official uniform.\n2. Adhere to the male grooming standards, which would involve being clean-shaven and having a neat, professional haircut.\n3. Remove all non-regulation accessories like earbuds.\n4. If applicable, follow any other role-specific grooming requirements.\n\nOverall Score: 0/10\n- Uniform: 0/3\n- Nails: 0/1\n- Hairstyle: 0/2\n- Makeup: 0/2\n- Accessories: 0/2","recommendations":"The individual does not meet any of the specified grooming standards for Indigo Airlines crew members. To be compliant, the individual would need to:\n1. Wear the complete, clean, and well-fitted official uniform.\n2. Adhere to the male grooming standards, which would involve being clean-shaven and having a neat, professional haircut.\n3. Remove all non-regulation accessories like earbuds.\n4. If applicable, follow any other role-specific grooming requirements.\n\nOverall Score: 0/10\n- Uniform: 0/3\n- Nails: 0/1\n- Hairstyle: 0/2\n- Makeup: 0/2\n- Accessories: 0/2"},"ticket_id":"SNTKT-3f86dd39"}
+UNKNOWNScore: 0/10
+Uniform
+0/3 (Not wearing a uniform)
+Hairstyle
+0/2 (Non-compliant style, fringe violation, and unaddressed facial hair)
+Makeup
+0/2 (Absence of required makeup)
+Nails
+0/1 (Not visible for assessment)
+Accessories
+0/2 (Wearing a prohibited item)
+Issues
+**Fundamental Mismatch:** The individual in the image is male, and the provided grooming standards are specified for female crew members. This makes a direct and fair assessment impossible.
+**Hairstyle:** The hairstyle is not on the approved list, and the fringe violates the length rule.
+**Facial Hair:** Presence of a beard and mustache.
+**Makeup:** Complete absence of mandatory makeup.
+**Accessories:** Use of a non-approved accessory (earbud).
+**Uniform:** Not wearing any part of the required uniform.
+Recommendations
+The individual must refer to and adhere to the specific grooming standards for male crew members as provided by Indigo Airlines.
+All aspects of grooming, including hairstyle, facial hair, accessories, and uniform, must be brought into compliance with company policy before duty.
+Upload grooming video
+MicrosoftTeams-video (3).mp4
+Grooming Result (Video)
+UNKNOWNScore: 9/10
+Category Scores
+Uniform
+0/3
+Nails
+0/1
+Hairstyle
+0/2
+Makeup
+0/2
+Accessories
+0/2
+Details
+Uniform
+-
+Hairstyle
+-
+Makeup
+-
+Nails
+-
+Accessories
+-
+Issues
+Nails were not visible for assessment.
+Recommendations
+For a complete assessment in the future, please ensure that hands and nails are visible. The overall grooming is excellent and meets Indigo's high standards.
