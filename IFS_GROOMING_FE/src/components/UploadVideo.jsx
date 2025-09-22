@@ -1,70 +1,143 @@
+// src/components/UploadVideo.jsx
 import React, { useState } from 'react';
 
-/**
- * UploadVideo component allows users to upload a video file
- * for grooming verification. It sends the video to the backend
- * and displays the result.
- *
- * Props:
- * - crewName: string - Name of the crew member
- * - igaCode: string - IGA code of the crew member
- */
 function UploadVideo({ crewName, igaCode }) {
-  const [response, setResponse] = useState(null);
+  const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-
+  const [err, setErr] = useState(null);
   const BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-  /**
-   * Handles video file selection and uploads it to the backend.
-   * Displays grooming result after processing.
-   */
   const handleVideoUpload = (event) => {
     const file = event.target.files[0];
     if (!file) return;
-
     const formData = new FormData();
     formData.append('video', file);
     formData.append('name', crewName);
     formData.append('iga_code', igaCode);
 
+    setErr(null);
+    setResult(null);
     setLoading(true);
 
-    fetch(`${BASE_URL}/check-grooming-video`, {
-      method: 'POST',
-      body: formData,
-    })
+    fetch(`${BASE_URL}/check-grooming-video`, { method: 'POST', body: formData })
       .then((res) => res.json())
       .then((data) => {
-        setResponse(data.result);
+        if (!data || data.status !== 'ok') throw new Error(data?.error || 'API error');
+        setResult(data.result); // object with assessment, score, scores, details, issues, recommendations
         setLoading(false);
       })
-      .catch((err) => {
-        console.error('Video Upload Error:', err);
+      .catch((e) => {
+        console.error('Video Upload Error:', e);
+        setErr('Video grooming check failed.');
         setLoading(false);
       });
   };
 
   return (
-    <div className="upload-section">
-      <label className="upload-label">
-        <span className="upload-button">Choose Video</span>
-        <input
-          type="file"
-          accept="video/*"
-          onChange={handleVideoUpload}
-          hidden
-        />
-      </label>
+    <div style={{ marginTop: 16 }}>
+      <label style={{ display: 'block', marginBottom: 8 }}>Upload grooming video</label>
+      <input type="file" accept="video/*" onChange={handleVideoUpload} />
 
-      {loading && (
-        <p className="loader">⏳ Uploading and checking video...</p>
-      )}
+      {loading && <p style={{ marginTop: 8 }}>⏳ Uploading and checking video...</p>}
+      {err && <p style={{ marginTop: 8, color: '#dc2626' }}>{err}</p>}
 
-      {response && (
-        <div className="result-card">
-          <h3>Assessment Result</h3>
-          <pre className="result-text">{response}</pre>
+      {result && (
+        <div className="result-card" style={{ marginTop: 12 }}>
+          <h3>Grooming Result (Video)</h3>
+
+          <div style={{ marginBottom: 8 }}>
+            <span
+              style={{
+                padding: '4px 8px',
+                borderRadius: 6,
+                color: '#fff',
+                background: result.assessment === 'COMPLIANT' ? '#16a34a' : '#dc2626',
+              }}
+            >
+              {result.assessment}
+            </span>
+            <span style={{ marginLeft: 10 }}>Score: {result.score}/10</span>
+          </div>
+
+          {/* Category scores */}
+          <div style={{ marginTop: 6 }}>
+            <h4>Category Scores</h4>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '150px 1fr',
+                rowGap: 6,
+                columnGap: 12,
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>Uniform</div>
+              <div>{result.scores?.uniform ?? 0}/3</div>
+
+              <div style={{ fontWeight: 600 }}>Nails</div>
+              <div>{result.scores?.nails ?? 0}/1</div>
+
+              <div style={{ fontWeight: 600 }}>Hairstyle</div>
+              <div>{result.scores?.hairstyle ?? 0}/2</div>
+
+              <div style={{ fontWeight: 600 }}>Makeup</div>
+              <div>{result.scores?.makeup ?? 0}/2</div>
+
+              <div style={{ fontWeight: 600 }}>Accessories</div>
+              <div>{result.scores?.accessories ?? 0}/2</div>
+            </div>
+          </div>
+
+          {/* Details */}
+          <div style={{ marginTop: 12 }}>
+            <h4>Details</h4>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '150px 1fr',
+                rowGap: 6,
+                columnGap: 12,
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>Uniform</div>
+              <div>{result.details?.uniform || '-'}</div>
+
+              <div style={{ fontWeight: 600 }}>Hairstyle</div>
+              <div>{result.details?.hairstyle || '-'}</div>
+
+              <div style={{ fontWeight: 600 }}>Makeup</div>
+              <div>{result.details?.makeup || '-'}</div>
+
+              <div style={{ fontWeight: 600 }}>Nails</div>
+              <div>{result.details?.nails || '-'}</div>
+
+              <div style={{ fontWeight: 600 }}>Accessories</div>
+              <div>{result.details?.accessories || '-'}</div>
+            </div>
+          </div>
+
+          {/* Issues */}
+          {Array.isArray(result.issues) && result.issues.length > 0 && (
+            <>
+              <h4 style={{ marginTop: 12 }}>Issues</h4>
+              <ul>
+                {result.issues.map((it, i) => (
+                  <li key={i}>{it}</li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {/* Recommendations */}
+          {Array.isArray(result.recommendations) && result.recommendations.length > 0 && (
+            <>
+              <h4 style={{ marginTop: 12 }}>Recommendations</h4>
+              <ul>
+                {result.recommendations.map((it, i) => (
+                  <li key={i}>{it}</li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
     </div>
