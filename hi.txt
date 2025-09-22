@@ -1,29 +1,7 @@
 Grooming Result
+wd • IGA: IGA56222
+
 UNKNOWNScore: 0/10
-Uniform
-0/3 (Not wearing a uniform)
-Hairstyle
-0/2 (Non-compliant style, fringe violation, and unaddressed facial hair)
-Makeup
-0/2 (Absence of required makeup)
-Nails
-0/1 (Not visible for assessment)
-Accessories
-0/2 (Wearing a prohibited item)
-Issues
-**Fundamental Mismatch:** The individual in the image is male, and the provided grooming standards are specified for female crew members. This makes a direct and fair assessment impossible.
-**Hairstyle:** The hairstyle is not on the approved list, and the fringe violates the length rule.
-**Facial Hair:** Presence of a beard and mustache.
-**Makeup:** Complete absence of mandatory makeup.
-**Accessories:** Use of a non-approved accessory (earbud).
-**Uniform:** Not wearing any part of the required uniform.
-Recommendations
-The individual must refer to and adhere to the specific grooming standards for male crew members as provided by Indigo Airlines.
-All aspects of grooming, including hairstyle, facial hair, accessories, and uniform, must be brought into compliance with company policy before duty.
-Upload grooming video
-MicrosoftTeams-video (3).mp4
-Grooming Result (Video)
-UNKNOWNScore: 9/10
 Category Scores
 Uniform
 0/3
@@ -46,7 +24,31 @@ Nails
 -
 Accessories
 -
-Issues
-Nails were not visible for assessment.
-Recommendations
-For a complete assessment in the future, please ensure that hands and nails are visible. The overall grooming is excellent and meets Indigo's high standards.
+Upload grooming video
+MicrosoftTeams-video (6).mp4
+Grooming Result (Video)
+wd • IGA: IGA56222
+
+UNKNOWNScore: 9/10
+Category Scores
+Uniform
+-/3
+Nails
+-/1
+Hairstyle
+-/2
+Makeup
+-/2
+Accessories
+-/2
+Details
+Uniform
+-
+Hairstyle
+-
+Makeup
+-
+Nails
+-
+Accessories
+-
