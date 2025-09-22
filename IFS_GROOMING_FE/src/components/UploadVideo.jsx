@@ -23,7 +23,7 @@ function UploadVideo({ crewName, igaCode }) {
       .then((res) => res.json())
       .then((data) => {
         if (!data || data.status !== 'ok') throw new Error(data?.error || 'API error');
-        setResult(data.result); // object with assessment, score, scores, details, issues, recommendations
+        setResult(data.result);
         setLoading(false);
       })
       .catch((e) => {
@@ -45,6 +45,10 @@ function UploadVideo({ crewName, igaCode }) {
         <div className="result-card" style={{ marginTop: 12 }}>
           <h3>Grooming Result (Video)</h3>
 
+          <p style={{ margin: '4px 0', color: '#555' }}>
+            {result?.person?.name || '-'} • IGA: {result?.person?.iga_code || '-'}
+          </p>
+
           <div style={{ marginBottom: 8 }}>
             <span
               style={{
@@ -59,7 +63,6 @@ function UploadVideo({ crewName, igaCode }) {
             <span style={{ marginLeft: 10 }}>Score: {result.score}/10</span>
           </div>
 
-          {/* Category scores */}
           <div style={{ marginTop: 6 }}>
             <h4>Category Scores</h4>
             <div
@@ -71,23 +74,22 @@ function UploadVideo({ crewName, igaCode }) {
               }}
             >
               <div style={{ fontWeight: 600 }}>Uniform</div>
-              <div>{result.scores?.uniform ?? 0}/3</div>
+              <div>{result.scores?.uniform ?? '-'}/3</div>
 
               <div style={{ fontWeight: 600 }}>Nails</div>
-              <div>{result.scores?.nails ?? 0}/1</div>
+              <div>{result.scores?.nails ?? '-'}/1</div>
 
               <div style={{ fontWeight: 600 }}>Hairstyle</div>
-              <div>{result.scores?.hairstyle ?? 0}/2</div>
+              <div>{result.scores?.hairstyle ?? '-'}/2</div>
 
               <div style={{ fontWeight: 600 }}>Makeup</div>
-              <div>{result.scores?.makeup ?? 0}/2</div>
+              <div>{result.scores?.makeup ?? '-'}/2</div>
 
               <div style={{ fontWeight: 600 }}>Accessories</div>
-              <div>{result.scores?.accessories ?? 0}/2</div>
+              <div>{result.scores?.accessories ?? '-'}/2</div>
             </div>
           </div>
 
-          {/* Details */}
           <div style={{ marginTop: 12 }}>
             <h4>Details</h4>
             <div
@@ -115,7 +117,6 @@ function UploadVideo({ crewName, igaCode }) {
             </div>
           </div>
 
-          {/* Issues */}
           {Array.isArray(result.issues) && result.issues.length > 0 && (
             <>
               <h4 style={{ marginTop: 12 }}>Issues</h4>
@@ -127,7 +128,6 @@ function UploadVideo({ crewName, igaCode }) {
             </>
           )}
 
-          {/* Recommendations */}
           {Array.isArray(result.recommendations) && result.recommendations.length > 0 && (
             <>
               <h4 style={{ marginTop: 12 }}>Recommendations</h4>
