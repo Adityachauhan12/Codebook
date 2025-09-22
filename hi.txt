@@ -1,54 +1,42 @@
 Grooming Result
-wd • IGA: IGA56222
+wd • IGA: IGA87654
 
 UNKNOWNScore: 0/10
 Category Scores
 Uniform
-0/3
-Nails
-0/1
+0/3 (0/3)
 Hairstyle
-0/2
+0/2 (0/2)
 Makeup
-0/2
-Accessories
-0/2
-Details
-Uniform
--
-Hairstyle
--
-Makeup
--
+0/2 (0/2)
 Nails
--
+0/1 (0/1)
 Accessories
--
+0/2 (0/2)
+Issues
+**Uniform:** Individual is not in the designated uniform.
+**Hairstyle:** Unapproved hairstyle and bangs covering the eyebrows.
+**Makeup:** Failure to comply with mandatory makeup application standards.
+**Accessories:** Wearing a non-approved item (earbud).
+Recommendations
+The individual must wear the complete, clean, and well-fitted Indigo Airlines uniform for any assessment.
+Hairstyle needs to be changed to one of the approved styles, ensuring it is neat and professional, with the fringe trimmed above the eyebrows.
+Complete makeup application is required as per the guidelines, including foundation, concealer, and approved shades for lips and eyes.
+All non-approved accessories, such as earbuds, must be removed and replaced with compliant items (e.g., specified earrings and watch).
 Upload grooming video
-MicrosoftTeams-video (6).mp4
+MicrosoftTeams-video (5).mp4
 Grooming Result (Video)
-wd • IGA: IGA56222
+wd • IGA: IGA87654
 
-UNKNOWNScore: 9/10
+UNKNOWNScore: 6/10
 Category Scores
 Uniform
--/3
-Nails
--/1
+1/3
 Hairstyle
--/2
+2/2
 Makeup
--/2
-Accessories
--/2
-Details
-Uniform
--
-Hairstyle
--
-Makeup
--
+2/2
 Nails
--
+0/1
 Accessories
--
+1/2
