@@ -19,7 +19,6 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
   const BASE_URL = import.meta.env.VITE_API_BASE_URL;
   const apiUrl = (path) => `${BASE_URL}${path}`;
 
-  // Load MediaPipe model (WASM served from /public/wasm)
   const loadModel = useCallback(async () => {
     try {
       const fileset = await FilesetResolver.forVisionTasks('/wasm');
@@ -94,7 +93,6 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
     if (results.faceLandmarks && results.faceLandmarks.length > 0) {
       const landmarks = results.faceLandmarks[0];
 
-      // guard: ensure enough points exist (eye indices go up to ~468)
       if (!landmarks || landmarks.length < 470) {
         detectionLoopRef.current = requestAnimationFrame(runLiveDetectionLoop);
         return;
@@ -153,7 +151,6 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
     canvas.height = videoRef.current.videoHeight;
     canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
 
-    // compress snapshot to keep backend fast
     const imageB64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
 
     stopCheck();
@@ -171,10 +168,7 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
       if (!res.ok) throw new Error('API request failed');
       const data = await res.json();
 
-      // New clean shape
       const clean = data?.result || null;
-
-      // Fallback to old keys if backend not yet updated
       const fallbackParsed = data?.parsed || null;
       const normalized =
         clean ||
@@ -182,6 +176,7 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
           ? {
               assessment: fallbackParsed.overall_assessment || 'UNKNOWN',
               score: Number(fallbackParsed.overall_score || 0),
+              scores: { uniform: null, nails: null, hairstyle: null, makeup: null, accessories: null },
               details: {
                 hairstyle: fallbackParsed?.details?.hairstyle || '',
                 makeup: fallbackParsed?.details?.makeup || '',
@@ -240,11 +235,15 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
         </button>
       )}
 
-      {(status === 'uploading') && <p className="loader">Analyzing...</p>}
+      {status === 'uploading' && <p className="loader">Analyzing...</p>}
 
       {status === 'done' && groomingResult && (
         <div className="result-card" style={{ marginTop: 12 }}>
           <h3>Grooming Result</h3>
+
+          <p style={{ margin: '4px 0', color: '#555' }}>
+            {crewName || '-'} • IGA: {igaCode || '-'}
+          </p>
 
           <div style={{ marginBottom: 8 }}>
             <span
@@ -261,24 +260,55 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
             <span style={{ marginLeft: 10 }}>Score: {groomingResult.score}/10</span>
           </div>
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '150px 1fr',
-              rowGap: 6,
-              columnGap: 12,
-            }}
-          >
-            <div style={{ fontWeight: 600 }}>Uniform</div>
-            <div>{groomingResult.details?.uniform || '-'}</div>
-            <div style={{ fontWeight: 600 }}>Hairstyle</div>
-            <div>{groomingResult.details?.hairstyle || '-'}</div>
-            <div style={{ fontWeight: 600 }}>Makeup</div>
-            <div>{groomingResult.details?.makeup || '-'}</div>
-            <div style={{ fontWeight: 600 }}>Nails</div>
-            <div>{groomingResult.details?.nails || '-'}</div>
-            <div style={{ fontWeight: 600 }}>Accessories</div>
-            <div>{groomingResult.details?.accessories || '-'}</div>
+          {/* Category scores (may show '-' if not provided) */}
+          <div style={{ marginTop: 6 }}>
+            <h4>Category Scores</h4>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '150px 1fr',
+                rowGap: 6,
+                columnGap: 12,
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>Uniform</div>
+              <div>{groomingResult.scores?.uniform ?? '-'}/3</div>
+
+              <div style={{ fontWeight: 600 }}>Nails</div>
+              <div>{groomingResult.scores?.nails ?? '-'}/1</div>
+
+              <div style={{ fontWeight: 600 }}>Hairstyle</div>
+              <div>{groomingResult.scores?.hairstyle ?? '-'}/2</div>
+
+              <div style={{ fontWeight: 600 }}>Makeup</div>
+              <div>{groomingResult.scores?.makeup ?? '-'}/2</div>
+
+              <div style={{ fontWeight: 600 }}>Accessories</div>
+              <div>{groomingResult.scores?.accessories ?? '-'}/2</div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <h4>Details</h4>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '150px 1fr',
+                rowGap: 6,
+                columnGap: 12,
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>Uniform</div>
+              <div>{groomingResult.details?.uniform || '-'}</div>
+              <div style={{ fontWeight: 600 }}>Hairstyle</div>
+              <div>{groomingResult.details?.hairstyle || '-'}</div>
+              <div style={{ fontWeight: 600 }}>Makeup</div>
+              <div>{groomingResult.details?.makeup || '-'}</div>
+              <div style={{ fontWeight: 600 }}>Nails</div>
+              <div>{groomingResult.details?.nails || '-'}</div>
+              <div style={{ fontWeight: 600 }}>Accessories</div>
+              <div>{groomingResult.details?.accessories || '-'}</div>
+            </div>
           </div>
 
           {Array.isArray(groomingResult.issues) && groomingResult.issues.length > 0 && (
