@@ -4,14 +4,21 @@ import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
 const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
   const [feedback, setFeedback] = useState('Please wait, loading AI model...');
-  const [status, setStatus] = useState('loading'); // loading, ready, detecting, success, uploading, done
+  const [status, setStatus] = useState('loading'); // loading, ready, detecting, choose, uploading, done
   const [groomingResult, setGroomingResult] = useState(null);
   const [error, setError] = useState(null);
+
+  const [mode, setMode] = useState(null); // 'photo' | 'video'
+  const [recTimer, setRecTimer] = useState(0);
+  const recIntervalRef = useRef(null);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const landmarkerRef = useRef(null);
   const detectionLoopRef = useRef(null);
+
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
 
   const actionsDoneRef = useRef({ blink: false, left: false, right: false });
   const baselinesRef = useRef({ ear: null, noseX: null });
@@ -19,6 +26,7 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
   const BASE_URL = import.meta.env.VITE_API_BASE_URL;
   const apiUrl = (path) => `${BASE_URL}${path}`;
 
+  // ---------- Load Face Landmarker ----------
   const loadModel = useCallback(async () => {
     try {
       const fileset = await FilesetResolver.forVisionTasks('/wasm');
@@ -44,6 +52,7 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
     return () => cancelDetectionLoop();
   }, [loadModel]);
 
+  // ---------- Liveness ----------
   const startCheck = async () => {
     if (status !== 'ready' || !landmarkerRef.current) return;
     actionsDoneRef.current = { blink: false, left: false, right: false };
@@ -66,19 +75,17 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
     }
   };
 
-  const stopCheck = () => {
-    cancelDetectionLoop();
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    setStatus('ready');
-  };
-
   const cancelDetectionLoop = () => {
     if (detectionLoopRef.current) {
       cancelAnimationFrame(detectionLoopRef.current);
       detectionLoopRef.current = null;
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
     }
   };
 
@@ -92,7 +99,6 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
     const results = landmarkerRef.current.detectForVideo(video, performance.now());
     if (results.faceLandmarks && results.faceLandmarks.length > 0) {
       const landmarks = results.faceLandmarks[0];
-
       if (!landmarks || landmarks.length < 470) {
         detectionLoopRef.current = requestAnimationFrame(runLiveDetectionLoop);
         return;
@@ -143,19 +149,26 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
   };
 
   const onLivelinessSuccess = () => {
-    setStatus('success');
     cancelDetectionLoop();
+    setStatus('choose');
+    setFeedback('Liveliness passed. Choose photo or record a short video.');
+  };
 
-    const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
-
-    const imageB64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-
-    stopCheck();
-    setStatus('uploading');
-    runGroomingPhoto(imageB64);
+  // ---------- Photo path ----------
+  const usePhotoAndUpload = () => {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
+      const imageB64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+      setMode('photo');
+      setStatus('uploading');
+      stopCamera();
+      runGroomingPhoto(imageB64);
+    } catch (e) {
+      setError('Could not capture photo.');
+    }
   };
 
   const runGroomingPhoto = async (imageBase64) => {
@@ -167,40 +180,85 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
       });
       if (!res.ok) throw new Error('API request failed');
       const data = await res.json();
-
-      const clean = data?.result || null;
-      const fallbackParsed = data?.parsed || null;
-      const normalized =
-        clean ||
-        (fallbackParsed
-          ? {
-              assessment: fallbackParsed.overall_assessment || 'UNKNOWN',
-              score: Number(fallbackParsed.overall_score || 0),
-              scores: { uniform: null, nails: null, hairstyle: null, makeup: null, accessories: null },
-              details: {
-                hairstyle: fallbackParsed?.details?.hairstyle || '',
-                makeup: fallbackParsed?.details?.makeup || '',
-                nails: fallbackParsed?.details?.nails || '',
-                accessories: fallbackParsed?.details?.accessories || '',
-                uniform: fallbackParsed?.details?.uniform || '',
-              },
-              issues: (fallbackParsed.issues_found || '')
-                .split('\n')
-                .filter(Boolean),
-              recommendations: (fallbackParsed.recommendations || '')
-                .split('\n')
-                .filter(Boolean),
-            }
-          : null);
-
-      setGroomingResult(normalized);
+      setGroomingResult(data?.result || null);
       setStatus('done');
       if (onComplete) onComplete();
-    } catch (err) {
+    } catch {
       setError('Grooming check failed.');
     }
   };
 
+  // ---------- Video path ----------
+  const startRecording = () => {
+    if (!streamRef.current) {
+      setError('Camera stream not available.');
+      return;
+    }
+    recordedChunksRef.current = [];
+    setMode('video');
+    setRecTimer(0);
+
+    const options = { mimeType: 'video/webm;codecs=vp8' };
+    const mr = new MediaRecorder(streamRef.current, options);
+    mediaRecorderRef.current = mr;
+
+    mr.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+    };
+    mr.onstop = handleRecordingStop;
+
+    mr.start(100);
+    if (recIntervalRef.current) clearInterval(recIntervalRef.current);
+    recIntervalRef.current = setInterval(() => setRecTimer((t) => t + 1), 1000);
+
+    // auto-stop at 10s
+    setTimeout(() => {
+      if (mr.state !== 'inactive') mr.stop();
+    }, 10000);
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
+  const handleRecordingStop = () => {
+    if (recIntervalRef.current) {
+      clearInterval(recIntervalRef.current);
+      recIntervalRef.current = null;
+    }
+    const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+    const file = new File([blob], 'grooming.webm', { type: 'video/webm' });
+    const fd = new FormData();
+    fd.append('video', file);
+    fd.append('name', crewName);
+    fd.append('iga_code', igaCode);
+    setStatus('uploading');
+    stopCamera();
+
+    fetch(apiUrl('/check-grooming-video'), { method: 'POST', body: fd })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data || data.status !== 'ok') throw new Error(data?.error || 'API error');
+        setGroomingResult(data.result);
+        setStatus('done');
+        if (onComplete) onComplete();
+      })
+      .catch(() => setError('Video grooming check failed.'));
+  };
+
+  // ---------- Helpers for display ----------
+  const row = (label, score, max, detail) => (
+    <>
+      <div style={{ fontWeight: 600 }}>{label}</div>
+      <div>
+        {score ?? '-'}{max ? `/${max}` : ''}{detail ? ` (${detail})` : ''}
+      </div>
+    </>
+  );
+
+  // ---------- UI ----------
   return (
     <div className="unified-check stylish-form">
       <h2>Liveliness & Grooming Check</h2>
@@ -219,20 +277,28 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
       </div>
 
       {status === 'ready' && (
-        <button
-          className="ready-button"
-          onClick={startCheck}
-          disabled={!crewName || !igaCode}
-          style={{ marginTop: 8 }}
-        >
+        <button className="ready-button" onClick={startCheck} disabled={!crewName || !igaCode} style={{ marginTop: 8 }}>
           Start Check
         </button>
       )}
 
       {status === 'detecting' && (
-        <button className="stop-button" onClick={stopCheck} style={{ marginTop: 8 }}>
+        <button className="stop-button" onClick={() => { cancelDetectionLoop(); setStatus('ready'); }} style={{ marginTop: 8 }}>
           Cancel
         </button>
+      )}
+
+      {status === 'choose' && (
+        <div style={{ marginTop: 10 }}>
+          <p style={{ marginBottom: 8 }}>Choose how to do grooming:</p>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={usePhotoAndUpload}>Use Photo</button>
+            <button onClick={startRecording}>Record 10s Video</button>
+            {mode === 'video' && (
+              <button onClick={stopRecording}>Stop Now ({recTimer}s)</button>
+            )}
+          </div>
+        </div>
       )}
 
       {status === 'uploading' && <p className="loader">Analyzing...</p>}
@@ -242,7 +308,7 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
           <h3>Grooming Result</h3>
 
           <p style={{ margin: '4px 0', color: '#555' }}>
-            {crewName || '-'} • IGA: {igaCode || '-'}
+            {groomingResult?.person?.name || crewName || '-'} • IGA: {groomingResult?.person?.iga_code || igaCode || '-'}
           </p>
 
           <div style={{ marginBottom: 8 }}>
@@ -251,8 +317,7 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
                 padding: '4px 8px',
                 borderRadius: 6,
                 color: '#fff',
-                background:
-                  groomingResult.assessment === 'COMPLIANT' ? '#16a34a' : '#dc2626',
+                background: groomingResult.assessment === 'COMPLIANT' ? '#16a34a' : '#dc2626',
               }}
             >
               {groomingResult.assessment}
@@ -260,79 +325,30 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
             <span style={{ marginLeft: 10 }}>Score: {groomingResult.score}/10</span>
           </div>
 
-          {/* Category scores (may show '-' if not provided) */}
           <div style={{ marginTop: 6 }}>
             <h4>Category Scores</h4>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '150px 1fr',
-                rowGap: 6,
-                columnGap: 12,
-              }}
-            >
-              <div style={{ fontWeight: 600 }}>Uniform</div>
-              <div>{groomingResult.scores?.uniform ?? '-'}/3</div>
-
-              <div style={{ fontWeight: 600 }}>Nails</div>
-              <div>{groomingResult.scores?.nails ?? '-'}/1</div>
-
-              <div style={{ fontWeight: 600 }}>Hairstyle</div>
-              <div>{groomingResult.scores?.hairstyle ?? '-'}/2</div>
-
-              <div style={{ fontWeight: 600 }}>Makeup</div>
-              <div>{groomingResult.scores?.makeup ?? '-'}/2</div>
-
-              <div style={{ fontWeight: 600 }}>Accessories</div>
-              <div>{groomingResult.scores?.accessories ?? '-'}/2</div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 12 }}>
-            <h4>Details</h4>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '150px 1fr',
-                rowGap: 6,
-                columnGap: 12,
-              }}
-            >
-              <div style={{ fontWeight: 600 }}>Uniform</div>
-              <div>{groomingResult.details?.uniform || '-'}</div>
-              <div style={{ fontWeight: 600 }}>Hairstyle</div>
-              <div>{groomingResult.details?.hairstyle || '-'}</div>
-              <div style={{ fontWeight: 600 }}>Makeup</div>
-              <div>{groomingResult.details?.makeup || '-'}</div>
-              <div style={{ fontWeight: 600 }}>Nails</div>
-              <div>{groomingResult.details?.nails || '-'}</div>
-              <div style={{ fontWeight: 600 }}>Accessories</div>
-              <div>{groomingResult.details?.accessories || '-'}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', rowGap: 6, columnGap: 12 }}>
+              {row('Uniform',     groomingResult.scores?.uniform, 3, groomingResult.details?.uniform)}
+              {row('Hairstyle',   groomingResult.scores?.hairstyle, 2, groomingResult.details?.hairstyle)}
+              {row('Makeup',      groomingResult.scores?.makeup, 2, groomingResult.details?.makeup)}
+              {row('Nails',       groomingResult.scores?.nails, 1, groomingResult.details?.nails)}
+              {row('Accessories', groomingResult.scores?.accessories, 2, groomingResult.details?.accessories)}
             </div>
           </div>
 
           {Array.isArray(groomingResult.issues) && groomingResult.issues.length > 0 && (
             <>
               <h4 style={{ marginTop: 12 }}>Issues</h4>
-              <ul>
-                {groomingResult.issues.map((it, i) => (
-                  <li key={i}>{it}</li>
-                ))}
-              </ul>
+              <ul>{groomingResult.issues.map((it, i) => <li key={i}>{it}</li>)}</ul>
             </>
           )}
 
-          {Array.isArray(groomingResult.recommendations) &&
-            groomingResult.recommendations.length > 0 && (
-              <>
-                <h4 style={{ marginTop: 12 }}>Recommendations</h4>
-                <ul>
-                  {groomingResult.recommendations.map((it, i) => (
-                    <li key={i}>{it}</li>
-                  ))}
-                </ul>
-              </>
-            )}
+          {Array.isArray(groomingResult.recommendations) && groomingResult.recommendations.length > 0 && (
+            <>
+              <h4 style={{ marginTop: 12 }}>Recommendations</h4>
+              <ul>{groomingResult.recommendations.map((it, i) => <li key={i}>{it}</li>)}</ul>
+            </>
+          )}
         </div>
       )}
 
