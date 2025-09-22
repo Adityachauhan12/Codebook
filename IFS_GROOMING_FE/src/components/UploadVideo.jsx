@@ -33,6 +33,15 @@ function UploadVideo({ crewName, igaCode }) {
       });
   };
 
+  const row = (label, score, max, detail) => (
+    <>
+      <div style={{ fontWeight: 600 }}>{label}</div>
+      <div>
+        {score ?? '-'}{max ? `/${max}` : ''}{detail ? ` (${detail})` : ''}
+      </div>
+    </>
+  );
+
   return (
     <div style={{ marginTop: 16 }}>
       <label style={{ display: 'block', marginBottom: 8 }}>Upload grooming video</label>
@@ -46,7 +55,7 @@ function UploadVideo({ crewName, igaCode }) {
           <h3>Grooming Result (Video)</h3>
 
           <p style={{ margin: '4px 0', color: '#555' }}>
-            {result?.person?.name || '-'} • IGA: {result?.person?.iga_code || '-'}
+            {result?.person?.name || crewName || '-'} • IGA: {result?.person?.iga_code || igaCode || '-'}
           </p>
 
           <div style={{ marginBottom: 8 }}>
@@ -73,47 +82,11 @@ function UploadVideo({ crewName, igaCode }) {
                 columnGap: 12,
               }}
             >
-              <div style={{ fontWeight: 600 }}>Uniform</div>
-              <div>{result.scores?.uniform ?? '-'}/3</div>
-
-              <div style={{ fontWeight: 600 }}>Nails</div>
-              <div>{result.scores?.nails ?? '-'}/1</div>
-
-              <div style={{ fontWeight: 600 }}>Hairstyle</div>
-              <div>{result.scores?.hairstyle ?? '-'}/2</div>
-
-              <div style={{ fontWeight: 600 }}>Makeup</div>
-              <div>{result.scores?.makeup ?? '-'}/2</div>
-
-              <div style={{ fontWeight: 600 }}>Accessories</div>
-              <div>{result.scores?.accessories ?? '-'}/2</div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 12 }}>
-            <h4>Details</h4>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '150px 1fr',
-                rowGap: 6,
-                columnGap: 12,
-              }}
-            >
-              <div style={{ fontWeight: 600 }}>Uniform</div>
-              <div>{result.details?.uniform || '-'}</div>
-
-              <div style={{ fontWeight: 600 }}>Hairstyle</div>
-              <div>{result.details?.hairstyle || '-'}</div>
-
-              <div style={{ fontWeight: 600 }}>Makeup</div>
-              <div>{result.details?.makeup || '-'}</div>
-
-              <div style={{ fontWeight: 600 }}>Nails</div>
-              <div>{result.details?.nails || '-'}</div>
-
-              <div style={{ fontWeight: 600 }}>Accessories</div>
-              <div>{result.details?.accessories || '-'}</div>
+              {row('Uniform',     result.scores?.uniform, 3, result.details?.uniform)}
+              {row('Hairstyle',   result.scores?.hairstyle, 2, result.details?.hairstyle)}
+              {row('Makeup',      result.scores?.makeup, 2, result.details?.makeup)}
+              {row('Nails',       result.scores?.nails, 1, result.details?.nails)}
+              {row('Accessories', result.scores?.accessories, 2, result.details?.accessories)}
             </div>
           </div>
 
