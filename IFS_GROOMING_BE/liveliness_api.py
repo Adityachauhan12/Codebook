@@ -25,26 +25,32 @@ try:
 except Exception:
     HAS_ASSESS_IMAGE_STRUCTURED = False
 
-# ---------------- Parsing helpers ----------------
+# ---------------- Regex map for robust parsing ----------------
 _rx = {
     "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
     "overall_score":     re.compile(r"Overall\s*Score\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10", re.I),
+
+    # category numeric scores
     "uniform_score":     re.compile(r"Uniform\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*3", re.I),
     "nails_score":       re.compile(r"Nails\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*1", re.I),
     "hairstyle_score":   re.compile(r"Hairstyle\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
     "makeup_score":      re.compile(r"Makeup\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
     "accessories_score": re.compile(r"Accessories\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
+
+    # details text
     "hair_detail":       re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
     "makeup_detail":     re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
     "nails_detail":      re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
     "acc_detail":        re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
     "uniform_detail":    re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
+
+    # blocks
     "issues_block":      re.compile(r"Issues\s*Found\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
     "reco_block":        re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
 }
 
-def _extract(m: re.Pattern, text: str, default: str = "") -> str:
-    hit = m.search(text or "")
+def _extract(pat: re.Pattern, text: str, default: str = "") -> str:
+    hit = pat.search(text or "")
     return hit.group(1).strip() if hit else default
 
 def _num(s: str, default: float = 0.0) -> float:
@@ -65,8 +71,8 @@ def _lines_to_list(block: str) -> list[str]:
             out.append(t.split(".", 1)[-1].strip() if "." in t else t)
     return out
 
-def _parse_text_to_ui(full_text: str) -> Dict[str, Any]:
-    # Optional project parser
+def _parse_text_to_ui(full_text: str, crew_name: str | None = None, iga_code: str | None = None) -> Dict[str, Any]:
+    # Try project parser if present
     parsed_details = {}
     try:
         from grooming_utils import parse_grooming_text  # type: ignore
@@ -74,30 +80,31 @@ def _parse_text_to_ui(full_text: str) -> Dict[str, Any]:
     except Exception:
         parsed_details = {}
 
-    # Robust fallback extraction
-    assessment = _extract(_rx["overall_assessment"], full_text, parsed_details.get("overall_assessment", "UNKNOWN"))
-    score_overall = _num(_extract(_rx["overall_score"], full_text, f'{parsed_details.get("overall_score","0")}'))
+    assessment = parsed_details.get("overall_assessment") or _extract(_rx["overall_assessment"], full_text, "UNKNOWN")
+    score_overall = _num(parsed_details.get("overall_score") or _extract(_rx["overall_score"], full_text))
 
-    details = {
-        "uniform":   _extract(_rx["uniform_detail"], full_text, (parsed_details.get("details") or {}).get("uniform","")),
-        "hairstyle": _extract(_rx["hair_detail"], full_text, (parsed_details.get("details") or {}).get("hairstyle","")),
-        "makeup":    _extract(_rx["makeup_detail"], full_text, (parsed_details.get("details") or {}).get("makeup","")),
-        "nails":     _extract(_rx["nails_detail"], full_text, (parsed_details.get("details") or {}).get("nails","")),
-        "accessories": _extract(_rx["acc_detail"], full_text, (parsed_details.get("details") or {}).get("accessories","")),
-    }
+    # Details text (fallback from raw text)
+    details = (parsed_details.get("details") or {}).copy()
+    details.setdefault("uniform",   _extract(_rx["uniform_detail"], full_text))
+    details.setdefault("hairstyle", _extract(_rx["hair_detail"], full_text))
+    details.setdefault("makeup",    _extract(_rx["makeup_detail"], full_text))
+    details.setdefault("nails",     _extract(_rx["nails_detail"], full_text))
+    details.setdefault("accessories", _extract(_rx["acc_detail"], full_text))
 
+    # Category scores (None if not present in text)
     scores = {
-        "uniform":     _num(_extract(_rx["uniform_score"], full_text)),
-        "nails":       _num(_extract(_rx["nails_score"], full_text)),
-        "hairstyle":   _num(_extract(_rx["hairstyle_score"], full_text)),
-        "makeup":      _num(_extract(_rx["makeup_score"], full_text)),
-        "accessories": _num(_extract(_rx["accessories_score"], full_text)),
+        "uniform":     (_num(_extract(_rx["uniform_score"], full_text)) if _rx["uniform_score"].search(full_text) else None),
+        "nails":       (_num(_extract(_rx["nails_score"], full_text)) if _rx["nails_score"].search(full_text) else None),
+        "hairstyle":   (_num(_extract(_rx["hairstyle_score"], full_text)) if _rx["hairstyle_score"].search(full_text) else None),
+        "makeup":      (_num(_extract(_rx["makeup_score"], full_text)) if _rx["makeup_score"].search(full_text) else None),
+        "accessories": (_num(_extract(_rx["accessories_score"], full_text)) if _rx["accessories_score"].search(full_text) else None),
     }
 
     issues = _lines_to_list(_extract(_rx["issues_block"], full_text))
     recos  = _lines_to_list(_extract(_rx["reco_block"], full_text))
 
     return {
+        "person": {"name": crew_name or "", "iga_code": iga_code or ""},
         "assessment": assessment or "UNKNOWN",
         "score": score_overall,
         "scores": scores,
@@ -106,9 +113,9 @@ def _parse_text_to_ui(full_text: str) -> Dict[str, Any]:
         "recommendations": recos,
     }
 
-# Optional “assess image and also return text”
 def _assess_image_to_text(image_b64: str) -> str:
-    if HAS_ASSESS_IMAGE_STRUCTURED:
+    # If a structured helper exists, prefer its full_text, otherwise fallback
+    if 'assess_image_return_structured' in globals():
         try:
             return assess_image_return_structured(image_b64)["full_text"]  # type: ignore
         except Exception:
@@ -157,7 +164,7 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         img_bytes = base64.b64decode(clean_b64)
 
         full_text = _assess_image_to_text(clean_b64)
-        ui_result = _parse_text_to_ui(full_text)
+        ui_result = _parse_text_to_ui(full_text, payload.crewName, payload.igaCode)
 
         image_gcs_path = upload_image_bytes(
             img_bytes,
@@ -197,11 +204,11 @@ async def check_grooming_video_endpoint(
         with open(video_path, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
 
-        # Returns a long text (includes scores block)
+        # Returns a long text (includes scores/details when prompt is set)
         full_text = check_grooming_from_video(video_path, name, iga_code)
-        ui_result = _parse_text_to_ui(full_text)
+        ui_result = _parse_text_to_ui(full_text, name, iga_code)
 
-        # Persist text only (video upload optional in your project)
+        # Persist text only (video upload optional)
         upload_grooming_result_text(
             result_text=full_text,
             crew_name=name,
