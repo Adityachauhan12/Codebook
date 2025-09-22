@@ -18,7 +18,7 @@ import config  # has PORT etc.
 # Grooming core
 from grooming_utils import check_grooming, check_grooming_from_video  # text outputs
 
-# Optional structured helper
+# Optional structured helper (if present in your project)
 try:
     from grooming_utils import assess_image_return_structured, parse_grooming_text  # type: ignore
     HAS_ASSESS_IMAGE_STRUCTURED = True
@@ -204,7 +204,7 @@ async def check_grooming_video_endpoint(
         with open(video_path, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
 
-        # Returns a long text (includes scores/details when prompt is set)
+        # Returns a long text (includes scores/details when prompt is set in grooming_utils)
         full_text = check_grooming_from_video(video_path, name, iga_code)
         ui_result = _parse_text_to_ui(full_text, name, iga_code)
 
