@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 import os, re, json, base64, shutil
-from datetime import datetime
-from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, Tuple
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -25,28 +25,31 @@ try:
 except Exception:
     HAS_ASSESS_IMAGE_STRUCTURED = False
 
-# -------------- Regex map for robust parsing --------------
+# ---------------- Regex map for robust parsing ----------------
 _rx = {
     "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
     "overall_score":     re.compile(r"Overall\s*Score\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10", re.I),
 
+    # category numeric scores
     "uniform_score":     re.compile(r"Uniform\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*3", re.I),
     "nails_score":       re.compile(r"Nails\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*1", re.I),
     "hairstyle_score":   re.compile(r"Hairstyle\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
     "makeup_score":      re.compile(r"Makeup\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
     "accessories_score": re.compile(r"Accessories\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
 
+    # details text
     "hair_detail":       re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
     "makeup_detail":     re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
     "nails_detail":      re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
     "acc_detail":        re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
     "uniform_detail":    re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
 
+    # blocks
     "issues_block":      re.compile(r"Issues\s*Found\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
     "reco_block":        re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
 }
 
-def _extract(pat: re.Pattern, text: str) -> tuple[bool, str]:
+def _extract(pat: re.Pattern, text: str) -> Tuple[bool, str]:
     m = pat.search(text or "")
     return (m is not None, m.group(1).strip() if m else "")
 
@@ -134,7 +137,7 @@ from gcs_utils import (
 )
 
 # ----------- FastAPI app -----------
-app = FastAPI(title="IFS Grooming + Analytics API", version="2.4.0")
+app = FastAPI(title="IFS Grooming + Analytics API (single app)", version="2.5.0")
 
 ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -219,10 +222,63 @@ async def check_grooming_video_endpoint(
         print(f"X Error in /check-grooming-video: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-# ----------- Analytics router mount -----------
-# analytics_api.py defines: router = APIRouter() with GET /analytics and /tables
-from analytics_api import router as analytics_router  # <-- your provided file
-app.include_router(analytics_router)  # keep as-is (router already has the paths)
+# ----------- Analytics endpoints (DIRECT on this app) -----------
+# Bring service-layer helpers
+from analytics_serice import (  # file name intentionally 'serice' per your file
+    Filters,
+    fetch_assessments,
+    compute_analytics,
+    fetch_liveliness_success,
+)
+
+def _parse_date(s: str):
+    return datetime.strptime(s, "%Y-%m-%d").date()
+
+@app.get("/analytics")
+async def analytics_summary(
+    startDate: str = Query(..., description="YYYY-MM-DD"),
+    endDate: str = Query(..., description="YYYY-MM-DD"),
+    iga: Optional[str] = None,
+    crew: Optional[str] = None,
+    limitDays: int = 45,
+):
+    start = _parse_date(startDate)
+    end = _parse_date(endDate)
+    if (end - start).days > limitDays:
+        end = start + timedelta(days=limitDays)
+
+    f = Filters(start=start, end=end, iga=iga, crew=crew)
+    records, _ = fetch_assessments(f, limit=10_000, offset=0, order_by="timestamp_asc")
+    summary = compute_analytics(records, f)
+    summary.setdefault("kpis", {})["total_liveliness_success"] = fetch_liveliness_success(f)
+
+    return {
+        "range": {"startDate": startDate, "endDate": endDate},
+        "filters": {"iga": iga, "crew": crew},
+        **summary,
+    }
+
+@app.get("/tables")
+async def analytics_tables(
+    startDate: str = Query(..., description="YYYY-MM-DD"),
+    endDate: str = Query(..., description="YYYY-MM-DD"),
+    iga: Optional[str] = None,
+    crew: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    order: str = "timestamp_desc",  # or "timestamp_asc"
+):
+    start = _parse_date(startDate)
+    end = _parse_date(endDate)
+    f = Filters(start=start, end=end, iga=iga, crew=crew)
+    rows, total = fetch_assessments(f, limit=limit, offset=offset, order_by=order)
+
+    return {
+        "range": {"startDate": startDate, "endDate": endDate},
+        "filters": {"iga": iga, "crew": crew},
+        "total": total,
+        "rows": rows,
+    }
 
 # ----------- Main -----------
 if __name__ == "__main__":
