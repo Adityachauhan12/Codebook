@@ -1,7 +1,4 @@
-BASE=http://localhost:8000
-curl "$BASE/analytics?startDate=2025-09-01&endDate=2025-09-23&iga=IGA56222&crew=wd"
+curl "http://localhost:8000/analytics?startDate=2025-09-01&endDate=2025-09-23&iga=IGA56222&crew=wd"
 
 
-
-BASE=http://localhost:8000
-curl "$BASE/tables?startDate=2025-09-01&endDate=2025-09-23&limit=50&offset=0&order=timestamp_desc"
+curl "http://localhost:8000/tables?startDate=2025-09-01&endDate=2025-09-23&limit=50&offset=0&order=timestamp_desc"
