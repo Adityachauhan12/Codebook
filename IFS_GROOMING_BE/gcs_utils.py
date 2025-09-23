@@ -4,6 +4,10 @@ from datetime import datetime
 from typing import Optional, List, Tuple, Dict
 from google.cloud import storage
 
+from dotenv import load_dotenv
+load_dotenv()
+
+
 # ----------------- ENV -----------------
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")  # REQUIRED
 GCS_BASE_FOLDER = os.getenv("GCS_BASE_FOLDER", "Grooming-Results")
@@ -117,7 +121,7 @@ def create_ticket(item: dict, log_name: str = "grooming_tickets_log.json") -> st
     log.append({"ticket_id": ticket_id, "timestamp": datetime.now().isoformat(), **item})
     _upload_text(json.dumps(log, indent=2), log_blob, metadata={"type": "tickets_log"})
     return ticket_id
-
+ 
 def latest_assessments_today(iga_code: str, now: Optional[datetime] = None) -> list:
     """Return assessments[] from the latest per-crew JSON today (if exists)."""
     dt = now or datetime.now()
