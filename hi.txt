@@ -1,23 +1,20 @@
-
-(venv1) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE>uvicorn liveliness_api:app --port 8000
-INFO:     Started server process [23308]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:56070 - "POST /check-grooming-video HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62893 - "OPTIONS /check-grooming HTTP/1.1" 200 OK
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE\liveliness_api.py", line 155, in check_grooming
-    parsed = _parse_text_to_ui(report, payload.crewName, payload.igaCode)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE\liveliness_api.py", line 81, in _parse_text_to_ui
-    ok_assess, a_text = _extract(_rx["overall_assessment"], text)
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE\liveliness_api.py", line 45, in _extract
-    m = pat.search(text or "")
-        ^^^^^^^^^^^^^^^^^^^^^^
-TypeError: expected string or bytes-like object, got 'coroutine'
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE\venv1\Lib\site-packages\fastapi\routing.py:213: RuntimeWarning: coroutine 'check_grooming' was never awaited
-  return await dependant.call(**values)
-RuntimeWarning: Enable tracemalloc to get the object allocation traceback
-INFO:     127.0.0.1:62893 - "POST /check-grooming HTTP/1.1" 500 Internal Server Error
+@app.post("/check-grooming")
+async def check_grooming(payload: GroomingRequest):
+    if not payload.imageBase64 or len(payload.imageBase64) < 10:
+        return JSONResponse({"error": "Invalid image"}, status_code=400)
+    try:
+        b64 = payload.imageBase64.split(",")[-1]
+        img_bytes = base64.b64decode(b64)
+        # Await the async call to check_grooming
+        report = await check_grooming(b64)
+        parsed = _parse_tool_parsing(report, payload.crewName, payload.igaCode)  # assume function to parse the text
+        
+        img_path = upload_image_bytes(img_bytes, payload.igaCode, payload.crewName, "image")
+        upload_grooming_text(report, payload.crewName, payload.igaCode, img_path)
+        append_event_log({"type":"image","parsed":parsed,"image_path":img_path}, payload.crewName, payload.igaCode)
+        create_ticket({"type":"image","igaCode":payload.igaCode,"crewName":payload.crewName,"image_path":img_path})
+        
+        return {"status":"ok","result":parsed}
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
