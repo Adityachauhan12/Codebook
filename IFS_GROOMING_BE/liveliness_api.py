@@ -165,24 +165,29 @@ async def check_grooming(payload: GroomingRequest):
 
 
 @app.post("/check-grooming-video")
-async def check_grooming_video(video: UploadFile=File(...), name: str=Form(...), igaCode: str=Form(...)):
+async def check_grooming_video(
+    video: UploadFile = File(...),
+    name: str = Form(...),
+    iga_code: str = Form(...)
+):
     try:
-        folder = "uploads/videos"
-        os.makedirs(folder, exist_ok=True)
-        file_path = os.path.join(folder, video.filename)
-        with open(file_path, "wb") as f:
+        video_dir = "uploads/videos"
+        os.makedirs(video_dir, exist_ok=True)
+        video_path = os.path.join(video_dir, video.filename)
+        with open(video_path, "wb") as f:
             shutil.copyfileobj(video.file, f)
 
-        report = check_grooming_from_video(file_path, name, igaCode)
-        parsed = _parse_text_to_ui(report, name, igaCode)
+        full_text = check_grooming_from_video(video_path, name, iga_code)
+        parsed = _parse_text_to_ui(full_text, name, iga_code)
 
-        upload_grooming_text(report, name, igaCode, None)
-        append_event_to_log({"type":"video","parsed":parsed}, name, igaCode)
-        create_ticket({"type":"video","igaCode":igaCode,"crewName":name})
+        upload_grooming_result_text(full_text, name, iga_code, None)
+        append_event_to_log({"type": "video", "parsed": parsed}, name, iga_code)
+        create_ticket({"type": "video", "iga_code": iga_code, "crew_name": name})
 
-        return {"status":"ok", "result":parsed}
+        return {"status": "ok", "result": parsed}
     except Exception as e:
-        return JSONResponse({"error":str(e)}, status_code=500)
+        print(f"Error in /check-grooming-video: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # Analytics endpoints (similar format for full flexibility)
