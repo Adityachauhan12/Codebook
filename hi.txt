@@ -18,3 +18,23 @@ async def check_grooming(payload: GroomingRequest):
     except Exception as e:
         import traceback; traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+
+
+(venv1) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE>uvicorn liveliness_api:app --port 8000
+INFO:     Started server process [13396]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+Traceback (most recent call last):
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE\liveliness_api.py", line 155, in check_grooming
+    report = await check_grooming(b64)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE\liveliness_api.py", line 149, in check_grooming
+    if not payload.imageBase64 or len(payload.imageBase64) < 10:
+           ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'str' object has no attribute 'imageBase64' 
+INFO:     127.0.0.1:60345 - "POST /check-grooming HTTP/1.1" 500 Internal Server Error
+
+
