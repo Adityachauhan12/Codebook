@@ -79,3 +79,69 @@ Schema
 GOOGLE_APPLICATION_CREDENTIALS=C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Microsoft Copilot Chat Files\prj-ifs-dev-sa-gcp-ifs-flight-report 1.json
 see the older service account key was in this location
 
+
+
+
+@app.post("/check-grooming")
+async def check_grooming_endpoint(payload: GroomingRequest):
+    """
+    Accepts an imageBase64 (e.g., the captured success photo) and:
+      - uploads the image to GCS (kind='grooming_image')
+      - saves a result JSON with filename including IGA code under results/<IGA>/grooming_result_<IGA>_<HHMMSS>.json
+      - appends a 'grooming_image' event to per-crew JSON
+      - writes a ticket row
+      - returns result text + GCS paths + today's summary
+    """
+    try:
+        base64_image = payload.imageBase64
+        if not base64_image or not isinstance(base64_image, str):
+            return {"error": "Invalid image data"}
+
+        # Strip data URL prefix if present
+        clean_b64 = base64_image.split(',')[-1]
+        img_bytes = base64.b64decode(clean_b64)
+
+        # 1) Call Gemini (existing behavior)
+        result_text = check_grooming(clean_b64)
+
+        # 2) Upload the same image to GCS (grooming image)
+        image_gcs_path = upload_image_bytes(
+            img_bytes,
+            iga_code=(payload.igaCode or "Unknown"),
+            crew_name=payload.crewName,
+            kind="grooming_image"
+        )
+
+        # 3) Save the result JSON with IGA in filename
+        result_gcs_path = upload_grooming_result_text(
+            result_text=result_text,
+            crew_name=payload.crewName,
+            iga_code=payload.igaCode,
+            image_gcs_path=image_gcs_path
+        )
+
+        # 4) Append event to per-crew log
+        event_item = {
+            "type": "grooming_image",
+            "result_text": result_text,
+            "image_gcs_path": image_gcs_path,
+            "result_gcs_path": result_gcs_path
+        }
+        _, _ = append_event_to_crew_log(event_item, crew_name=payload.crewName, iga_code=payload.igaCode)
+
+        # 5) Ticket log
+        ticket_id = create_ticket({"event": "grooming_image", "iga_code": payload.igaCode, "crew_name": payload.crewName, **event_item})
+
+        # Optional: today's latest assessments for UI
+        today_summary = latest_assessments_today(payload.igaCode or "Unknown")
+
+        return {
+            "result": result_text,
+            "image_gcs_path": image_gcs_path,
+            "result_gcs_path": result_gcs_path,
+            "ticket_id": ticket_id,
+            "today_summary": today_summary
+        }
+    except Exception as e:
+        print(f"X Error in /check-grooming: {str(e)}")
+        return {"error": str(e)}
