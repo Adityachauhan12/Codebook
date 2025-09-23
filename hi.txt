@@ -4,6 +4,72 @@
         "endDate": "2025-09-23"
     },
     "filters": {
+        "iga": "IGA56222",
+        "crew": "wd"
+    },
+    "kpis": {
+        "total_grooming_assessments": 2,
+        "compliance_rate": 0.0,
+        "avg_score": 0.0,
+        "total_liveliness_success": 0
+    },
+    "top_non_compliance": [],
+    "top_performers": [],
+    "most_tested_crew": [
+        {
+            "crew_name": "wd",
+            "iga_code": "IGA56222",
+            "assessments": 2
+        }
+    ],
+    "category_stats": {
+        "uniform": {
+            "avg_score": null,
+            "non_compliant": 0
+        },
+        "hairstyle": {
+            "avg_score": null,
+            "non_compliant": 0
+        },
+        "makeup": {
+            "avg_score": null,
+            "non_compliant": 0
+        },
+        "nails": {
+            "avg_score": null,
+            "non_compliant": 0
+        },
+        "accessories": {
+            "avg_score": null,
+            "non_compliant": 0
+        }
+    },
+    "timeseries_daily": [
+        {
+            "date": "2025-09-22",
+            "assessments": 2,
+            "avg_score": 0.0,
+            "compliant": 0,
+            "non_compliant": 2
+        }
+    ]
+}
+
+
+
+
+
+
+
+
+
+
+{
+    "range": {
+        "startDate": "2025-09-01",
+        "endDate": "2025-09-23"
+    },
+    "filters": {
         "iga": null,
         "crew": null
     },
@@ -1024,83 +1090,3 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-{
-    "range": {
-        "startDate": "2025-09-01",
-        "endDate": "2025-09-23"
-    },
-    "filters": {
-        "iga": "IGA56222",
-        "crew": "wd"
-    },
-    "kpis": {
-        "total_grooming_assessments": 2,
-        "compliance_rate": 0.0,
-        "avg_score": 0.0,
-        "total_liveliness_success": 0
-    },
-    "top_non_compliance": [],
-    "top_performers": [],
-    "most_tested_crew": [
-        {
-            "crew_name": "wd",
-            "iga_code": "IGA56222",
-            "assessments": 2
-        }
-    ],
-    "category_stats": {
-        "uniform": {
-            "avg_score": null,
-            "non_compliant": 0
-        },
-        "hairstyle": {
-            "avg_score": null,
-            "non_compliant": 0
-        },
-        "makeup": {
-            "avg_score": null,
-            "non_compliant": 0
-        },
-        "nails": {
-            "avg_score": null,
-            "non_compliant": 0
-        },
-        "accessories": {
-            "avg_score": null,
-            "non_compliant": 0
-        }
-    },
-    "timeseries_daily": [
-        {
-            "date": "2025-09-22",
-            "assessments": 2,
-            "avg_score": 0.0,
-            "compliant": 0,
-            "non_compliant": 2
-        }
-    ]
-}
