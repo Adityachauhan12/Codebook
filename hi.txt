@@ -5,36 +5,18 @@ async def check_grooming(payload: GroomingRequest):
     try:
         b64 = payload.imageBase64.split(",")[-1]
         img_bytes = base64.b64decode(b64)
-        # Await the async call to check_grooming
+        # Await the async call to check_grooming (Gemini API)
         report = await check_grooming(b64)
-        parsed = _parse_tool_parsing(report, payload.crewName, payload.igaCode)  # assume function to parse the text
-        
+        parsed = _parse_text_to_ui(report, payload.crewName, payload.igaCode)
+
         img_path = upload_image_bytes(img_bytes, payload.igaCode, payload.crewName, "image")
-        upload_grooming_text(report, payload.crewName, payload.igaCode, img_path)
-        append_event_log({"type":"image","parsed":parsed,"image_path":img_path}, payload.crewName, payload.igaCode)
-        create_ticket({"type":"image","igaCode":payload.igaCode,"crewName":payload.crewName,"image_path":img_path})
-        
-        return {"status":"ok","result":parsed}
+
+        upload_grooming_result_text(report, payload.crewName, payload.igaCode, img_path)
+        append_event_to_crew_log({"type":"image","parsed":parsed, "image_path":img_path}, payload.crewName, payload.igaCode)
+        create_ticket({"type":"image","igaCode":payload.igaCode, "crewName":payload.crewName, "image_path":img_path})
+
+        return {"status":"ok", "result":parsed}
     except Exception as e:
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
-
-
-
-
-(venv1) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE>uvicorn liveliness_api:app --port 8000
-INFO:     Started server process [13396]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE\liveliness_api.py", line 155, in check_grooming
-    report = await check_grooming(b64)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\brand new\IFS_GROOMING_BE\liveliness_api.py", line 149, in check_grooming
-    if not payload.imageBase64 or len(payload.imageBase64) < 10:
-           ^^^^^^^^^^^^^^^^^^^
-AttributeError: 'str' object has no attribute 'imageBase64' 
-INFO:     127.0.0.1:60345 - "POST /check-grooming HTTP/1.1" 500 Internal Server Error
-
-
