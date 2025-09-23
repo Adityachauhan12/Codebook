@@ -161,7 +161,10 @@ async def check_grooming(payload: GroomingRequest):
 
         return {"status":"ok", "result":parsed}
     except Exception as e:
-        return JSONResponse({"error":str(e)}, status_code=500)
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 
 @app.post("/check-grooming-video")
