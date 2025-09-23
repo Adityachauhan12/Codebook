@@ -1,11 +1,141 @@
+Parameters
+Try it out
+No parameters
 
-INFO:     127.0.0.1:63614 - "POST /check-grooming-video HTTP/1.1" 422 Unprocessable Entity
+Request body
 
-UploadVideo.jsx:30 Video Upload Error: Error: API error
-    at UploadVideo.jsx:25:50
-UploadVideo.jsx:22 
- POST http://localhost:8000/check-grooming-video 422 (Unprocessable Entity)
-UploadVideo.jsx:30 Video Upload Error: Error: API error
+application/json
+Example Value
+Schema
+{
+  "imageBase64": "string",
+  "crewName": "string",
+  "igaCode": "string"
+}
+Responses
+Code	Description	Links
+200	
+Successful Response
+
+Media type
+
+application/json
+Controls Accept header.
+Example Value
+Schema
+"string"
+No links
+422	
+Validation Error
+
+Media type
+
+application/json
+Example Value
+Schema
+{
+  "detail": [
+    {
+      "loc": [
+        "string",
+        0
+      ],
+      "msg": "string",
+      "type": "string"
+    }
+  ]
+}
+No links
+
+POST
+/check-grooming-video
+Check Grooming Video
+
+Parameters
+Cancel
+Reset
+No parameters
+
+Request body
+
+multipart/form-data
+video *
+string($binary)
+MicrosoftTeams-video (7).mp4
+name *
+string
+string
+igaCode *
+string
+string
+Execute
+Clear
+Responses
+Curl
+
+curl -X 'POST' \
+  'http://127.0.0.1:8000/check-grooming-video' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'video=@MicrosoftTeams-video (7).mp4;type=video/mp4' \
+  -F 'name=string' \
+  -F 'igaCode=string'
+Request URL
+http://127.0.0.1:8000/check-grooming-video
+Server response
+Code	Details
+500
+Undocumented
+Error: Internal Server Error
+
+Response body
+Download
+{
+  "error": "('Connection aborted.', TimeoutError('The write operation timed out'))"
+}
+Response headers
+ access-control-allow-credentials: true 
+ access-control-allow-origin: * 
+ content-length: 82 
+ content-type: application/json 
+ date: Tue,23 Sep 2025 08:07:15 GMT 
+ server: uvicorn 
+Responses
+Code	Description	Links
+200	
+Successful Response
+
+Media type
+
+application/json
+Controls Accept header.
+Example Value
+Schema
+"string"
+No links
+422	
+Validation Error
+
+Media type
+
+application/json
+Example Value
+Schema
+{
+  "detail": [
+    {
+      "loc": [
+        "string",
+        0
+      ],
+      "msg": "string",
+      "type": "string"
+    }
+  ]
+}    see this is how my fast api takes the inputr and i update dthe code and it gave the following error UploadVideo.jsx:22 
+ POST http://localhost:8000/check-grooming-video 500 (Internal Server Error)
+
+UploadVideo.jsx:30 Video Upload Error: Error: ('invalid_grant: Invalid grant: account not found', {'error': 'invalid_grant', 'error_description': 'Invalid grant: account not found'})
     at UploadVideo.jsx:25:50
 (anonymous)	@	UploadVideo.jsx:30
 Promise.catch		
@@ -16,5 +146,4 @@ UploadVideo	@	UploadVideo.jsx:48
 App	@	App.jsx:91
 <App>		
 (anonymous)	@	main.jsx:8
-﻿
-
+ plz fix it 
