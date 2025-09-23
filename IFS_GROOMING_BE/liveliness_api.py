@@ -1,4 +1,4 @@
-# liveliness_api.py (image + video; detailed category scores + clean UI object)
+# liveliness_api.py (image + video + analytics; clean UI object; no UNKNOWN badge)
 
 from __future__ import annotations
 import os, re, json, base64, shutil
@@ -15,106 +15,107 @@ load_dotenv()
 
 import config  # has PORT etc.
 
-# Grooming core
-from grooming_utils import check_grooming, check_grooming_from_video  # text outputs
+# Grooming core (returns plain text that follows the enforced output format)
+from grooming_utils import check_grooming, check_grooming_from_video
 
-# Optional structured helper (if present in your project)
+# Optional helper if present in your project
 try:
     from grooming_utils import assess_image_return_structured, parse_grooming_text  # type: ignore
     HAS_ASSESS_IMAGE_STRUCTURED = True
 except Exception:
     HAS_ASSESS_IMAGE_STRUCTURED = False
 
-# ---------------- Regex map for robust parsing ----------------
+# -------------- Regex map for robust parsing --------------
 _rx = {
     "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
     "overall_score":     re.compile(r"Overall\s*Score\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10", re.I),
 
-    # category numeric scores
     "uniform_score":     re.compile(r"Uniform\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*3", re.I),
     "nails_score":       re.compile(r"Nails\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*1", re.I),
     "hairstyle_score":   re.compile(r"Hairstyle\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
     "makeup_score":      re.compile(r"Makeup\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
     "accessories_score": re.compile(r"Accessories\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
 
-    # details text
     "hair_detail":       re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
     "makeup_detail":     re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
     "nails_detail":      re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
     "acc_detail":        re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
     "uniform_detail":    re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
 
-    # blocks
     "issues_block":      re.compile(r"Issues\s*Found\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
     "reco_block":        re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
 }
 
-def _extract(pat: re.Pattern, text: str, default: str = "") -> str:
-    hit = pat.search(text or "")
-    return hit.group(1).strip() if hit else default
+def _extract(pat: re.Pattern, text: str) -> tuple[bool, str]:
+    m = pat.search(text or "")
+    return (m is not None, m.group(1).strip() if m else "")
 
-def _num(s: str, default: float = 0.0) -> float:
+def _num(s: str) -> Optional[float]:
     try:
         return float(s)
     except Exception:
-        return default
+        return None
 
 def _lines_to_list(block: str) -> list[str]:
     out = []
     for ln in (block or "").splitlines():
         t = ln.strip()
-        if not t:
-            continue
+        if not t: continue
         if t.startswith("-"):
             out.append(t.lstrip("- ").strip())
         elif t[0:2].isdigit() or t.startswith(("1.", "2.", "3.", "4.", "5.")):
             out.append(t.split(".", 1)[-1].strip() if "." in t else t)
     return out
 
+def _normalize_assessment(a: str | None) -> Optional[str]:
+    a = (a or "").strip().upper()
+    return a if a in ("COMPLIANT", "NON-COMPLIANT") else None
+
 def _parse_text_to_ui(full_text: str, crew_name: str | None = None, iga_code: str | None = None) -> Dict[str, Any]:
-    # Try project parser if present
     parsed_details = {}
     try:
-        from grooming_utils import parse_grooming_text  # type: ignore
+        from grooming_utils import parse_grooming_text  # optional project parser
         parsed_details = parse_grooming_text(full_text) or {}
     except Exception:
         parsed_details = {}
 
-    assessment = parsed_details.get("overall_assessment") or _extract(_rx["overall_assessment"], full_text, "UNKNOWN")
-    score_overall = _num(parsed_details.get("overall_score") or _extract(_rx["overall_score"], full_text))
+    a_from_parsed = parsed_details.get("overall_assessment")
+    ok_assess, a_from_text = _extract(_rx["overall_assessment"], full_text)
+    assessment = _normalize_assessment(a_from_parsed or (a_from_text if ok_assess else None))
 
-    # Details text (fallback from raw text)
+    s_from_parsed = parsed_details.get("overall_score")
+    ok_score, s_from_text = _extract(_rx["overall_score"], full_text)
+    score = _num(s_from_parsed) if s_from_parsed not in (None, "") else (_num(s_from_text) if ok_score else None)
+
     details = (parsed_details.get("details") or {}).copy()
-    details.setdefault("uniform",   _extract(_rx["uniform_detail"], full_text))
-    details.setdefault("hairstyle", _extract(_rx["hair_detail"], full_text))
-    details.setdefault("makeup",    _extract(_rx["makeup_detail"], full_text))
-    details.setdefault("nails",     _extract(_rx["nails_detail"], full_text))
-    details.setdefault("accessories", _extract(_rx["acc_detail"], full_text))
+    if "uniform" not in details:    _, v = _extract(_rx["uniform_detail"], full_text);    details["uniform"] = v
+    if "hairstyle" not in details:  _, v = _extract(_rx["hair_detail"], full_text);       details["hairstyle"] = v
+    if "makeup" not in details:     _, v = _extract(_rx["makeup_detail"], full_text);      details["makeup"] = v
+    if "nails" not in details:      _, v = _extract(_rx["nails_detail"], full_text);       details["nails"] = v
+    if "accessories" not in details:_, v = _extract(_rx["acc_detail"], full_text);         details["accessories"] = v
 
-    # Category scores (None if not present in text)
-    scores = {
-        "uniform":     (_num(_extract(_rx["uniform_score"], full_text)) if _rx["uniform_score"].search(full_text) else None),
-        "nails":       (_num(_extract(_rx["nails_score"], full_text)) if _rx["nails_score"].search(full_text) else None),
-        "hairstyle":   (_num(_extract(_rx["hairstyle_score"], full_text)) if _rx["hairstyle_score"].search(full_text) else None),
-        "makeup":      (_num(_extract(_rx["makeup_score"], full_text)) if _rx["makeup_score"].search(full_text) else None),
-        "accessories": (_num(_extract(_rx["accessories_score"], full_text)) if _rx["accessories_score"].search(full_text) else None),
-    }
+    ok, v = _extract(_rx["uniform_score"], full_text);     uniform = _num(v) if ok else None
+    ok, v = _extract(_rx["nails_score"], full_text);       nails = _num(v) if ok else None
+    ok, v = _extract(_rx["hairstyle_score"], full_text);   hairstyle = _num(v) if ok else None
+    ok, v = _extract(_rx["makeup_score"], full_text);      makeup = _num(v) if ok else None
+    ok, v = _extract(_rx["accessories_score"], full_text); accessories = _num(v) if ok else None
 
-    issues = _lines_to_list(_extract(_rx["issues_block"], full_text))
-    recos  = _lines_to_list(_extract(_rx["reco_block"], full_text))
+    ok, blk = _extract(_rx["issues_block"], full_text); issues = _lines_to_list(blk) if ok else []
+    ok, blk = _extract(_rx["reco_block"], full_text);   recommendations = _lines_to_list(blk) if ok else []
 
     return {
         "person": {"name": crew_name or "", "iga_code": iga_code or ""},
-        "assessment": assessment or "UNKNOWN",
-        "score": score_overall,
-        "scores": scores,
+        "assessment": assessment,                       # None when unknown (UI hides badge)
+        "score": score,                                 # None when missing
+        "scores": {
+            "uniform": uniform, "nails": nails, "hairstyle": hairstyle, "makeup": makeup, "accessories": accessories
+        },
         "details": details,
         "issues": issues,
-        "recommendations": recos,
+        "recommendations": recommendations,
     }
 
 def _assess_image_to_text(image_b64: str) -> str:
-    # If a structured helper exists, prefer its full_text, otherwise fallback
     if 'assess_image_return_structured' in globals():
         try:
             return assess_image_return_structured(image_b64)["full_text"]  # type: ignore
@@ -122,7 +123,7 @@ def _assess_image_to_text(image_b64: str) -> str:
             pass
     return check_grooming(image_b64)
 
-# GCS helpers
+# ----------- GCS helpers -----------
 from gcs_utils import (
     upload_image_bytes,
     upload_grooming_result_text,
@@ -132,8 +133,8 @@ from gcs_utils import (
     GCS_BASE_FOLDER,  # noqa
 )
 
-# --------------- FastAPI setup ---------------
-app = FastAPI(title="IFS Grooming API (detailed)", version="2.2.0")
+# ----------- FastAPI app -----------
+app = FastAPI(title="IFS Grooming + Analytics API", version="2.4.0")
 
 ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -144,16 +145,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ----------- Models -----------
 class GroomingRequest(BaseModel):
     imageBase64: str
     crewName: Optional[str] = None
     igaCode: Optional[str] = None
 
+# ----------- Health -----------
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok", "time": datetime.now().isoformat()}
 
-# ---------- Image endpoint ----------
+# ----------- Image endpoint -----------
 @app.post("/check-grooming")
 async def check_grooming_endpoint(payload: GroomingRequest):
     try:
@@ -190,7 +193,7 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         print(f"X Error in /check-grooming: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-# ---------- Video endpoint ----------
+# ----------- Video endpoint -----------
 @app.post("/check-grooming-video")
 async def check_grooming_video_endpoint(
     video: UploadFile = File(...),
@@ -204,17 +207,10 @@ async def check_grooming_video_endpoint(
         with open(video_path, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
 
-        # Returns a long text (includes scores/details when prompt is set in grooming_utils)
         full_text = check_grooming_from_video(video_path, name, iga_code)
         ui_result = _parse_text_to_ui(full_text, name, iga_code)
 
-        # Persist text only (video upload optional)
-        upload_grooming_result_text(
-            result_text=full_text,
-            crew_name=name,
-            iga_code=iga_code,
-            image_gcs_path=None,
-        )
+        upload_grooming_result_text(result_text=full_text, crew_name=name, iga_code=iga_code, image_gcs_path=None)
         append_event_to_crew_log({"type": "grooming_video", "parsed": ui_result}, crew_name=name, iga_code=iga_code)
         _ = create_ticket({"event": "grooming_video", "iga_code": iga_code, "crew_name": name})
 
@@ -223,6 +219,12 @@ async def check_grooming_video_endpoint(
         print(f"X Error in /check-grooming-video: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+# ----------- Analytics router mount -----------
+# analytics_api.py defines: router = APIRouter() with GET /analytics and /tables
+from analytics_api import router as analytics_router  # <-- your provided file
+app.include_router(analytics_router)  # keep as-is (router already has the paths)
+
+# ----------- Main -----------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("liveliness_api:app", host="0.0.0.0", port=config.PORT, reload=True)
