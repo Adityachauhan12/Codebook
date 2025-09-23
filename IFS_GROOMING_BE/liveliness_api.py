@@ -14,6 +14,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 import config
+import traceback
 
 from grooming_utils import check_grooming, check_grooming_from_video
 
@@ -123,7 +124,7 @@ def _assess_text_from_image(b64: str) -> str:
 from grooming_utils import check_grooming, check_grooming_from_video
 from fastapi import BackgroundTasks
 
-from gcs_utils import upload_image_bytes, upload_grooming_text, append_event_to_log, create_ticket, GCS_BUCKET_NAME, GCS_BASE_FOLDER
+from gcs_utils import upload_image_bytes, upload_grooming_result_text, append_event_to_crew_log, create_ticket, GCS_BUCKET_NAME, GCS_BASE_FOLDER
 
 app = FastAPI(title="Unified Grooming + Analytics API", version="1.0.0")
 
@@ -155,8 +156,8 @@ async def check_grooming(payload: GroomingRequest):
 
         img_path = upload_image_bytes(imgbytes, payload.igaCode, payload.crewName, "image")
 
-        upload_grooming_text(report, payload.crewName, payload.igaCode, img_path)
-        append_event_to_log({"type":"image","parsed":parsed, "image_path":img_path}, payload.crewName, payload.igaCode)
+        upload_grooming_result_text(report, payload.crewName, payload.igaCode, img_path)
+        append_event_to_crew_log({"type":"image","parsed":parsed, "image_path":img_path}, payload.crewName, payload.igaCode)
         create_ticket({"type":"image","igaCode":payload.igaCode, "crewName":payload.crewName, "image_path":img_path})
 
         return {"status":"ok", "result":parsed}
@@ -184,7 +185,7 @@ async def check_grooming_video(
         parsed = _parse_text_to_ui(full_text, name, iga_code)
 
         upload_grooming_result_text(full_text, name, iga_code, None)
-        append_event_to_log({"type": "video", "parsed": parsed}, name, iga_code)
+        append_event_to_crew_log({"type": "video", "parsed": parsed}, name, iga_code)
         create_ticket({"type": "video", "iga_code": iga_code, "crew_name": name})
 
         return {"status": "ok", "result": parsed}
@@ -194,7 +195,7 @@ async def check_grooming_video(
 
 
 # Analytics endpoints (similar format for full flexibility)
-from analytics_serice import Filters, fetch_assessments, compute_analytics, fetch_liveliness_success
+from analytics_service import Filters, fetch_assessments, compute_analytics, fetch_liveliness_success
 
 @app.get("/analytics")
 async def analytics_summary(
