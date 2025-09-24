@@ -1,10 +1,7 @@
-VITE_API_BASE_URL=http://localhost:8000
+Unified_Check.jsx:177 
+ POST http://localhost:8000/grooming/undefined/check-grooming net::ERR_ABORTED 404 (Not Found)
 
-VITE_VISION_WASM_BASE=https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm
-
-const VISION_WASM_BASE = import.meta.env.VITE_VISION_WASM_BASE || "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm";
-
-
-Then modify the FilesetResolver line to:
-
-const fileset = await FilesetResolver.forVisionTasks(VISION_WASM_BASE);
+UploadVideo.jsx:22 
+ POST http://localhost:8000/grooming/undefined/check-grooming-video 404 (Not Found)
+UploadVideo.jsx:30 Video Upload Error: SyntaxError: Failed to execute 'json' on 'Response': Unexpected end of JSON input
+    at UploadVideo.jsx:23:26
