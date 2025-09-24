@@ -1,4 +1,4 @@
-// src/components/Unified_Check.jsx
+// src/pages/Grooming/src/components/Unified_Check.jsx
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
@@ -23,9 +23,14 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
   const actionsDoneRef = useRef({ blink: false, left: false, right: false });
   const baselinesRef = useRef({ ear: null, noseX: null });
 
-  const BASE_URL = import.meta.env.VITE_API_BASE_URL;
-  const apiUrl = (path) => `${BASE_URL}${path}`;
-  const VISION_WASM_BASE = import.meta.env.VITE_VISION_WASM_BASE || "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm";
+  // Safe API base (no trailing slash) and helper that guarantees a single slash before path
+  const BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/+$/, '');
+  const apiUrl = (path) => `${BASE_URL}${path.startsWith('/') ? '' : '/'}${path}`;
+
+  // Use CDN for Mediapipe Tasks Vision WASM by default
+  const VISION_WASM_BASE =
+    import.meta.env.VITE_VISION_WASM_BASE ||
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm';
 
   // ---------- Load Face Landmarker ----------
   const loadModel = useCallback(async () => {
@@ -44,9 +49,9 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
       setFeedback('Ready to start the check.');
     } catch (e) {
       console.error(e);
-      setError('Could not load AI model. Make sure the .wasm files are in public/wasm.');
+      setError('Could not load AI model.');
     }
-  }, []);
+  }, [VISION_WASM_BASE]);
 
   useEffect(() => {
     loadModel();
@@ -179,12 +184,16 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64, crewName, igaCode }),
       });
-      if (!res.ok) throw new Error('API request failed');
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`HTTP ${res.status} ${txt || ''}`.trim());
+      }
       const data = await res.json();
       setGroomingResult(data?.result || null);
       setStatus('done');
       if (onComplete) onComplete();
-    } catch {
+    } catch (e) {
+      console.error(e);
       setError('Grooming check failed.');
     }
   };
@@ -239,14 +248,23 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
     stopCamera();
 
     fetch(apiUrl('/check-grooming-video'), { method: 'POST', body: fd })
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (!r.ok) {
+          const txt = await r.text();
+          throw new Error(`HTTP ${r.status} ${txt || ''}`.trim());
+        }
+        return r.json();
+      })
       .then((data) => {
         if (!data || data.status !== 'ok') throw new Error(data?.error || 'API error');
         setGroomingResult(data.result);
         setStatus('done');
         if (onComplete) onComplete();
       })
-      .catch(() => setError('Video grooming check failed.'));
+      .catch((e) => {
+        console.error(e);
+        setError('Video grooming check failed.');
+      });
   };
 
   // ---------- Helpers for display ----------
@@ -375,20 +393,20 @@ export default UnifiedCheck;
 
 
 
-
-
-// src/components/UploadVideo.jsx
+// src/pages/Grooming/src/components/UploadVideo.jsx (or your actual path in Grooming)
 import React, { useState } from 'react';
 
 function UploadVideo({ crewName, igaCode }) {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
-  const BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
+  const BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
   const handleVideoUpload = (event) => {
     const file = event.target.files[0];
     if (!file) return;
+
     const formData = new FormData();
     formData.append('video', file);
     formData.append('name', crewName);
@@ -399,7 +417,13 @@ function UploadVideo({ crewName, igaCode }) {
     setLoading(true);
 
     fetch(`${BASE_URL}/check-grooming-video`, { method: 'POST', body: formData })
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(`HTTP ${res.status} ${txt || ''}`.trim());
+        }
+        return res.json();
+      })
       .then((data) => {
         if (!data || data.status !== 'ok') throw new Error(data?.error || 'API error');
         setResult(data.result);
@@ -468,28 +492,6 @@ function UploadVideo({ crewName, igaCode }) {
               {row('Accessories', result.scores?.accessories, 2, result.details?.accessories)}
             </div>
           </div>
-
-          {Array.isArray(result.issues) && result.issues.length > 0 && (
-            <>
-              <h4 style={{ marginTop: 12 }}>Issues</h4>
-              <ul>
-                {result.issues.map((it, i) => (
-                  <li key={i}>{it}</li>
-                ))}
-              </ul>
-            </>
-          )}
-
-          {Array.isArray(result.recommendations) && result.recommendations.length > 0 && (
-            <>
-              <h4 style={{ marginTop: 12 }}>Recommendations</h4>
-              <ul>
-                {result.recommendations.map((it, i) => (
-                  <li key={i}>{it}</li>
-                ))}
-              </ul>
-            </>
-          )}
         </div>
       )}
     </div>
