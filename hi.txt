@@ -1,74 +1,24 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+Microsoft Windows [Version 10.0.22631.5909]
+(c) Microsoft Corporation. All rights reserved.
 
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-.eggs/
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\ifs-365\6e-365-ifs>npm run dev
 
-# Virtual environments
-.env
-.venv/
-env/
-venv/
-venv.bak/
+> vite_react_shadcn_ts@0.0.0 dev
+> vite
 
-# Pip cache
-pip-log.txt
-pip-delete-this-directory.txt
+  VITE v5.4.20  ready in 2083 ms
 
-# Pytest cache
-.pytest_cache/
+  ➜  Local:   http://localhost:8000/
+  ➜  Network: http://10.18.103.119:8000/
+  ➜  press h + enter to show help
+1:23:02 PM [vite] Pre-transform error: Failed to resolve import "@mediapipe/tasks-vision" from "src/pages/Grooming/src/components/Unified_Check.jsx". Does the file exist?
+Terminate batch job (Y/N)? 
 
-# Coverage reports
-.coverage
-htmlcov/
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\ifs-365\6e-365-ifs>npm install @mediapipe/tasks-vision
 
-# Unit test / coverage reports
-.tox/
+added 1 package, and audited 408 packages in 6s
 
-# mypy cache
-.mypy_cache/
-.dmypy.json
+79 packages are looking for funding
+  run `npm fund` for details
 
-# IDE and editor files
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Logs and databases
-*.log
-*.sqlite3
-
-# Docker files and output
-docker-compose.override.yml
-*.Dockerfile
-*.dockerignore
-
-# Environment variables
-.env
-.env.*.local
-
-# Ignore any secrets or key files
-*.pem
-*.crt
-*.key
-*.p12
-*.pfx
-
-# Ignore Jupyter Notebook checkpoints
-.ipynb_checkpoints
-
-# Others
-*.bak
-*.tmp
-*.temp
+4 vulnerabilities (3 moderate, 1 high)
