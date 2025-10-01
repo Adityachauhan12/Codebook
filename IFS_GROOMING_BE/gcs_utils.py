@@ -134,19 +134,18 @@ def latest_assessments_today(iga_code: str, now: Optional[datetime] = None) -> l
     latest = names[0]
     doc = _download_json(latest)
     return doc.get("assessments", [])
-
-def upload_grooming_result_text(result_text: str, crew_name: Optional[str], iga_code: Optional[str], image_gcs_path: Optional[str] = None, now: Optional[datetime] = None) -> str:
-    """
-    Save the grooming result (Gemini text) as JSON to:
-      BASE/DATE/results/<IGA>/grooming_result_<IGA>_<HHMMSS>.json
-    The filename includes the IGA code as requested.
-    """
+def upload_grooming_result_text(
+    result_text: str,
+    crew_name: Optional[str],
+    iga_code: Optional[str],
+    image_gcs_path: Optional[str] = None,
+    now: Optional[datetime] = None
+) -> str:
     dt = now or datetime.now()
     date_str = _yyyymmdd(dt)
     time_str = _hhmmss(dt)
     iga = _slugify(iga_code)
     blob_path = f"{GCS_BASE_FOLDER}/{date_str}/results/{iga}/grooming_result_{iga}_{time_str}.json"
-
     payload = {
         "timestamp": datetime.now().isoformat(),
         "iga_code": iga_code or "Unknown",
@@ -154,4 +153,13 @@ def upload_grooming_result_text(result_text: str, crew_name: Optional[str], iga_
         "image_gcs_path": image_gcs_path,
         "result_text": result_text
     }
+    return _upload_text(
+        json.dumps(payload, indent=2),
+        blob_path,
+        metadata={
+            "crew_name": crew_name or "Unknown",
+            "iga_code": iga_code or "Unknown",
+            "type": "grooming_result"
+        }
+    )
     return _upload_text(json.dumps(payload, indent=2), blob_path, metadata={"crew_name": crew_name or "Unknown", "iga_code": iga_code or "Unknown", "type": "grooming_result"})
