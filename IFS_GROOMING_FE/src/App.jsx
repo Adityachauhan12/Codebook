@@ -26,7 +26,7 @@ function App() {
         }
 
         if (unifiedCheckRef.current) {
-          unifiedCheckRef.current.startUnifiedCheck();
+          //unifiedCheckRef.current.startUnifiedCheck();
         }
       }, 300);
     }, 100);
