@@ -1,9 +1,48 @@
-Try statement must have at least one except or finally clausePylance
-"(" was not closedPylance
-  if content.startswith("```
-String literal is unterminatedPylance
-Expected ":"Pylance
 
-curl -X POST "http://127.0.0.1:8001/monitor-bookshelf" `
-  -F "file=@C:\Users\aditya.chauhan2\Desktop\Ankit_video_iphone.mp4" `
-  -F "books_csv=Scrum,The Innovator's Dilemma,Human + Machine,How They Started Digital,Physics of the Future,Contagious,Never Split the Difference,Antifragile,Hit Refresh,Essentialism,Just Listen,Open Shift,The Singularity Is Nearer,Mastering the Data Paradox,The Stoic Mindset,Lilliput Land,The Coming Wave,AI Analytics and the New Machine Age,Vital Upgrade,Quantum Marketing,Generative AI,Quantum Supremacy,The Art of Thinking Clearly,Ikigai,Ogilvy on Advertising,Basic AI,Supremacy,Our Next Reality,Naive,Blockchain Revolution,No Filter,Atomic Habits,Hooked,Zero to One"
+--- Video Analysis ---
+📹 Analyzing video: captured_frames\0de5b61a-060f-4d94-be16-6187fc92f285.mp4
+👤 Person detected at frame 112
+   Using clean frame from buffer (index 5/10)
+   💾 Saved: captured_frames\before.jpg
+📸 BEFORE frame captured (from before person entered)
+👋 Person left at frame 261
+   Waiting for shelf to stabilize...
+   💾 Saved: captured_frames\after.jpg
+✅ AFTER frame captured (change detected: hamming=13, hist=0.116)
+✅ Video analysis complete (262 frames)
+🔍 Analyzing 30 face samples
+   💾 Saved: detected_faces\face_33928.jpg
+💾 Best face saved: detected_faces\face_33928.jpg
+❌ No face detected in detected_faces\face_33928.jpg
+❓ Person not recognized
+
+--- OCR Processing ---
+📖 Extracting text from: captured_frames\before.jpg
+✅ Extracted 6 text lines
+   Sample: ['PB', '=> HOOKED', '------']
+📖 Extracting text from: captured_frames\after.jpg
+✅ Extracted 5 text lines
+   Sample: ['PB', '- --', 'HOOKED']
+
+--- Book Identification ---
+BEFORE frame:
+🤖 Using GPT to identify books from 6 lines
+   GPT response: ```json
+["Hooked"]
+```
+✅ GPT identified 1 books: ['Hooked']
+
+AFTER frame:
+🤖 Using GPT to identify books from 5 lines
+   GPT response: ["Hooked"]
+✅ GPT identified 1 books: ['Hooked']
+
+--- Book Changes ---
+
+--- Results ---
+Person: Unknown
+Taken: []
+Placed: []
+============================================================
+
+INFO:     127.0.0.1:55555 - "POST /monitor-bookshelf HTTP/1.1" 200 OK
