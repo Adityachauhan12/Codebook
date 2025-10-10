@@ -1,10 +1,10 @@
 curl -X 'POST' \
-  'http://127.0.0.1:8001/identify' \
+  'http://127.0.0.1:8001/shelf-diff' \
   -H 'accept: application/json' \
   -H 'Content-Type: multipart/form-data' \
-  -F 'file=@Ankit_video_iphone.mp4;type=video/mp4'
+  -F 'file=@Ankit_video_16promax.mp4;type=video/mp4'
 Request URL
-http://127.0.0.1:8001/identify
+http://127.0.0.1:8001/shelf-diff
 Server response
 Code	Details
 500
@@ -14,11 +14,22 @@ Error: Internal Server Error
 Response body
 Download
 {
-  "error": "400 Client Error: Bad Request for url: https://6eface.cognitiveservices.azure.com//face/v1.0/detect?returnFaceId=true&recognitionModel=recognition_04&detectionModel=detection_03&returnFaceAttributes=qualityForRecognition"
+  "error": "(InvalidRequest) Invalid request.\nCode: InvalidRequest\nMessage: Invalid request.\nInner error: {\n    \"code\": \"InvalidContentDimensions\",\n    \"message\": \"The input image dimensions are out of range. Refer to documentation for supported image dimensions.\"\n}"
 }
 Response headers
- content-length: 232 
+ content-length: 280 
  content-type: application/json 
- date: Fri,10 Oct 2025 10:25:43 GMT 
- server: uvicorn 
-Responses
+ date: Fri,10 Oct 2025 10:41:02 GMT 
+ server: uvicorn     gave 500 error  
+(venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\regrets>uvicorn sheldiff:app --port 8001
+WARNING ⚠️ Ultralytics settings reset to default values. This may be due to a possible problem wiith your settings or a recent ultralytics package update.
+View Ultralytics Settings with 'yolo settings' or at 'C:\Users\aditya.chauhan2\AppData\Roaming\Ultralytics\settings.json'
+Update Settings with 'yolo settings key=value', i.e. 'yolo settings runs_dir=path/to/dir'. For help see https://docs.ultralytics.com/quickstart/#ultralytics-settings.
+INFO:     Started server process [30260]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:62938 - "GET / HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:62938 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62938 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59905 - "POST /shelf-diff HTTP/1.1" 500 Internal Server Error
