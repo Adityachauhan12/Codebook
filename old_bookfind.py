@@ -1,4 +1,4 @@
-# bookfind.py (drop-in replacement or add the new functions)
+# bookfind.py
 import os
 import io
 from typing import List, Set, Dict, Any
@@ -41,19 +41,41 @@ KNOWN_BOOKS = [
 ]
 
 FUZZY_MIN_SCORE = int(os.getenv("FUZZY_MIN_SCORE", "80"))
+OCR_MIN_SIDE = int(os.getenv("OCR_MIN_SIDE", "50"))        # per DI: >=50 pixels
+OCR_MAX_SIDE = int(os.getenv("OCR_MAX_SIDE", "10000"))     # per DI: <=10000 pixels
+CROP_PAD = int(os.getenv("CROP_PAD", "16"))                # widen crop for OCR
+
+def _resize_for_ocr(bgr):
+    h, w = bgr.shape[:2]
+    # Compute scale to satisfy both min and max constraints
+    scale_up = max(1.0, OCR_MIN_SIDE / max(1, min(h, w)))
+    scale_down = min(1.0, OCR_MAX_SIDE / max(h, w))
+    scale = scale_up
+    if max(h*scale, w*scale) > OCR_MAX_SIDE:
+        scale = scale_down
+    if abs(scale - 1.0) > 1e-3:
+        nh, nw = max(1, int(h * scale)), max(1, int(w * scale))
+        interp = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+        bgr = cv2.resize(bgr, (nw, nh), interpolation=interp)
+    return bgr
 
 def _ocr_bytes(img_bgr_roi) -> str:
-    ok, buf = cv2.imencode(".png", img_bgr_roi)
-    if not ok:
+    try:
+        img_bgr_roi = _resize_for_ocr(img_bgr_roi)
+        ok, buf = cv2.imencode(".png", img_bgr_roi)
+        if not ok:
+            return ""
+        stream = io.BytesIO(buf.tobytes())
+        poller = doc_client.begin_analyze_document(model_id="prebuilt-read", body=stream)
+        result = poller.result()
+        lines = []
+        for page in result.pages or []:
+            for line in page.lines or []:
+                lines.append(line.content)
+        return " ".join(lines)
+    except Exception:
+        # Swallow per-ROI OCR errors (e.g., occasional invalid crops)
         return ""
-    stream = io.BytesIO(buf.tobytes())
-    poller = doc_client.begin_analyze_document(model_id="prebuilt-read", body=stream)
-    result = poller.result()
-    lines = []
-    for page in result.pages or []:
-        for line in page.lines or []:
-            lines.append(line.content)
-    return " ".join(lines)
 
 def _normalize_title(raw: str) -> str:
     raw = (raw or "").strip()
@@ -75,9 +97,8 @@ def extract_books_from_bgr(img) -> Set[str]:
         if conf < BOOK_CONF_THRESHOLD:
             continue
         x1, y1, x2, y2 = map(int, b.xyxy[0].tolist())
-        pad = 8
-        x1 = max(0, x1 - pad); y1 = max(0, y1 - pad)
-        x2 = min(w, x2 + pad); y2 = min(h, y2 + pad)
+        x1 = max(0, x1 - CROP_PAD); y1 = max(0, y1 - CROP_PAD)
+        x2 = min(w, x2 + CROP_PAD); y2 = min(h, y2 + CROP_PAD)
         roi = img[y1:y2, x1:x2]
         if roi.size == 0:
             continue
@@ -92,7 +113,6 @@ def extract_books(image_path: str) -> Set[str]:
     return extract_books_from_bgr(img)
 
 def aggregate_titles(frames: List[Any]) -> Set[str]:
-    # Union across multiple frames to stabilize OCR/noise
     agg: Set[str] = set()
     for f in frames:
         agg |= extract_books_from_bgr(f)
