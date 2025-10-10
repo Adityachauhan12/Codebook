@@ -1,80 +1,38 @@
 
---- Video Analysis ---
-📹 Analyzing video: captured_frames\0de5b61a-060f-4d94-be16-6187fc92f285.mp4
-👤 Person detected at frame 112
-   Using clean frame from buffer (index 5/10)
-   💾 Saved: captured_frames\before.jpg
-📸 BEFORE frame captured (from before person entered)
-👋 Person left at frame 261
-   Waiting for shelf to stabilize...
-   💾 Saved: captured_frames\after.jpg
-✅ AFTER frame captured (change detected: hamming=13, hist=0.116)
-✅ Video analysis complete (262 frames)
-🔍 Analyzing 30 face samples
-   💾 Saved: detected_faces\face_33928.jpg
-💾 Best face saved: detected_faces\face_33928.jpg
-❌ No face detected in detected_faces\face_33928.jpg
-❓ Person not recognized
+(library_poc) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Library_POC\app>cd .. 
 
---- OCR Processing ---
-📖 Extracting text from: captured_frames\before.jpg
-✅ Extracted 6 text lines
-   Sample: ['PB', '=> HOOKED', '------']
-📖 Extracting text from: captured_frames\after.jpg
-✅ Extracted 5 text lines
-   Sample: ['PB', '- --', 'HOOKED']
-
---- Book Identification ---
-BEFORE frame:
-🤖 Using GPT to identify books from 6 lines
-   GPT response: ```json
-["Hooked"]
-```
-✅ GPT identified 1 books: ['Hooked']
-
-AFTER frame:
-🤖 Using GPT to identify books from 5 lines
-   GPT response: ["Hooked"]
-✅ GPT identified 1 books: ['Hooked']
-
---- Book Changes ---
-
---- Results ---
-Person: Unknown
-Taken: []
-Placed: []
-============================================================
-
-INFO:     127.0.0.1:55555 - "POST /monitor-bookshelf HTTP/1.1" 200 OK
-
-
-
+(library_poc) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Library_POC>uvicorn app.main:app --port 8001
+INFO:     Started server process [13876]
+INFO:     Waiting for application startup.
+📚 Books-Cam System started
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)       
 
 ============================================================
 📹 New request: Ankit_video_iphone.mp4
 ============================================================
-✅ Video saved: captured_frames\7f1fbf53-863d-44f5-affc-3c22035bf6f7.mp4        
+✅ Video saved: captured_frames\4556d56c-63d3-4911-b996-a81dc21af4ed.mp4
 📐 No shelf ROI specified, using full frame
 📚 Monitoring 34 books
 
 --- Video Analysis ---
-📹 Analyzing video: captured_frames\7f1fbf53-863d-44f5-affc-3c22035bf6f7.mp4
+📹 Analyzing video: captured_frames\4556d56c-63d3-4911-b996-a81dc21af4ed.mp4
 👤 Person detected at frame 112
    Using clean frame from buffer (index 5/10)
    💾 Saved: captured_frames\before.jpg
 📸 BEFORE frame captured (from before person entered)
-👋 Person left at frame 256
+👋 Person left at frame 257
    Waiting for shelf to stabilize...
    💾 Saved: captured_frames\after.jpg
-✅ AFTER frame captured (change detected: hamming=15, hist=0.112)
-✅ Video analysis complete (257 frames)
+✅ AFTER frame captured (change detected: hamming=15, hist=0.113)
+✅ Video analysis complete (258 frames)
 🔍 Analyzing 30 face samples
    Face crop size: 403x403
    Face quality - Area: 162409, Sharpness: 96.7, Brightness: 117.9
-   💾 Saved: detected_faces\face_65788.jpg
-💾 Best face saved: detected_faces\face_65788.jpg
+   💾 Saved: detected_faces\face_13876.jpg
+💾 Best face saved: detected_faces\face_13876.jpg
    Sending face image to Azure (size: 49647 bytes)
-❌ No face detected in detected_faces\face_65788.jpg
+❌ No face detected in detected_faces\face_13876.jpg
 ❓ Person not recognized
 
 --- OCR Processing ---
@@ -82,63 +40,26 @@ INFO:     127.0.0.1:55555 - "POST /monitor-bookshelf HTTP/1.1" 200 OK
 ✅ Extracted 6 text lines
    Sample: ['PB', '=> HOOKED', '------', 'COLIT ON AFTERTISINS', 'BRAND']       
 📖 Extracting text from: captured_frames\after.jpg
-✅ Extracted 6 text lines
-   Sample: ['PB', '...', '- --', 'HOOKED', 'BRAND']
+✅ Extracted 3 text lines
+   Sample: ['PB', 'HOOKED', 'BRAND']
 
 --- Book Identification ---
 BEFORE frame:
 🤖 Using GPT to identify books from 6 lines
-   GPT raw response: ```json
-["Hooked", "Ogilvy on Advertising"]
-```
-❌ GPT Error: search() missing 1 required positional argument: 'string'
-🔍 Using fuzzy matching as fallback
-   Full OCR text: pb => hooked ------ colit on aftertisins brand storyz...      
+   GPT raw response: ["Hooked", "Ogilvy on Advertising"]
+✅ GPT identified 2 books: ['Hooked', 'Ogilvy on Advertising']
 
-❌ Error: 'in <string>' requires string as left operand, not list
-INFO:     127.0.0.1:53044 - "POST /monitor-bookshelf HTTP/1.1" 500 Internal Server Error
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [65788]
+AFTER frame:
+🤖 Using GPT to identify books from 3 lines
+   GPT raw response: ["Hooked"]
+✅ GPT identified 1 books: ['Hooked']
 
-(library_poc) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Library_POC>python app.test_ocr.py
-C:\Program Files\Python312\python.exe: can't open file 'C:\\Users\\aditya.chauhan2\\OneDrive - InterGlobe Aviation Limited\\Desktop\\Library_POC\\app.test_ocr.py': [Errno 2] No such file or directory
+--- Book Changes ---
 
-(library_poc) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Library_POC>cd app
-
-(library_poc) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Library_POC\app>python test_ocr.py
-============================================================
-Testing OCR and Book Detection
-============================================================
-
-=== BEFORE IMAGE ===
-📖 Extracting text from: captured_frames/before.jpg
-❌ OCR Error: [Errno 2] No such file or directory: 'captured_frames/before.jpg' 
-
-All OCR lines: []
-⚠️  No OCR lines to analyze
-
-GPT found nothing, trying fuzzy match...
-
-Final BEFORE books: []
-
-============================================================
-=== AFTER IMAGE ===
-📖 Extracting text from: captured_frames/after.jpg
-❌ OCR Error: [Errno 2] No such file or directory: 'captured_frames/after.jpg'  
-
-All OCR lines: []
-⚠️  No OCR lines to analyze
-
-GPT found nothing, trying fuzzy match...
-
-Final AFTER books: []
-
-============================================================
-=== COMPARISON ===
-Taken: []
+--- Results ---
+Person: Unknown
+Taken: ['Ogilvy on Advertising']
 Placed: []
 ============================================================
 
-(library_poc) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Library_POC\app>
+INFO:     127.0.0.1:55224 - "POST /monitor-bookshelf HTTP/1.1" 200 OK
