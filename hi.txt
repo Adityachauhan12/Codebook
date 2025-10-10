@@ -65,6 +65,44 @@ INFO:     127.0.0.1:57905 - "POST /monitor-bookshelf HTTP/1.1" 200 OK
 
 
 
+"Scrum — Jeff Sutherland & JJ Sutherland",
+    "The Innovator’s Dilemma by Clayton M. Christensen",
+    "Human + Machine by Paul R. Daugherty and H. James Wilson",
+    "How They Started Digital by David Lester",
+    "Physics of the Future by Michio Kaku",
+    "Contagious by Jonah Berger",
+    "Never Split the Difference by Chris Voss",
+    "Antifragile by Nassim Nicholas Taleb",
+    "Hit Refresh by Satya Nadella",
+    "Essentialism by Greg McKeown",
+    "Just Listen by Mark Goulston",
+    "Open Shift by Arnaud Pascoe",
+    "The Singularity Is Nearer — Ray Kurzweil",
+    "Mastering the Data Paradox — Nitin Seth",
+    "The Stoic Mindset — Mark Tuitert",
+    "Lilliput Land — Rama Bijapurkar",
+    "The Coming Wave — Mustafa Suleyman with Michael Bhaskar",
+    "AI, Analytics, and the New Machine Age — Hemant Taneja",
+    "Vital Upgrade — Hema Shah",
+    "Quantum Marketing — Raja Rajamannar",
+    "Generative AI — Tom Taulli",
+    "Quantum Supremacy — Michio Kaku",
+    "The Art of Thinking Clearly — Rolf Dobelli",
+    "Ikigai — Héctor García & Francesc Miralles",
+    "Ogilvy on Advertising — David Ogilvy",
+    "Basic AI — David Shrier",
+    "Supremacy — Parmy Olson",
+    "Our Next Reality — Win Cathcart & Louis Rosenberg",
+    "Naive — Erling Kagge",
+    "Blockchain Revolution — Don Tapscott & Alex Tapscott",
+    "No Filter — Sarah Frier",
+    "Atomic Habits — James Clear",
+    "Hooked — Nir Eyal",
+    "Zero to One — Peter Thiel with Blake Masters"
+
+
+
 
 curl -X GET "https://6eface.cognitiveservices.azure.com/face/v1.0/persongroups/indigo-employees?returnRecognitionModel=true" -H "Ocp-Apim-Subscription-Key: YOUR_AZURE_FACE_KEY"
+
 
