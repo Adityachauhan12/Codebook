@@ -79,32 +79,9 @@ def _ensure_min_dimensions(img, min_w: int = MIN_CROP_W, min_h: int = MIN_CROP_H
     return img
 
 def _write_img(path: str, img):
-    """Write image with moderate enhancement for OCR"""
-    # Ensure minimum dimensions
-    h, w = img.shape[:2]
-    if w < MIN_CROP_W or h < MIN_CROP_H:
-        scale = max(MIN_CROP_W / w, MIN_CROP_H / h)
-        new_w, new_h = int(w * scale), int(h * scale)
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-    
-    # Light enhancement only
-    # 1. Convert to LAB color space
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    
-    # 2. Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
-    
-    # 3. Merge back
-    enhanced = cv2.merge([l, a, b])
-    enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
-    
-    # Write with high quality
-    cv2.imwrite(path, enhanced, [cv2.IMWRITE_JPEG_QUALITY, 98])
-    print(f"   💾 Enhanced image saved: {path}")
-
-
+    """Write image ensuring minimum dimensions"""
+    img = _ensure_min_dimensions(img)
+    cv2.imwrite(path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
 def _ahash(img_path: str, size: int = 8) -> int:
     """Calculate average hash for image comparison"""
@@ -318,5 +295,3 @@ def analyze_video(
         print(f"❌ No face samples collected")
     
     return person_id, person_name, before_path, after_path
-
-
