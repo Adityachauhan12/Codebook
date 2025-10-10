@@ -86,10 +86,12 @@ async def monitor_bookshelf(
     if all(v is not None for v in (shelf_x, shelf_y, shelf_w, shelf_h)) and (shelf_w or 0) > 0 and (shelf_h or 0) > 0:
         shelf_roi = {"x": shelf_x, "y": shelf_y, "w": shelf_w, "h": shelf_h}
         print(f"📐 Using shelf ROI: {shelf_roi}")
+    else:
+        print(f"📐 No shelf ROI specified, using full frame")
     
     # Parse known books
     known_titles = parse_books_param(books, books_csv)
-    print(f"📚 Monitoring books: {known_titles}")
+    print(f"📚 Monitoring {len(known_titles)} books")
     
     try:
         # Analyze video for person and shelf changes
