@@ -12,17 +12,17 @@ import numpy as np
 
 # Configuration
 DEFAULT_WAIT_SECONDS = 3.0
-YOLO_CONFIDENCE_THRESHOLD = 0.4  # Lowered for better detection
+YOLO_CONFIDENCE_THRESHOLD = 0.4
 PERSON_CLASS_ID = 0
 FACE_MAX_SAMPLES = 30
-FACE_MIN_SIZE = (60, 60)
+FACE_MIN_SIZE = (80, 80)
 AFTER_MAX_SEARCH_SECONDS = 8.0
 MIN_CROP_W, MIN_CROP_H = 240, 240
-STABILITY_BUFFER = 10  # Increased buffer
+STABILITY_BUFFER = 10
 MOTION_DIFF_THRESHOLD = 8.0
 HIST_BINS = 32
 FACE_MARGIN = 0.25
-MODEL_PATH = "yolov8n.pt"  # Use standard YOLOv8n
+MODEL_PATH = "yolov8n.pt"
 
 CAPTURED_DIR = Path("captured_frames")
 FACES_DIR = Path("detected_faces")
@@ -175,7 +175,7 @@ def analyze_video(
     face_path = str(FACES_DIR / f"face_{os.getpid()}.jpg")
     
     # State tracking
-    clean_shelf_buffer: List[np.ndarray] = []  # Frames BEFORE person appears
+    clean_shelf_buffer: List[np.ndarray] = []
     person_present = False
     person_ever_detected = False
     last_person_time = None
@@ -184,7 +184,6 @@ def analyze_video(
     before_hist: Optional[np.ndarray] = None
     hb: Optional[int] = None
     frame_count = 0
-    frames_since_person_left = 0
     
     while True:
         ret, frame = cap.read()
@@ -203,7 +202,6 @@ def analyze_video(
         
         # === BEFORE PERSON ENTERS: Collect clean shelf frames ===
         if not person_flag and not person_ever_detected:
-            # Only collect stable frames (low motion)
             if motion < MOTION_DIFF_THRESHOLD:
                 clean_shelf_buffer.append(shelf_frame.copy())
                 if len(clean_shelf_buffer) > STABILITY_BUFFER:
@@ -213,13 +211,12 @@ def analyze_video(
         if person_flag and not person_present:
             print(f"👤 Person detected at frame {frame_count}")
             
-            # Capture BEFORE frame from the clean buffer (BEFORE person entered)
+            # Capture BEFORE frame from the clean buffer
             if clean_shelf_buffer:
                 mid_idx = len(clean_shelf_buffer) // 2
                 before = clean_shelf_buffer[mid_idx]
                 print(f"   Using clean frame from buffer (index {mid_idx}/{len(clean_shelf_buffer)})")
             else:
-                # Fallback: use current shelf frame (not ideal)
                 before = shelf_frame
                 print(f"   ⚠️  No clean buffer, using current frame")
             
@@ -238,6 +235,10 @@ def analyze_video(
             faces = _detect_face_local(gray)
             
             for (x, y, w, h) in faces:
+                # Filter out small faces
+                if w < 100 or h < 100:
+                    continue
+                
                 x2, y2, w2, h2 = _add_margin_box(x, y, w, h, frame.shape, FACE_MARGIN)
                 crop = frame[y2:y2+h2, x2:x2+w2]
                 
@@ -248,27 +249,25 @@ def analyze_video(
                 sharp = _laplacian_sharpness(crop)
                 bright = _brightness_score(crop)
                 
-                face_samples.append((area, sharp, bright, crop))
-                if len(face_samples) > FACE_MAX_SAMPLES:
-                    face_samples.pop(0)
+                # Quality thresholds: keep sharp, well-lit faces
+                if sharp > 50 and 50 < bright < 200:
+                    face_samples.append((area, sharp, bright, crop))
+                    if len(face_samples) > FACE_MAX_SAMPLES:
+                        face_samples.pop(0)
             
             last_person_time = time.monotonic()
-            frames_since_person_left = 0
         
         # === PERSON LEFT ===
         if not person_flag and person_present:
-            frames_since_person_left += 1
             now = time.monotonic()
             
             if last_person_time is None:
                 last_person_time = now
             
-            # Wait the specified time after person left
             if now - last_person_time >= wait_seconds:
                 print(f"👋 Person left at frame {frame_count}")
                 print(f"   Waiting for shelf to stabilize...")
                 
-                # Continue reading frames to find a stable AFTER frame
                 search_start = time.monotonic()
                 stable_after_found = False
                 
@@ -287,14 +286,12 @@ def analyze_video(
                         last_person_time = time.monotonic()
                         continue
                     
-                    # Write candidate after frame
                     _write_img(after_path, shelf_frame2)
                     
                     if hb is None or before_hist is None:
                         stable_after_found = True
                         break
                     
-                    # Check if shelf changed from BEFORE
                     ha = _ahash(after_path)
                     after_hist = _hsv_hist(shelf_frame2)
                     
@@ -311,7 +308,6 @@ def analyze_video(
                 if not stable_after_found:
                     print(f"⏱️  AFTER frame captured (timeout)")
                 
-                # Done processing this person
                 break
     
     cap.release()
@@ -323,6 +319,11 @@ def analyze_video(
         print(f"🔍 Analyzing {len(face_samples)} face samples")
         face_samples.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)
         best_crop = face_samples[0][3]
+        
+        # Debug info
+        print(f"   Face crop size: {best_crop.shape[1]}x{best_crop.shape[0]}")
+        print(f"   Face quality - Area: {face_samples[0][0]}, Sharpness: {face_samples[0][1]:.1f}, Brightness: {face_samples[0][2]:.1f}")
+        
         _write_img(face_path, best_crop)
         print(f"💾 Best face saved: {face_path}")
         
