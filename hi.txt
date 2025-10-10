@@ -1,291 +1,59 @@
 
 (library_poc) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Library_POC>uvicorn app.main:app --port 8001
-INFO:     Started server process [18508]
+INFO:     Started server process [64688]
 INFO:     Waiting for application startup.
 📚 Books-Cam System started
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)       
-INFO:     127.0.0.1:59261 - "GET / HTTP/1.1" 200 OK
-
-============================================================
-📹 New request:
-============================================================
-INFO:     127.0.0.1:56099 - "POST /monitor-bookshelf HTTP/1.1" 400 Bad Request  
+INFO:     127.0.0.1:55255 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56605 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56605 - "GET /openapi.json HTTP/1.1" 200 OK
 
 ============================================================
 📹 New request: Ankit_video_iphone.mp4
 ============================================================
-✅ Video saved: captured_frames\51e1421e-1a14-41e4-9d48-e56060341583.mp4        
+✅ Video saved: captured_frames\09804b0a-eb7e-470e-953d-be074484c65b.mp4        
 📚 Monitoring books: ['Scrum', "The Innovator's Dilemma", 'Human + Machine', 'How They Started Digital', 'Physics of the Future', 'Contagious', 'Never Split the Difference', 'Antifragile', 'Hit Refresh', 'Essentialism', 'Just Listen', 'Open Shift', 'The Singularity Is Nearer', 'Mastering the Data Paradox', 'The Stoic Mindset', 'Lilliput Land', 'The Coming Wave', 'AI Analytics and the New Machine Age', 'Vital Upgrade', 'Quantum Marketing', 'Generative AI', 'Quantum Supremacy', 'The Art of Thinking Clearly', 'Ikigai', 'Ogilvy on Advertising', 'Basic AI', 'Supremacy', 'Our Next Reality', 'Naive', 'Blockchain Revolution', 'No Filter', 'Atomic Habits', 'Hooked', 'Zero to One']
 
 --- Video Analysis ---
-📹 Analyzing video: captured_frames\51e1421e-1a14-41e4-9d48-e56060341583.mp4
+📹 Analyzing video: captured_frames\09804b0a-eb7e-470e-953d-be074484c65b.mp4
 👤 Person detected at frame 151
+   💾 Enhanced image saved: captured_frames\before.jpg
 📸 BEFORE frame captured
-👋 Person left at frame 248
+👋 Person left at frame 241
+   💾 Enhanced image saved: captured_frames\after.jpg
 ✅ AFTER frame captured (changed detected)
-✅ Video analysis complete (248 frames)
+✅ Video analysis complete (241 frames)
 🔍 Analyzing 30 face samples
-💾 Best face saved: detected_faces\face_18508.jpg
-✅ Face detected, faceId: 548402a7...
-✅ Match found with confidence: 0.54
-✅ Identified person: Ankit (ID: 384eddd9...)
-✅ Person identified: Ankit
+   💾 Enhanced image saved: detected_faces\face_64688.jpg
+💾 Best face saved: detected_faces\face_64688.jpg
+✅ Face detected, faceId: e1331cb1...
+❌ No matching candidates found
+❓ Person not recognized
 
 --- OCR Processing ---
 📖 Extracting text from: captured_frames\before.jpg
-✅ Extracted 3 text lines
-   Sample: ['HOOKED', '----', 'OGETY OU ADVERTISING']
+✅ Extracted 0 text lines
+   ⚠️  No text extracted - image may be too blurry or low quality
 📖 Extracting text from: captured_frames\after.jpg
 ✅ Extracted 3 text lines
-   Sample: ['PB', 'HOOKLUT', 'BRAND']
+   Sample: ['PB', '1', 'ND']
 
 --- Book Identification ---
 BEFORE frame:
-🤖 Using GPT to identify books from 3 lines
-   GPT response: ["Hooked", "Ogilvy on Advertising"]
-✅ GPT identified 2 books: ['Hooked', 'Ogilvy on Advertising']
+⚠️  No OCR lines to analyze
 
 AFTER frame:
 🤖 Using GPT to identify books from 3 lines
-   GPT response: ```json
-["Hooked"]
-```
-✅ GPT identified 1 books: ['Hooked']
+   GPT raw response: []
+✅ GPT identified 0 books: []
+🔍 Using fuzzy matching as fallback
+   Full OCR text: pb 1 nd...
 
---- Book Changes ---
-
---- Results ---
-Person: Ankit
-Taken: ['Ogilvy on Advertising']
-Placed: []
-============================================================
-
-INFO:     127.0.0.1:56146 - "POST /monitor-bookshelf HTTP/1.1" 200 OK
+❌ Error: 'list' object has no attribute 'split'
+INFO:     127.0.0.1:62640 - "POST /monitor-bookshelf HTTP/1.1" 500 Internal Server Error
 
 
-
-# === CONFIGURE YOUR AZURE INFO ===
-AZURE_ENDPOINT = "https://lab37-di-doc-mining.cognitiveservices.azure.com/"
-AZURE_KEY = 
-
-api_key = 
-
-from azure.ai.formrecognizer import DocumentAnalysisClient
-from azure.core.credentials import AzureKeyCredential
-from openai import AzureOpenAI
-
-
-
-# === Inputs ===
-IMAGE_PATH = "C:/fastapi_test/surveillance/1.jpg"
-
-all_books = [
-    "Scrum — Jeff Sutherland & JJ Sutherland",
-    "The Innovator’s Dilemma by Clayton M. Christensen",
-    "Human + Machine by Paul R. Daugherty and H. James Wilson",
-    "How They Started Digital by David Lester",
-    "Physics of the Future by Michio Kaku",
-    "Contagious by Jonah Berger",
-    "Never Split the Difference by Chris Voss",
-    "Antifragile by Nassim Nicholas Taleb",
-    "Hit Refresh by Satya Nadella",
-    "Essentialism by Greg McKeown",
-    "Just Listen by Mark Goulston",
-    "Open Shift by Arnaud Pascoe",
-    "The Singularity Is Nearer — Ray Kurzweil",
-    "Mastering the Data Paradox — Nitin Seth",
-    "The Stoic Mindset — Mark Tuitert",
-    "Lilliput Land — Rama Bijapurkar",
-    "The Coming Wave — Mustafa Suleyman with Michael Bhaskar",
-    "AI, Analytics, and the New Machine Age — Hemant Taneja",
-    "Vital Upgrade — Hema Shah",
-    "Quantum Marketing — Raja Rajamannar",
-    "Generative AI — Tom Taulli",
-    "Quantum Supremacy — Michio Kaku",
-    "The Art of Thinking Clearly — Rolf Dobelli",
-    "Ikigai — Héctor García & Francesc Miralles",
-    "Ogilvy on Advertising — David Ogilvy",
-    "Basic AI — David Shrier",
-    "Supremacy — Parmy Olson",
-    "Our Next Reality — Win Cathcart & Louis Rosenberg",
-    "Naive — Erling Kagge",
-    "Blockchain Revolution — Don Tapscott & Alex Tapscott",
-    "No Filter — Sarah Frier",
-    "Atomic Habits — James Clear",
-    "Hooked — Nir Eyal",
-    "Zero to One — Peter Thiel with Blake Masters"
-]
-
-
-
-# === Azure Form Recognizer Client ===
-ocr_client = DocumentAnalysisClient(
-    endpoint=AZURE_ENDPOINT,
-    credential=AzureKeyCredential(AZURE_KEY)
-)
-
-# === Azure OpenAI Client ===
-gpt_client = AzureOpenAI(azure_endpoint=api_base ,
-                    api_key=api_key,
-                    api_version=api_version)
-
-# === OCR Function ===
-def extract_text_from_image(image_path):
-    with open(image_path, "rb") as f:
-        poller = ocr_client.begin_analyze_document("prebuilt-read", document=f)
-        result = poller.result()
-
-    extracted_lines = []
-    for page in result.pages:
-        for line in page.lines:
-            extracted_lines.append(line.content.strip())
-    return extracted_lines
-
-# === GPT Matching Function ===
-def get_books_present_via_gpt(extracted_lines, known_books):
-    prompt = f"""
-            You are a helpful assistant. Below is the OCR-detected text from a bookshelf image and a list of known book titles.
-            
-            OCR detected lines:
-            {extracted_lines}
-            
-            Known book titles:
-            {known_books}
-            
-            Your task: Match and return only the books from the known list that are clearly present in the OCR output. Ignore typos or partial matches that don't make sense.
-            and list do not repeat the names of book.
-            Respond with a clean Python list of matched book titles only.
-"""
-    messages = [{"role": "user", "content": prompt}]
-    response = gpt_client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0.3,
-        max_tokens=800,
-        messages=messages,
-    )
-
-    # Extract and return only the list part from GPT response
-    print(extracted_lines)
-    return response.choices[0].message.content.strip()
-
-# === Main Run ===
-ocr_lines = extract_text_from_image(IMAGE_PATH)
-gpt_response = get_books_present_via_gpt(ocr_lines, all_books)
-
-print("\n✅ Books Present According to GPT + OCR:\n")
-print(gpt_response)
-
-
-
-# === CONFIGURE YOUR AZURE INFO ===
-AZURE_ENDPOINT = "https://lab37-di-doc-mining.cognitiveservices.azure.com/"
-AZURE_KEY = "f897d3ee6f8f4a779fe2fd8215c4e8b9"
-
-api_base = "https://openai-eastus-2.openai.azure.com"
-api_version = "2024-12-01-preview"
-
-from azure.ai.formrecognizer import DocumentAnalysisClient
-from azure.core.credentials import AzureKeyCredential
-from openai import AzureOpenAI
-
-
-
-# === Inputs ===
-IMAGE_PATH = "C:/fastapi_test/surveillance/1.jpg"
-
-all_books = [
-    "Scrum — Jeff Sutherland & JJ Sutherland",
-    "The Innovator’s Dilemma by Clayton M. Christensen",
-    "Human + Machine by Paul R. Daugherty and H. James Wilson",
-    "How They Started Digital by David Lester",
-    "Physics of the Future by Michio Kaku",
-    "Contagious by Jonah Berger",
-    "Never Split the Difference by Chris Voss",
-    "Antifragile by Nassim Nicholas Taleb",
-    "Hit Refresh by Satya Nadella",
-    "Essentialism by Greg McKeown",
-    "Just Listen by Mark Goulston",
-    "Open Shift by Arnaud Pascoe",
-    "The Singularity Is Nearer — Ray Kurzweil",
-    "Mastering the Data Paradox — Nitin Seth",
-    "The Stoic Mindset — Mark Tuitert",
-    "Lilliput Land — Rama Bijapurkar",
-    "The Coming Wave — Mustafa Suleyman with Michael Bhaskar",
-    "AI, Analytics, and the New Machine Age — Hemant Taneja",
-    "Vital Upgrade — Hema Shah",
-    "Quantum Marketing — Raja Rajamannar",
-    "Generative AI — Tom Taulli",
-    "Quantum Supremacy — Michio Kaku",
-    "The Art of Thinking Clearly — Rolf Dobelli",
-    "Ikigai — Héctor García & Francesc Miralles",
-    "Ogilvy on Advertising — David Ogilvy",
-    "Basic AI — David Shrier",
-    "Supremacy — Parmy Olson",
-    "Our Next Reality — Win Cathcart & Louis Rosenberg",
-    "Naive — Erling Kagge",
-    "Blockchain Revolution — Don Tapscott & Alex Tapscott",
-    "No Filter — Sarah Frier",
-    "Atomic Habits — James Clear",
-    "Hooked — Nir Eyal",
-    "Zero to One — Peter Thiel with Blake Masters"
-]
-
-
-
-# === Azure Form Recognizer Client ===
-ocr_client = DocumentAnalysisClient(
-    endpoint=AZURE_ENDPOINT,
-    credential=AzureKeyCredential(AZURE_KEY)
-)
-
-# === Azure OpenAI Client ===
-gpt_client = AzureOpenAI(azure_endpoint=api_base ,
-                    api_key=api_key,
-                    api_version=api_version)
-
-# === OCR Function ===
-def extract_text_from_image(image_path):
-    with open(image_path, "rb") as f:
-        poller = ocr_client.begin_analyze_document("prebuilt-read", document=f)
-        result = poller.result()
-
-    extracted_lines = []
-    for page in result.pages:
-        for line in page.lines:
-            extracted_lines.append(line.content.strip())
-    return extracted_lines
-
-# === GPT Matching Function ===
-def get_books_present_via_gpt(extracted_lines, known_books):
-    prompt = f"""
-            You are a helpful assistant. Below is the OCR-detected text from a bookshelf image and a list of known book titles.
-            
-            OCR detected lines:
-            {extracted_lines}
-            
-            Known book titles:
-            {known_books}
-            
-            Your task: Match and return only the books from the known list that are clearly present in the OCR output. Ignore typos or partial matches that don't make sense.
-            and list do not repeat the names of book.
-            Respond with a clean Python list of matched book titles only.
-"""
-    messages = [{"role": "user", "content": prompt}]
-    response = gpt_client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0.3,
-        max_tokens=800,
-        messages=messages,
-    )
-
-    # Extract and return only the list part from GPT response
-    print(extracted_lines)
-    return response.choices[0].message.content.strip()
-
-# === Main Run ===
-ocr_lines = extract_text_from_image(IMAGE_PATH)
-gpt_response = get_books_present_via_gpt(ocr_lines, all_books)
-
-print("\n✅ Books Present According to GPT + OCR:\n")
-print(gpt_response)
+{
+    "detail": "'list' object has no attribute 'split'"
+}   got 500 internal server error 
