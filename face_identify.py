@@ -69,7 +69,7 @@ def identify_face(image_path: str) -> Tuple[Optional[str], Optional[str]]:
     Identify face using Azure Face API with improved error handling.
     Returns: (person_id, person_name) or (None, None) if no match
     """
-    detect_url = f"{AZURE_FACE_ENDPOINT}face/v1.0/detect?returnFaceId=true&recognitionModel=recognition_04&detectionModel=detection_03"
+    detect_url = f"{AZURE_FACE_ENDPOINT}face/v1.0/detect?returnFaceId=true&recognitionModel=recognition_01&detectionModel=detection_01"
     
     try:
         # Preprocess image for better detection
@@ -146,3 +146,4 @@ def identify_face(image_path: str) -> Tuple[Optional[str], Optional[str]]:
     except Exception as e:
         print(f"❌ Unexpected error: {str(e)}")
         return None, None
+
