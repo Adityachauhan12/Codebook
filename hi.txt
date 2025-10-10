@@ -3,3 +3,7 @@ Try statement must have at least one except or finally clausePylance
   if content.startswith("```
 String literal is unterminatedPylance
 Expected ":"Pylance
+
+curl -X POST "http://127.0.0.1:8001/monitor-bookshelf" `
+  -F "file=@C:\Users\aditya.chauhan2\Desktop\Ankit_video_iphone.mp4" `
+  -F "books_csv=Scrum,The Innovator's Dilemma,Human + Machine,How They Started Digital,Physics of the Future,Contagious,Never Split the Difference,Antifragile,Hit Refresh,Essentialism,Just Listen,Open Shift,The Singularity Is Nearer,Mastering the Data Paradox,The Stoic Mindset,Lilliput Land,The Coming Wave,AI Analytics and the New Machine Age,Vital Upgrade,Quantum Marketing,Generative AI,Quantum Supremacy,The Art of Thinking Clearly,Ikigai,Ogilvy on Advertising,Basic AI,Supremacy,Our Next Reality,Naive,Blockchain Revolution,No Filter,Atomic Habits,Hooked,Zero to One"
