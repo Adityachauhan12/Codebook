@@ -66,4 +66,5 @@ INFO:     127.0.0.1:57905 - "POST /monitor-bookshelf HTTP/1.1" 200 OK
 
 
 
-curl -X DELETE "https://6eface.cognitiveservices.azure.com/face/v1.0/persongroups/indigo-employees" -H "Ocp-Apim-Subscription-Key: YOUR_KEY"
+curl -X GET "https://6eface.cognitiveservices.azure.com/face/v1.0/persongroups/indigo-employees?returnRecognitionModel=true" -H "Ocp-Apim-Subscription-Key: YOUR_AZURE_FACE_KEY"
+
