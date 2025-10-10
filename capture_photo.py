@@ -79,9 +79,36 @@ def _ensure_min_dimensions(img, min_w: int = MIN_CROP_W, min_h: int = MIN_CROP_H
     return img
 
 def _write_img(path: str, img):
-    """Write image ensuring minimum dimensions"""
-    img = _ensure_min_dimensions(img)
-    cv2.imwrite(path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    """Write image ensuring minimum dimensions and enhanced quality for OCR"""
+    # Ensure minimum dimensions
+    h, w = img.shape[:2]
+    if w < MIN_CROP_W or h < MIN_CROP_H:
+        scale = max(MIN_CROP_W / w, MIN_CROP_H / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+    
+    # Enhance image for better OCR
+    # 1. Denoise
+    img = cv2.fastNlMeansDenoisingColored(img, None, 10, 10, 7, 21)
+    
+    # 2. Sharpen
+    kernel = np.array([[-1,-1,-1],
+                       [-1, 9,-1],
+                       [-1,-1,-1]])
+    img = cv2.filter2D(img, -1, kernel)
+    
+    # 3. Enhance contrast
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    enhanced = cv2.merge([l, a, b])
+    enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+    
+    # Write with high quality
+    cv2.imwrite(path, enhanced, [cv2.IMWRITE_JPEG_QUALITY, 98])
+    print(f"   💾 Enhanced image saved: {path}")
+
 
 def _ahash(img_path: str, size: int = 8) -> int:
     """Calculate average hash for image comparison"""
@@ -295,3 +322,4 @@ def analyze_video(
         print(f"❌ No face samples collected")
     
     return person_id, person_name, before_path, after_path
+
