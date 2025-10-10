@@ -43,7 +43,42 @@ gpt_client = AzureOpenAI(
     api_version=AZURE_OPENAI_API_VERSION,
 )
 
-ALL_BOOKS = ["Atomic Habits", "Zero to One", "Ikigai", "Hooked", "Scrum", "Quantum Marketing"]
+ALL_BOOKS = [
+    "Scrum",
+    "The Innovator's Dilemma",
+    "Human + Machine",
+    "How They Started Digital",
+    "Physics of the Future",
+    "Contagious",
+    "Never Split the Difference",
+    "Antifragile",
+    "Hit Refresh",
+    "Essentialism",
+    "Just Listen",
+    "Open Shift",
+    "The Singularity Is Nearer",
+    "Mastering the Data Paradox",
+    "The Stoic Mindset",
+    "Lilliput Land",
+    "The Coming Wave",
+    "AI, Analytics, and the New Machine Age",
+    "Vital Upgrade",
+    "Quantum Marketing",
+    "Generative AI",
+    "Quantum Supremacy",
+    "The Art of Thinking Clearly",
+    "Ikigai",
+    "Ogilvy on Advertising",
+    "Basic AI",
+    "Supremacy",
+    "Our Next Reality",
+    "Naive",
+    "Blockchain Revolution",
+    "No Filter",
+    "Atomic Habits",
+    "Hooked",
+    "Zero to One"
+]
 
 def extract_text_from_image(image_path: str) -> List[str]:
     """Extract text lines from image using Azure Document Intelligence OCR"""
@@ -158,3 +193,4 @@ def fuzzy_match_books(extracted_lines: List[str], known_books: List[str]) -> Lis
     
     print(f"✅ Fuzzy match found {len(out)} books: {out}")
     return out
+
