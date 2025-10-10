@@ -1,5 +1,3 @@
-# app/book_find.py
-
 import os
 import json
 import urllib.parse
@@ -9,7 +7,6 @@ from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 from openai import AzureOpenAI
 import difflib
-import re
 
 load_dotenv()
 
@@ -82,74 +79,53 @@ ALL_BOOKS = [
 ]
 
 def extract_main_title(book_full: str) -> str:
-    """Extract main title from full book string"""
     for sep in ['—', ' by ', ' - ']:
         if sep in book_full:
             return book_full.split(sep)[0].strip()
     return book_full.strip()
 
 def extract_text_from_image(image_path: str) -> List[str]:
-    """Extract text lines from image using Azure OCR"""
     print(f"📖 Extracting text from: {image_path}")
-    
     try:
         with open(image_path, "rb") as f:
             poller = ocr_client.begin_analyze_document("prebuilt-read", document=f)
         result = poller.result()
-        
         lines: List[str] = []
         for page in result.pages:
             for line in page.lines:
                 txt = (line.content or "").strip()
                 if txt and len(txt) > 1:
                     lines.append(txt)
-        
         print(f"✅ Extracted {len(lines)} text lines")
         if lines:
             print(f"   Sample: {lines[:5]}")
-        else:
-            print(f"   ⚠️  No text extracted")
-        
         return lines
     except Exception as e:
         print(f"❌ OCR Error: {str(e)}")
         return []
 
 def get_books_present_via_gpt(extracted_lines: List[str], known_books: List[str]) -> List[str]:
-    """Use GPT to identify books"""
     if not extracted_lines:
-        print(f"⚠️  No OCR lines to analyze")
         return []
-    
-    print(f"🤖 Using GPT to identify books from {len(extracted_lines)} lines")
-    
     try:
         simple_titles = [extract_main_title(kb) for kb in known_books]
-        
-        prompt = f"""OCR text from bookshelf (may have errors):
+        prompt = f"""OCR text:
 {extracted_lines}
 
 Known books:
 {simple_titles}
 
-Return ONLY a JSON array of matching book titles. Be flexible with typos.
-Example: ["Hooked", "Atomic Habits"]
-"""
-        
-        response = gpt_client.chat.completions.create(
+Return ONLY a JSON array of matching titles."""
+        resp = gpt_client.chat.completions.create(
             model=AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=400,
             messages=[
-                {"role": "system", "content": "Return only a JSON array of book titles."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "Return only a JSON array of titles."},
+                {"role": "user", "content": prompt},
             ],
         )
-        
-        content = response.choices[0].message.content.strip()
-        print(f"   GPT raw response: {content}")
-        
-        # Clean markdown
+        content = resp.choices[0].message.content.strip()
         if "```
             parts = content.split("```")
             if len(parts) >= 3:
@@ -157,81 +133,52 @@ Example: ["Hooked", "Atomic Habits"]
                 if content.startswith("json"):
                     content = content[4:]
                 content = content.strip()
-        
         arr = json.loads(content)
         if not isinstance(arr, list):
             return []
-        
-        # Map back to full titles
         out = []
         seen = set()
-        for simple_match in arr:
-            if not isinstance(simple_match, str):
+        for sm in arr:
+            if not isinstance(sm, str):
                 continue
-            for i, simple_title in enumerate(simple_titles):
-                if simple_match.lower() == simple_title.lower() and known_books[i] not in seen:
+            for i, st in enumerate(simple_titles):
+                if sm.lower() == st.lower() and known_books[i] not in seen:
                     seen.add(known_books[i])
                     out.append(known_books[i])
                     break
-        
-        print(f"✅ GPT identified {len(out)} books: {out}")
         return out
-        
     except Exception as e:
-        print(f"❌ GPT Error: {str(e)}")
+        print(f"❌ GPT Error: {e}")
         return []
 
 def fuzzy_match_books(extracted_lines: List[str], known_books: List[str]) -> List[str]:
-    """Fallback fuzzy matching"""
     if not extracted_lines:
         return []
-    
-    print(f"🔍 Using fuzzy matching as fallback")
-    
     full_text = " ".join(extracted_lines).lower()
-    print(f"   Full OCR text: {full_text[:150]}...")
-    
-    hits = []
-    
+    hits: List[str] = []
     for kb in known_books:
-        if not isinstance(kb, str):
-            continue
-        
-        main_title = extract_main_title(kb)
-        main_title_lower = main_title.lower()
-        
-        # Strategy 1: Full title
-        if main_title_lower in full_text:
+        mt = extract_main_title(kb).lower()
+        if mt in full_text:
             hits.append(kb)
-            print(f"   ✓ Full match: {kb}")
             continue
-        
-        # Strategy 2: Key words
-        words = [w for w in main_title_lower.split() if len(w) > 3]
+        words = [w for w in mt.split() if len(w) > 3]
         if len(words) >= 2:
             matches = sum(1 for w in words if w in full_text)
             if matches >= len(words) * 0.5:
                 hits.append(kb)
-                print(f"   ✓ Key words ({matches}/{len(words)}): {kb}")
                 continue
-        
-        # Strategy 3: Partial match
-        if len(words) >= 2:
-            first_word = words[0]
-            if first_word in full_text:
-                for other_word in words[1:]:
-                    if other_word in full_text:
-                        hits.append(kb)
-                        print(f"   ✓ Partial ({first_word}+{other_word}): {kb}")
-                        break
-    
-    # Remove duplicates
-    seen = set()
-    out = []
+        if len(words) >= 2 and words[0] in full_text:
+            if any(w in full_text for w in words[1:]):
+                hits.append(kb)
+                continue
+        for line in extracted_lines:
+            if difflib.SequenceMatcher(None, mt, line.lower()).ratio() > 0.6:
+                hits.append(kb)
+                break
+    # de-dup
+    out, seen = [], set()
     for h in hits:
         if h not in seen:
             seen.add(h)
             out.append(h)
-    
-    print(f"✅ Fuzzy match found {len(out)} books: {out}")
     return out
