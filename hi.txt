@@ -33,3 +33,22 @@ INFO:     127.0.0.1:62938 - "GET / HTTP/1.1" 404 Not Found
 INFO:     127.0.0.1:62938 - "GET /docs HTTP/1.1" 200 OK
 INFO:     127.0.0.1:62938 - "GET /openapi.json HTTP/1.1" 200 OK
 INFO:     127.0.0.1:59905 - "POST /shelf-diff HTTP/1.1" 500 Internal Server Error
+
+
+
+
+# YOLO weights (paths are relative to project root)
+YOLO_PERSON_WEIGHTS=weights/yolov8n.pt
+YOLO_BOOK_WEIGHTS=weights/model.pt
+
+# Optional: restrict detections to these class names from the custom model
+# Leave empty to disable filtering
+BOOK_CLASS_NAMES=book,book_spine
+
+# Optional tuning (can keep defaults)
+BOOK_CONF_THRESHOLD=0.2
+BOOK_IOU_THRESHOLD=0.6
+
+# Debug crops to see what OCR receives
+DEBUG_SAVE=1
+DEBUG_DIR=captures/debug
