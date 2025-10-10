@@ -12,17 +12,17 @@ import numpy as np
 
 # Configuration
 DEFAULT_WAIT_SECONDS = 3.0
-YOLO_CONFIDENCE_THRESHOLD = 0.5
+YOLO_CONFIDENCE_THRESHOLD = 0.4  # Lowered for better detection
 PERSON_CLASS_ID = 0
 FACE_MAX_SAMPLES = 30
 FACE_MIN_SIZE = (60, 60)
 AFTER_MAX_SEARCH_SECONDS = 8.0
 MIN_CROP_W, MIN_CROP_H = 240, 240
-STABILITY_BUFFER = 8
-MOTION_DIFF_THRESHOLD = 6.0
+STABILITY_BUFFER = 10  # Increased buffer
+MOTION_DIFF_THRESHOLD = 8.0
 HIST_BINS = 32
 FACE_MARGIN = 0.25
-MODEL_PATH = "faced_model/model.pt"
+MODEL_PATH = "yolov8n.pt"  # Use standard YOLOv8n
 
 CAPTURED_DIR = Path("captured_frames")
 FACES_DIR = Path("detected_faces")
@@ -79,9 +79,19 @@ def _ensure_min_dimensions(img, min_w: int = MIN_CROP_W, min_h: int = MIN_CROP_H
     return img
 
 def _write_img(path: str, img):
-    """Write image ensuring minimum dimensions"""
+    """Write image with light enhancement for OCR"""
     img = _ensure_min_dimensions(img)
-    cv2.imwrite(path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    
+    # Light contrast enhancement only
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    enhanced = cv2.merge([l, a, b])
+    enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+    
+    cv2.imwrite(path, enhanced, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    print(f"   💾 Saved: {path}")
 
 def _ahash(img_path: str, size: int = 8) -> int:
     """Calculate average hash for image comparison"""
@@ -148,6 +158,10 @@ def analyze_video(
 ) -> Tuple[Optional[str], Optional[str], str, str]:
     """
     Analyze video to detect person, capture face, and detect shelf changes.
+    
+    KEY FIX: Captures BEFORE frame from BEFORE person enters, 
+    and AFTER frame AFTER person leaves.
+    
     Returns: (person_id, person_name, before_image_path, after_image_path)
     """
     cap = cv2.VideoCapture(video_path)
@@ -161,14 +175,16 @@ def analyze_video(
     face_path = str(FACES_DIR / f"face_{os.getpid()}.jpg")
     
     # State tracking
-    last_clean_buffer: List[np.ndarray] = []
+    clean_shelf_buffer: List[np.ndarray] = []  # Frames BEFORE person appears
     person_present = False
+    person_ever_detected = False
     last_person_time = None
     face_samples: List[Tuple[float, float, float, np.ndarray]] = []
     prev_shelf: Optional[np.ndarray] = None
     before_hist: Optional[np.ndarray] = None
     hb: Optional[int] = None
     frame_count = 0
+    frames_since_person_left = 0
     
     while True:
         ret, frame = cap.read()
@@ -179,42 +195,44 @@ def analyze_video(
         shelf_frame = _crop_roi(frame, shelf_roi)
         person_flag, person_box = _detect_person(frame)
         
-        # Strengthen detection with face detection
-        if person_flag:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = _detect_face_local(gray)
-            person_flag = person_flag and (len(faces) > 0)
-        
         # Calculate motion in shelf ROI
         motion = 0.0
         if prev_shelf is not None:
             motion = _mean_abs_diff(shelf_frame, prev_shelf)
         prev_shelf = shelf_frame.copy()
         
-        # Collect stable shelf frames when no person
-        if not person_flag:
+        # === BEFORE PERSON ENTERS: Collect clean shelf frames ===
+        if not person_flag and not person_ever_detected:
+            # Only collect stable frames (low motion)
             if motion < MOTION_DIFF_THRESHOLD:
-                last_clean_buffer.append(shelf_frame.copy())
-                if len(last_clean_buffer) > STABILITY_BUFFER:
-                    last_clean_buffer.pop(0)
+                clean_shelf_buffer.append(shelf_frame.copy())
+                if len(clean_shelf_buffer) > STABILITY_BUFFER:
+                    clean_shelf_buffer.pop(0)
         
-        # Person just appeared - capture BEFORE frame
+        # === PERSON JUST APPEARED ===
         if person_flag and not person_present:
             print(f"👤 Person detected at frame {frame_count}")
-            if last_clean_buffer:
-                mid_idx = len(last_clean_buffer) // 2
-                before = last_clean_buffer[mid_idx]
+            
+            # Capture BEFORE frame from the clean buffer (BEFORE person entered)
+            if clean_shelf_buffer:
+                mid_idx = len(clean_shelf_buffer) // 2
+                before = clean_shelf_buffer[mid_idx]
+                print(f"   Using clean frame from buffer (index {mid_idx}/{len(clean_shelf_buffer)})")
             else:
+                # Fallback: use current shelf frame (not ideal)
                 before = shelf_frame
+                print(f"   ⚠️  No clean buffer, using current frame")
             
             _write_img(before_path, before)
             before_hist = _hsv_hist(before)
             hb = _ahash(before_path)
+            
             person_present = True
+            person_ever_detected = True
             last_person_time = time.monotonic()
-            print(f"📸 BEFORE frame captured")
+            print(f"📸 BEFORE frame captured (from before person entered)")
         
-        # Collect face samples while person present
+        # === WHILE PERSON IS PRESENT: Collect face samples ===
         if person_flag and person_present:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = _detect_face_local(gray)
@@ -235,49 +253,71 @@ def analyze_video(
                     face_samples.pop(0)
             
             last_person_time = time.monotonic()
+            frames_since_person_left = 0
         
-        # Person left - capture AFTER frame
+        # === PERSON LEFT ===
         if not person_flag and person_present:
+            frames_since_person_left += 1
             now = time.monotonic()
+            
             if last_person_time is None:
                 last_person_time = now
             
+            # Wait the specified time after person left
             if now - last_person_time >= wait_seconds:
                 print(f"👋 Person left at frame {frame_count}")
-                start = time.monotonic()
+                print(f"   Waiting for shelf to stabilize...")
                 
-                while True:
-                    after_candidate = shelf_frame.copy()
-                    _write_img(after_path, after_candidate)
-                    
-                    if hb is None or before_hist is None:
-                        break
-                    
-                    ha = _ahash(after_path)
-                    after_hist = _hsv_hist(after_candidate)
-                    
-                    changed = (_hamming(hb, ha) >= min_change_hamming) or \
-                             (_hist_distance(before_hist, after_hist) >= min_hist_diff)
-                    
-                    if changed:
-                        print(f"✅ AFTER frame captured (changed detected)")
-                        break
-                    
-                    if time.monotonic() - start > AFTER_MAX_SEARCH_SECONDS:
-                        print(f"⏱️ AFTER frame captured (timeout)")
-                        break
-                    
+                # Continue reading frames to find a stable AFTER frame
+                search_start = time.monotonic()
+                stable_after_found = False
+                
+                while time.monotonic() - search_start < AFTER_MAX_SEARCH_SECONDS:
                     ret2, frame2 = cap.read()
                     if not ret2:
                         break
-                    shelf_frame = _crop_roi(frame2, shelf_roi)
+                    
+                    frame_count += 1
+                    shelf_frame2 = _crop_roi(frame2, shelf_roi)
+                    
+                    # Check if person returned
+                    person_returned, _ = _detect_person(frame2)
+                    if person_returned:
+                        print(f"   ⚠️  Person returned, continuing to wait...")
+                        last_person_time = time.monotonic()
+                        continue
+                    
+                    # Write candidate after frame
+                    _write_img(after_path, shelf_frame2)
+                    
+                    if hb is None or before_hist is None:
+                        stable_after_found = True
+                        break
+                    
+                    # Check if shelf changed from BEFORE
+                    ha = _ahash(after_path)
+                    after_hist = _hsv_hist(shelf_frame2)
+                    
+                    hamming_dist = _hamming(hb, ha)
+                    hist_dist = _hist_distance(before_hist, after_hist)
+                    
+                    changed = (hamming_dist >= min_change_hamming) or (hist_dist >= min_hist_diff)
+                    
+                    if changed:
+                        print(f"✅ AFTER frame captured (change detected: hamming={hamming_dist}, hist={hist_dist:.3f})")
+                        stable_after_found = True
+                        break
                 
+                if not stable_after_found:
+                    print(f"⏱️  AFTER frame captured (timeout)")
+                
+                # Done processing this person
                 break
     
     cap.release()
     print(f"✅ Video analysis complete ({frame_count} frames)")
     
-    # Select best face sample
+    # === Process collected face samples ===
     person_id, person_name = None, None
     if face_samples:
         print(f"🔍 Analyzing {len(face_samples)} face samples")
