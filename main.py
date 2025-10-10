@@ -25,45 +25,18 @@ def root():
     return {"message": "Books-Cam System is running", "status": "ok"}
 
 def parse_books_param(books_list: Optional[List[str]], books_csv: Optional[str]) -> List[str]:
-    """
-    Accept either repeated -F books=Title or -F books_csv="Title1,Title2,...".
-    Falls back to ALL_BOOKS if nothing valid is provided.
-    ALWAYS use ALL_BOOKS from book_find.py to ensure consistent format.
-    """
-    # For now, always use the complete ALL_BOOKS list from book_find.py
-    # This ensures proper author info is available for matching
-    from app.book_find import ALL_BOOKS as FULL_BOOKS
-    
-    # If user provided custom list, try to match against full titles
+    """Parse books from list or CSV, fallback to ALL_BOOKS"""
     if books_list and isinstance(books_list, list):
         cleaned = [b.strip() for b in books_list if isinstance(b, str) and b.strip()]
         if cleaned:
-            # Try to find full titles from ALL_BOOKS that match user input
-            matched = []
-            for user_book in cleaned:
-                for full_book in FULL_BOOKS:
-                    if user_book.lower() in full_book.lower():
-                        matched.append(full_book)
-                        break
-            if matched:
-                return matched
+            return cleaned
     
     if books_csv and isinstance(books_csv, str):
         parts = [p.strip() for p in books_csv.split(",") if p.strip()]
         if parts:
-            # Try to match against full titles
-            matched = []
-            for user_book in parts:
-                for full_book in FULL_BOOKS:
-                    if user_book.lower() in full_book.lower():
-                        matched.append(full_book)
-                        break
-            if matched:
-                return matched
+            return parts
     
-    # Default: use complete list with authors
-    return FULL_BOOKS
-
+    return ALL_BOOKS
 
 @app.post("/monitor-bookshelf")
 async def monitor_bookshelf(
@@ -178,4 +151,3 @@ async def monitor_bookshelf(
         # Cleanup uploaded video
         if video_path.exists():
             video_path.unlink()
-
