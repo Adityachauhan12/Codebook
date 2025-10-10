@@ -9,6 +9,7 @@ from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 from openai import AzureOpenAI
 import difflib
+import re
 
 load_dotenv()
 
@@ -43,7 +44,43 @@ gpt_client = AzureOpenAI(
     api_version=AZURE_OPENAI_API_VERSION,
 )
 
-ALL_BOOKS = ["Atomic Habits", "Zero to One", "Ikigai", "Hooked", "Scrum", "Quantum Marketing"]
+# Complete book list with authors for better matching
+ALL_BOOKS = [
+    "Scrum — Jeff Sutherland & JJ Sutherland",
+    "The Innovator's Dilemma by Clayton M. Christensen",
+    "Human + Machine by Paul R. Daugherty and H. James Wilson",
+    "How They Started Digital by David Lester",
+    "Physics of the Future by Michio Kaku",
+    "Contagious by Jonah Berger",
+    "Never Split the Difference by Chris Voss",
+    "Antifragile by Nassim Nicholas Taleb",
+    "Hit Refresh by Satya Nadella",
+    "Essentialism by Greg McKeown",
+    "Just Listen by Mark Goulston",
+    "Open Shift by Arnaud Pascoe",
+    "The Singularity Is Nearer — Ray Kurzweil",
+    "Mastering the Data Paradox — Nitin Seth",
+    "The Stoic Mindset — Mark Tuitert",
+    "Lilliput Land — Rama Bijapurkar",
+    "The Coming Wave — Mustafa Suleyman with Michael Bhaskar",
+    "AI, Analytics, and the New Machine Age — Hemant Taneja",
+    "Vital Upgrade — Hema Shah",
+    "Quantum Marketing — Raja Rajamannar",
+    "Generative AI — Tom Taulli",
+    "Quantum Supremacy — Michio Kaku",
+    "The Art of Thinking Clearly — Rolf Dobelli",
+    "Ikigai — Héctor García & Francesc Miralles",
+    "Ogilvy on Advertising — David Ogilvy",
+    "Basic AI — David Shrier",
+    "Supremacy — Parmy Olson",
+    "Our Next Reality — Win Cathcart & Louis Rosenberg",
+    "Naive — Erling Kagge",
+    "Blockchain Revolution — Don Tapscott & Alex Tapscott",
+    "No Filter — Sarah Frier",
+    "Atomic Habits — James Clear",
+    "Hooked — Nir Eyal",
+    "Zero to One — Peter Thiel with Blake Masters"
+]
 
 def extract_text_from_image(image_path: str) -> List[str]:
     """Extract text lines from image using Azure Document Intelligence OCR"""
@@ -63,7 +100,9 @@ def extract_text_from_image(image_path: str) -> List[str]:
         
         print(f"✅ Extracted {len(lines)} text lines")
         if lines:
-            print(f"   Sample: {lines[:3]}")
+            print(f"   Sample: {lines[:5]}")  # Show first 5 lines
+        else:
+            print(f"   ⚠️  No text extracted - image may be too blurry or low quality")
         
         return lines
     except Exception as e:
@@ -71,104 +110,156 @@ def extract_text_from_image(image_path: str) -> List[str]:
         return []
 
 def get_books_present_via_gpt(extracted_lines: List[str], known_books: List[str]) -> List[str]:
-    """Use GPT to identify which known books are present in OCR text"""
+    """
+    Use GPT to identify which known books are present in OCR text.
+    Improved prompt based on reference code.
+    """
     if not extracted_lines:
+        print(f"⚠️  No OCR lines to analyze")
         return []
     
     print(f"🤖 Using GPT to identify books from {len(extracted_lines)} lines")
     
     try:
-        payload = {
-            "ocr_lines": extracted_lines,
-            "known_book_titles": known_books,
-            "instruction": "Identify which book titles from 'known_book_titles' are clearly visible in 'ocr_lines'. Look for exact or close matches. Return only a JSON array of matching titles."
-        }
+        # Enhanced prompt based on your reference code
+        prompt = f"""You are a helpful assistant analyzing OCR text from a bookshelf image.
+
+OCR detected text lines:
+{extracted_lines}
+
+Known book titles in the library:
+{known_books}
+
+Your task:
+1. Match the OCR text against the known book titles
+2. Be flexible with typos and partial matches (e.g., "MASTERING DATA PARADOX" matches "Mastering the Data Paradox")
+3. Look for key words from titles (e.g., "Data Paradox" is enough to match "Mastering the Data Paradox")
+4. Return ONLY the books from the known list that are clearly present in the OCR output
+5. Do NOT repeat book names
+6. Respond with ONLY a clean JSON array of matched book titles
+
+Example: ["Book Title 1", "Book Title 2"]
+"""
+        
+        messages = [
+            {
+                "role": "system", 
+                "content": "You are a book title identifier. Respond only with a JSON array of book titles. Be flexible with OCR typos and partial matches."
+            },
+            {
+                "role": "user", 
+                "content": prompt
+            }
+        ]
         
         response = gpt_client.chat.completions.create(
             model=AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
-            temperature=0.0,
-            max_tokens=300,
-            messages=[
-                {"role": "system", "content": "You are a book title identifier. Respond only with a JSON array of book titles that match between the OCR text and known titles. Be flexible with partial matches but confident they represent the same book."},
-                {"role": "user", "content": json.dumps(payload)}
-            ],
+            temperature=0.2,  # Lower temperature for more consistent results
+            max_tokens=500,
+            messages=messages,
         )
         
         content = response.choices[0].message.content.strip()
-        print(f"   GPT response: {content}")
+        print(f"   GPT raw response: {content}")
         
-        # Remove markdown code blocks if present
+        # Clean up response - remove markdown code blocks
         if content.startswith("```
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
+            # Extract content between code fences
+            match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```
+            if match:
+                content = match.group(1).strip()
         
+        # Parse JSON
         arr = json.loads(content)
         if not isinstance(arr, list):
+            print(f"   ⚠️  GPT response is not a list")
             return []
         
+        # Validate each entry is a string and exists in known_books
         seen = set()
         out: List[str] = []
         for t in arr:
-            if isinstance(t, str) and t in known_books and t not in seen:
-                seen.add(t)
-                out.append(t)
+            if isinstance(t, str):
+                # Try exact match first
+                if t in known_books and t not in seen:
+                    seen.add(t)
+                    out.append(t)
+                # Try case-insensitive match
+                else:
+                    for kb in known_books:
+                        if t.lower() == kb.lower() and kb not in seen:
+                            seen.add(kb)
+                            out.append(kb)
+                            break
         
         print(f"✅ GPT identified {len(out)} books: {out}")
         return out
         
+    except json.JSONDecodeError as e:
+        print(f"❌ GPT JSON Parse Error: {str(e)}")
+        print(f"   Content was: {content}")
+        return []
     except Exception as e:
         print(f"❌ GPT Error: {str(e)}")
         return []
 
 def fuzzy_match_books(extracted_lines: List[str], known_books: List[str]) -> List[str]:
-    """Fallback: case-insensitive substring + difflib similarity matching"""
+    """
+    Fallback: Aggressive fuzzy matching with key word detection.
+    Enhanced to handle partial book spine text.
+    """
     if not extracted_lines:
         return []
     
     print(f"🔍 Using fuzzy matching as fallback")
     
-    # Combine all OCR text and also keep individual lines
+    # Combine all OCR text
     full_text = " ".join(extracted_lines).lower()
-    lines_lower = [line.lower() for line in extracted_lines]
+    print(f"   Full OCR text: {full_text[:200]}...")  # Show first 200 chars
     
     hits: List[str] = []
     
     for kb in known_books:
-        kbl = kb.lower()
+        # Extract main title (before — or "by")
+        main_title = kb.split('—').split(' by ').strip()
+        main_title_lower = main_title.lower()
         
-        # Direct substring match in full text
-        if kbl in full_text:
+        # Strategy 1: Full title match
+        if main_title_lower in full_text:
             hits.append(kb)
+            print(f"   ✓ Full match: {kb}")
             continue
         
-        # Match if any line contains the full book title
-        if any(kbl in line for line in lines_lower):
-            hits.append(kb)
-            continue
+        # Strategy 2: Key word matching (all significant words present)
+        words = [w for w in main_title_lower.split() if len(w) > 3]  # Words longer than 3 chars
+        if len(words) >= 2:
+            matches = sum(1 for w in words if w in full_text)
+            # Require at least 60% of key words to match
+            if matches >= len(words) * 0.6:
+                hits.append(kb)
+                print(f"   ✓ Key words match ({matches}/{len(words)}): {kb}")
+                continue
         
-        # Word-by-word matching (e.g., "Quantum" and "Marketing" both present)
-        words = [w for w in kbl.split() if len(w) > 2]  # Skip short words like "by", "the"
-        if len(words) > 0 and all(word in full_text for word in words):
-            hits.append(kb)
-            continue
-        
-        # Partial title matching (first significant word)
-        significant_words = [w for w in kbl.split() if len(w) > 3]
-        if significant_words:
-            first_word = significant_words[0]
+        # Strategy 3: First significant word + one other word
+        if len(words) >= 2:
+            first_word = words
             if first_word in full_text:
-                # Check if at least 50% of other significant words also present
-                other_words = significant_words[1:]
-                if not other_words or sum(1 for w in other_words if w in full_text) >= len(other_words) / 2:
-                    hits.append(kb)
+                for other_word in words[1:]:
+                    if other_word in full_text:
+                        hits.append(kb)
+                        print(f"   ✓ Partial match ({first_word} + {other_word}): {kb}")
+                        break
+                if kb in hits:
                     continue
         
-        # Fuzzy matching with difflib on each line
-        for line in lines_lower:
-            ratio = difflib.SequenceMatcher(None, kbl, line).ratio()
-            if ratio > 0.7:
+        # Strategy 4: Fuzzy string matching on individual lines
+        for line in extracted_lines:
+            line_lower = line.lower()
+            # Use difflib for similarity
+            ratio = difflib.SequenceMatcher(None, main_title_lower, line_lower).ratio()
+            if ratio > 0.6:  # 60% similarity
                 hits.append(kb)
+                print(f"   ✓ Fuzzy match (ratio={ratio:.2f}): {kb} ≈ {line}")
                 break
     
     # Remove duplicates while preserving order
@@ -181,5 +272,3 @@ def fuzzy_match_books(extracted_lines: List[str], known_books: List[str]) -> Lis
     
     print(f"✅ Fuzzy match found {len(out)} books: {out}")
     return out
-
-
