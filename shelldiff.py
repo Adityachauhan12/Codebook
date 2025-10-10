@@ -18,10 +18,11 @@ load_dotenv()
 
 app = FastAPI()
 
-EARLY_SECONDS = float(os.getenv("EARLY_SECONDS", "5.0"))   # first N seconds
-LATE_SECONDS = float(os.getenv("LATE_SECONDS", "5.0"))     # last N seconds
-SAMPLE_STRIDE = int(os.getenv("SAMPLE_STRIDE", "5"))       # sample every N frames in each window
+EARLY_SECONDS = float(os.getenv("EARLY_SECONDS", "5.0"))
+LATE_SECONDS  = float(os.getenv("LATE_SECONDS", "5.0"))
+SAMPLE_STRIDE = int(os.getenv("SAMPLE_STRIDE", "5"))
 MAX_FRAMES_PER_WINDOW = int(os.getenv("MAX_FRAMES_PER_WINDOW", "60"))
+MAX_FRAME_WIDTH = int(os.getenv("MAX_FRAME_WIDTH", "1280"))  # downscale frames to speed up
 
 def _sample_window_frames(cap: cv2.VideoCapture, start_f: int, end_f: int, stride: int, limit: int) -> List[Any]:
     frames = []
@@ -31,12 +32,10 @@ def _sample_window_frames(cap: cv2.VideoCapture, start_f: int, end_f: int, strid
         ok, frame = cap.read()
         if not ok:
             break
-        # pick only on stride
         if (fnum - start_f) % stride == 0:
-            # Optional resize to speed up
             h, w = frame.shape[:2]
-            if w > 1280:
-                s = 1280.0 / w
+            if w > MAX_FRAME_WIDTH:
+                s = MAX_FRAME_WIDTH / float(w)
                 frame = cv2.resize(frame, (int(w*s), int(h*s)))
             frames.append(frame)
         fnum += 1
@@ -45,9 +44,9 @@ def _sample_window_frames(cap: cv2.VideoCapture, start_f: int, end_f: int, strid
 @app.post("/shelf-diff")
 async def shelf_diff(file: UploadFile = File(...)):
     try:
-        # Write uploaded video to a temp file for OpenCV
         data = await file.read()
-        with tempfile.NamedTemporaryFile(suffix=os.path.splitext(file.filename or '')[1] or ".mp4", delete=True) as tmp:
+        suffix = os.path.splitext(file.filename or "")[1] or ".mp4"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
             tmp.write(data)
             tmp.flush()
             cap = cv2.VideoCapture(tmp.name)
@@ -57,8 +56,7 @@ async def shelf_diff(file: UploadFile = File(...)):
             fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             if total <= 0:
-                # fallback: iterate until end to count frames
-                total = 0
+                # fallback count
                 while True:
                     ok, _ = cap.read()
                     if not ok:
@@ -66,18 +64,17 @@ async def shelf_diff(file: UploadFile = File(...)):
                     total += 1
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-            early_end = min(total - 1, int(EARLY_SECONDS * fps))
+            early_end  = min(total - 1, int(EARLY_SECONDS * fps))
             late_start = max(0, total - int(LATE_SECONDS * fps))
 
             early_frames = _sample_window_frames(cap, 0, early_end, SAMPLE_STRIDE, MAX_FRAMES_PER_WINDOW)
-            late_frames = _sample_window_frames(cap, late_start, total - 1, SAMPLE_STRIDE, MAX_FRAMES_PER_WINDOW)
-
+            late_frames  = _sample_window_frames(cap, late_start, total - 1, SAMPLE_STRIDE, MAX_FRAMES_PER_WINDOW)
             cap.release()
 
         early_titles = aggregate_titles(early_frames)
-        late_titles = aggregate_titles(late_frames)
+        late_titles  = aggregate_titles(late_frames)
 
-        taken = sorted(list(early_titles - late_titles))
+        taken    = sorted(list(early_titles - late_titles))
         returned = sorted(list(late_titles - early_titles))
 
         result: Dict[str, Any] = {
@@ -86,8 +83,8 @@ async def shelf_diff(file: UploadFile = File(...)):
             "books_returned": returned,
             "early_titles": sorted(list(early_titles)),
             "late_titles": sorted(list(late_titles)),
-            "fps_assumed": fps,
         }
         return JSONResponse(result, status_code=200)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        # Return 200 with error info so client still sees partial context
+        return JSONResponse({"books_taken": [], "books_returned": [], "error": str(e)}, status_code=200)
