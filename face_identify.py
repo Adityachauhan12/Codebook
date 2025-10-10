@@ -1,5 +1,3 @@
-# app/face_identify.py
-
 import os
 import requests
 from typing import Optional, Tuple
@@ -24,103 +22,60 @@ TIMEOUT = (10, 30)
 
 def identify_face(image_path: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Identify face using Azure Face API.
-    Simplified version without aggressive preprocessing.
-    Returns: (person_id, person_name) or (None, None) if no match
+    Identify face using Azure Face API (recognition_01 to match your person group).
+    Returns: (person_id, person_name) or (None, None)
     """
-    # Use recognition_01 to match your person group
     detect_url = f"{AZURE_FACE_ENDPOINT}face/v1.0/detect?returnFaceId=true&recognitionModel=recognition_01&detectionModel=detection_01"
-    
     try:
-        # Read image and resize if needed
         img = cv2.imread(image_path)
         if img is None:
             print(f"❌ Cannot read image: {image_path}")
             return None, None
-        
+
         h, w = img.shape[:2]
-        
-        # Ensure face is large enough (min 36x36 for Azure)
         if w < 200 or h < 200:
             scale = max(200 / w, 200 / h)
-            new_w, new_h = int(w * scale), int(h * scale)
-            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-        
-        # Encode as JPEG
-        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
-        _, buffer = cv2.imencode('.jpg', img, encode_param)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
+
+        _, buffer = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         image_bytes = buffer.tobytes()
-        
-        print(f"   Sending face image to Azure (size: {len(image_bytes)} bytes)")
-        
-        # Detect face
+
         resp = requests.post(detect_url, headers=HEADERS_STREAM, data=image_bytes, timeout=TIMEOUT)
         resp.raise_for_status()
-        detect_result = resp.json()
-        
-        if not isinstance(detect_result, list) or len(detect_result) == 0:
-            print(f"❌ No face detected in {image_path}")
+        detected = resp.json()
+        if not isinstance(detected, list) or not detected:
+            print("❌ No face detected")
             return None, None
-        
-        # Select largest face
-        best = max(
-            detect_result,
-            key=lambda d: (d.get("faceRectangle", {}).get("width", 0) * 
-                          d.get("faceRectangle", {}).get("height", 0))
-        )
-        
+
+        best = max(detected, key=lambda d: (d.get("faceRectangle", {}).get("width", 0) * d.get("faceRectangle", {}).get("height", 0)))
         face_id = best.get("faceId")
         if not face_id:
-            print(f"❌ No faceId returned from detection")
+            print("❌ No faceId returned")
             return None, None
-        
-        print(f"✅ Face detected, faceId: {face_id[:8]}...")
-        
-        # Identify face against person group
+
         identify_url = f"{AZURE_FACE_ENDPOINT}face/v1.0/identify"
         payload = {
             "personGroupId": PERSON_GROUP_ID,
             "faceIds": [face_id],
             "maxNumOfCandidatesReturned": 1,
-            "confidenceThreshold": 0.4  # Lowered threshold
+            "confidenceThreshold": 0.4
         }
-        
-        resp_id = requests.post(identify_url, headers=HEADERS_JSON, json=payload, timeout=TIMEOUT)
-        resp_id.raise_for_status()
-        result = resp_id.json()
-        
-        if not isinstance(result, list) or len(result) == 0:
-            print(f"❌ No identification result")
+        r2 = requests.post(identify_url, headers=HEADERS_JSON, json=payload, timeout=TIMEOUT)
+        r2.raise_for_status()
+        result = r2.json()
+        if not result or not result[0].get("candidates"):
+            print("❌ No matching candidates found")
             return None, None
-        
-        candidates = result[0].get("candidates", [])
-        if not candidates:
-            print(f"❌ No matching candidates found")
-            return None, None
-        
-        person_id = candidates[0].get("personId")
-        confidence = candidates[0].get("confidence", 0.0)
-        
-        if not person_id:
-            print(f"❌ No personId in candidate")
-            return None, None
-        
-        print(f"✅ Match found with confidence: {confidence:.2f}")
-        
-        # Get person details
+
+        person_id = result[0]["candidates"][0]["personId"]
         person_url = f"{AZURE_FACE_ENDPOINT}face/v1.0/persongroups/{PERSON_GROUP_ID}/persons/{person_id}"
-        resp_p = requests.get(person_url, headers={"Ocp-Apim-Subscription-Key": AZURE_FACE_KEY}, timeout=TIMEOUT)
-        resp_p.raise_for_status()
-        name = resp_p.json().get("name")
-        
-        print(f"✅ Identified person: {name} (ID: {person_id[:8]}...)")
+        r3 = requests.get(person_url, headers={"Ocp-Apim-Subscription-Key": AZURE_FACE_KEY}, timeout=TIMEOUT)
+        r3.raise_for_status()
+        name = r3.json().get("name")
         return person_id, name
-        
     except requests.exceptions.RequestException as e:
-        print(f"❌ API request error: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"   Response: {e.response.text}")
+        print(f"❌ API error: {e}")
         return None, None
     except Exception as e:
-        print(f"❌ Unexpected error: {str(e)}")
+        print(f"❌ Unexpected error: {e}")
         return None, None
