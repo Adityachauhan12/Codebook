@@ -162,28 +162,51 @@ def fuzzy_match_books(extracted_lines: List[str], known_books: List[str]) -> Lis
         return []
     
     print(f"🔍 Using fuzzy matching as fallback")
-    text = " ".join(l.lower() for l in extracted_lines)
+    
+    # Combine all OCR text and also keep individual lines
+    full_text = " ".join(extracted_lines).lower()
+    lines_lower = [line.lower() for line in extracted_lines]
+    
     hits: List[str] = []
     
     for kb in known_books:
         kbl = kb.lower()
         
-        # Direct substring match
-        if kbl in text:
+        # Direct substring match in full text
+        if kbl in full_text:
             hits.append(kb)
             continue
         
-        # Word-by-word matching (e.g., "Atomic" and "Habits" both present)
-        words = kbl.split()
-        if all(word in text for word in words):
+        # Match if any line contains the full book title
+        if any(kbl in line for line in lines_lower):
             hits.append(kb)
             continue
         
-        # Fuzzy matching with difflib
-        candidates = difflib.get_close_matches(kbl, [w.lower() for w in extracted_lines], n=1, cutoff=0.7)
-        if candidates:
+        # Word-by-word matching (e.g., "Quantum" and "Marketing" both present)
+        words = [w for w in kbl.split() if len(w) > 2]  # Skip short words like "by", "the"
+        if len(words) > 0 and all(word in full_text for word in words):
             hits.append(kb)
+            continue
+        
+        # Partial title matching (first significant word)
+        significant_words = [w for w in kbl.split() if len(w) > 3]
+        if significant_words:
+            first_word = significant_words[0]
+            if first_word in full_text:
+                # Check if at least 50% of other significant words also present
+                other_words = significant_words[1:]
+                if not other_words or sum(1 for w in other_words if w in full_text) >= len(other_words) / 2:
+                    hits.append(kb)
+                    continue
+        
+        # Fuzzy matching with difflib on each line
+        for line in lines_lower:
+            ratio = difflib.SequenceMatcher(None, kbl, line).ratio()
+            if ratio > 0.7:
+                hits.append(kb)
+                break
     
+    # Remove duplicates while preserving order
     seen = set()
     out = []
     for h in hits:
@@ -193,4 +216,9 @@ def fuzzy_match_books(extracted_lines: List[str], known_books: List[str]) -> Lis
     
     print(f"✅ Fuzzy match found {len(out)} books: {out}")
     return out
+
+    
+    print(f"✅ Fuzzy match found {len(out)} books: {out}")
+    return out
+
 
