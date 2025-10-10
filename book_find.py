@@ -1,4 +1,5 @@
 # app/book_find.py
+
 import os
 import json
 import urllib.parse
@@ -19,7 +20,8 @@ AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-pre
 AZURE_OPENAI_CHAT_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME", "gpt-4o")
 
 def _normalize_openai_endpoint(url: str) -> str:
-    if not url: return url
+    if not url:
+        return url
     parsed = urllib.parse.urlsplit(url)
     return f"{parsed.scheme}://{parsed.netloc}/"
 
@@ -44,61 +46,115 @@ gpt_client = AzureOpenAI(
 ALL_BOOKS = ["Atomic Habits", "Zero to One", "Ikigai", "Hooked", "Scrum", "Quantum Marketing"]
 
 def extract_text_from_image(image_path: str) -> List[str]:
-    with open(image_path, "rb") as f:
-        poller = ocr_client.begin_analyze_document("prebuilt-read", document=f)
-    result = poller.result()
-    lines: List[str] = []
-    for page in result.pages:
-        for line in page.lines:
-            txt = (line.content or "").strip()
-            if txt:
-                lines.append(txt)
-    return lines
+    """Extract text lines from image using Azure Document Intelligence OCR"""
+    print(f"📖 Extracting text from: {image_path}")
+    
+    try:
+        with open(image_path, "rb") as f:
+            poller = ocr_client.begin_analyze_document("prebuilt-read", document=f)
+        result = poller.result()
+        
+        lines: List[str] = []
+        for page in result.pages:
+            for line in page.lines:
+                txt = (line.content or "").strip()
+                if txt:
+                    lines.append(txt)
+        
+        print(f"✅ Extracted {len(lines)} text lines")
+        if lines:
+            print(f"   Sample: {lines[:3]}")
+        
+        return lines
+    except Exception as e:
+        print(f"❌ OCR Error: {str(e)}")
+        return []
 
 def get_books_present_via_gpt(extracted_lines: List[str], known_books: List[str]) -> List[str]:
-    payload = {
-        "ocr_lines": extracted_lines,
-        "known_book_titles": known_books,
-        "instruction": "Return only titles from known_book_titles that are clearly present in ocr_lines, as a JSON array of strings."
-    }
-    response = gpt_client.chat.completions.create(
-        model=AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
-        temperature=0.0,
-        max_tokens=200,
-        messages=[
-            {"role": "system", "content": "You are a strict validator. Respond with a JSON array only."},
-            {"role": "user", "content": json.dumps(payload)}
-        ],
-    )
-    content = response.choices[0].message.content.strip()
+    """Use GPT to identify which known books are present in OCR text"""
+    if not extracted_lines:
+        return []
+    
+    print(f"🤖 Using GPT to identify books from {len(extracted_lines)} lines")
+    
     try:
+        payload = {
+            "ocr_lines": extracted_lines,
+            "known_book_titles": known_books,
+            "instruction": "Identify which book titles from 'known_book_titles' are clearly visible in 'ocr_lines'. Look for exact or close matches. Return only a JSON array of matching titles."
+        }
+        
+        response = gpt_client.chat.completions.create(
+            model=AZURE_OPENAI_CHAT_DEPLOYMENT_NAME,
+            temperature=0.0,
+            max_tokens=300,
+            messages=[
+                {"role": "system", "content": "You are a book title identifier. Respond only with a JSON array of book titles that match between the OCR text and known titles. Be flexible with partial matches but confident they represent the same book."},
+                {"role": "user", "content": json.dumps(payload)}
+            ],
+        )
+        
+        content = response.choices[0].message.content.strip()
+        print(f"   GPT response: {content}")
+        
+        # Remove markdown code blocks if present
+        if content.startswith("```
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        
         arr = json.loads(content)
         if not isinstance(arr, list):
             return []
-    except Exception:
+        
+        seen = set()
+        out: List[str] = []
+        for t in arr:
+            if isinstance(t, str) and t in known_books and t not in seen:
+                seen.add(t)
+                out.append(t)
+        
+        print(f"✅ GPT identified {len(out)} books: {out}")
+        return out
+        
+    except Exception as e:
+        print(f"❌ GPT Error: {str(e)}")
         return []
-    seen = set(); out: List[str] = []
-    for t in arr:
-        if isinstance(t, str) and t in known_books and t not in seen:
-            seen.add(t); out.append(t)
-    return out
 
 def fuzzy_match_books(extracted_lines: List[str], known_books: List[str]) -> List[str]:
-    """
-    Local fallback: case-insensitive substring + difflib similarity.
-    """
+    """Fallback: case-insensitive substring + difflib similarity matching"""
+    if not extracted_lines:
+        return []
+    
+    print(f"🔍 Using fuzzy matching as fallback")
     text = " ".join(l.lower() for l in extracted_lines)
     hits: List[str] = []
+    
     for kb in known_books:
         kbl = kb.lower()
+        
+        # Direct substring match
         if kbl in text:
             hits.append(kb)
             continue
-        candidates = difflib.get_close_matches(kbl, [w.lower() for w in extracted_lines], n=1, cutoff=0.75)
+        
+        # Word-by-word matching (e.g., "Atomic" and "Habits" both present)
+        words = kbl.split()
+        if all(word in text for word in words):
+            hits.append(kb)
+            continue
+        
+        # Fuzzy matching with difflib
+        candidates = difflib.get_close_matches(kbl, [w.lower() for w in extracted_lines], n=1, cutoff=0.7)
         if candidates:
             hits.append(kb)
-    seen = set(); out = []
+    
+    seen = set()
+    out = []
     for h in hits:
         if h not in seen:
-            seen.add(h); out.append(h)
+            seen.add(h)
+            out.append(h)
+    
+    print(f"✅ Fuzzy match found {len(out)} books: {out}")
     return out
