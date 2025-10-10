@@ -1,83 +1,24 @@
+curl -X 'POST' \
+  'http://127.0.0.1:8001/identify' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'file=@Ankit_video_iphone.mp4;type=video/mp4'
+Request URL
+http://127.0.0.1:8001/identify
+Server response
+Code	Details
+500
+Undocumented
+Error: Internal Server Error
 
-(library_poc) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Library_POC\app>cd .. 
-
-(library_poc) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Library_POC>uvicorn app.main:app --port 8001
-INFO:     Started server process [13876]
-INFO:     Waiting for application startup.
-📚 Books-Cam System started
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)       
-
-============================================================
-📹 New request: Ankit_video_iphone.mp4
-============================================================
-✅ Video saved: captured_frames\4556d56c-63d3-4911-b996-a81dc21af4ed.mp4
-📐 No shelf ROI specified, using full frame
-📚 Monitoring 34 books
-
---- Video Analysis ---
-📹 Analyzing video: captured_frames\4556d56c-63d3-4911-b996-a81dc21af4ed.mp4
-👤 Person detected at frame 112
-   Using clean frame from buffer (index 5/10)
-   💾 Saved: captured_frames\before.jpg
-📸 BEFORE frame captured (from before person entered)
-👋 Person left at frame 257
-   Waiting for shelf to stabilize...
-   💾 Saved: captured_frames\after.jpg
-✅ AFTER frame captured (change detected: hamming=15, hist=0.113)
-✅ Video analysis complete (258 frames)
-🔍 Analyzing 30 face samples
-   Face crop size: 403x403
-   Face quality - Area: 162409, Sharpness: 96.7, Brightness: 117.9
-   💾 Saved: detected_faces\face_13876.jpg
-💾 Best face saved: detected_faces\face_13876.jpg
-   Sending face image to Azure (size: 49647 bytes)
-❌ No face detected in detected_faces\face_13876.jpg
-❓ Person not recognized
-
---- OCR Processing ---
-📖 Extracting text from: captured_frames\before.jpg
-✅ Extracted 6 text lines
-   Sample: ['PB', '=> HOOKED', '------', 'COLIT ON AFTERTISINS', 'BRAND']       
-📖 Extracting text from: captured_frames\after.jpg
-✅ Extracted 3 text lines
-   Sample: ['PB', 'HOOKED', 'BRAND']
-
---- Book Identification ---
-BEFORE frame:
-🤖 Using GPT to identify books from 6 lines
-   GPT raw response: ["Hooked", "Ogilvy on Advertising"]
-✅ GPT identified 2 books: ['Hooked', 'Ogilvy on Advertising']
-
-AFTER frame:
-🤖 Using GPT to identify books from 3 lines
-   GPT raw response: ["Hooked"]
-✅ GPT identified 1 books: ['Hooked']
-
---- Book Changes ---
-
---- Results ---
-Person: Unknown
-Taken: ['Ogilvy on Advertising']
-Placed: []
-============================================================
-
-INFO:     127.0.0.1:55224 - "POST /monitor-bookshelf HTTP/1.1" 200 OK
-
-
-
-
-
-
-ultralytics==8.3.40
-opencv-python>=4.9.0
-numpy>=1.23.0
-fastapi>=0.110.0
-uvicorn[standard]>=0.23.2
-python-dotenv>=1.0.1
-requests>=2.31.0
-azure-ai-documentintelligence>=1.0.0
-azure-core>=1.30.0
-rapidfuzz>=3.6.0
-pydantic>=2.5.0
-
+Response body
+Download
+{
+  "error": "400 Client Error: Bad Request for url: https://6eface.cognitiveservices.azure.com//face/v1.0/detect?returnFaceId=true&recognitionModel=recognition_04&detectionModel=detection_03&returnFaceAttributes=qualityForRecognition"
+}
+Response headers
+ content-length: 232 
+ content-type: application/json 
+ date: Fri,10 Oct 2025 10:25:43 GMT 
+ server: uvicorn 
+Responses
