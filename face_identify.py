@@ -5,7 +5,6 @@ import requests
 from typing import Optional, Tuple
 from dotenv import load_dotenv
 import cv2
-import numpy as np
 
 load_dotenv()
 
@@ -23,57 +22,36 @@ HEADERS_STREAM = {"Ocp-Apim-Subscription-Key": AZURE_FACE_KEY, "Content-Type": "
 HEADERS_JSON = {"Ocp-Apim-Subscription-Key": AZURE_FACE_KEY, "Content-Type": "application/json"}
 TIMEOUT = (10, 30)
 
-def preprocess_face_image(image_path: str) -> bytes:
-    """
-    Preprocess face image to improve Azure Face API detection:
-    - Resize if too large (max 6MB, 4096x4096)
-    - Ensure minimum size (36x36)
-    - Enhance contrast and brightness
-    - Convert to JPEG with quality 95
-    """
-    img = cv2.imread(image_path)
-    if img is None:
-        raise ValueError(f"Cannot read image: {image_path}")
-    
-    h, w = img.shape[:2]
-    
-    # Ensure minimum dimensions
-    if w < 36 or h < 36:
-        scale = max(36 / w, 36 / h)
-        new_w, new_h = int(w * scale), int(h * scale)
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-        h, w = img.shape[:2]
-    
-    # Resize if too large
-    max_dim = 1920
-    if w > max_dim or h > max_dim:
-        scale = min(max_dim / w, max_dim / h)
-        new_w, new_h = int(w * scale), int(h * scale)
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    
-    # Enhance image quality
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
-    enhanced = cv2.merge([l, a, b])
-    enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
-    
-    # Encode as high-quality JPEG
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
-    _, buffer = cv2.imencode('.jpg', enhanced, encode_param)
-    return buffer.tobytes()
-
 def identify_face(image_path: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Identify face using Azure Face API with improved error handling.
+    Identify face using Azure Face API.
+    Simplified version without aggressive preprocessing.
     Returns: (person_id, person_name) or (None, None) if no match
     """
+    # Use recognition_01 to match your person group
     detect_url = f"{AZURE_FACE_ENDPOINT}face/v1.0/detect?returnFaceId=true&recognitionModel=recognition_01&detectionModel=detection_01"
     
     try:
-        # Preprocess image for better detection
-        image_bytes = preprocess_face_image(image_path)
+        # Read image and resize if needed
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"❌ Cannot read image: {image_path}")
+            return None, None
+        
+        h, w = img.shape[:2]
+        
+        # Ensure face is large enough (min 36x36 for Azure)
+        if w < 200 or h < 200:
+            scale = max(200 / w, 200 / h)
+            new_w, new_h = int(w * scale), int(h * scale)
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+        
+        # Encode as JPEG
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
+        _, buffer = cv2.imencode('.jpg', img, encode_param)
+        image_bytes = buffer.tobytes()
+        
+        print(f"   Sending face image to Azure (size: {len(image_bytes)} bytes)")
         
         # Detect face
         resp = requests.post(detect_url, headers=HEADERS_STREAM, data=image_bytes, timeout=TIMEOUT)
@@ -104,7 +82,7 @@ def identify_face(image_path: str) -> Tuple[Optional[str], Optional[str]]:
             "personGroupId": PERSON_GROUP_ID,
             "faceIds": [face_id],
             "maxNumOfCandidatesReturned": 1,
-            "confidenceThreshold": 0.5
+            "confidenceThreshold": 0.4  # Lowered threshold
         }
         
         resp_id = requests.post(identify_url, headers=HEADERS_JSON, json=payload, timeout=TIMEOUT)
@@ -146,4 +124,3 @@ def identify_face(image_path: str) -> Tuple[Optional[str], Optional[str]]:
     except Exception as e:
         print(f"❌ Unexpected error: {str(e)}")
         return None, None
-
