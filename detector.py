@@ -126,6 +126,18 @@ def run_diff(video_path):
             json.dump(result, f, indent=2)
     print(json.dumps(result, indent=2))
 
+# near the end of detector.py
+def titles_only(diff_result):
+    def pick(d):
+        if d.get("accepted"): return d["accepted"]["title"]
+        if d.get("matches"):  return d["matches"][0]["title"]
+        return (d.get("ocr") or "").strip()
+    return {
+        "taken":  [pick(d) for d in diff_result.get("taken", [])],
+        "placed": [pick(d) for d in diff_result.get("placed", [])],
+    }
+
+
 def run_loop(video_path):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
