@@ -21,3 +21,15 @@ TOPK_MATCHES = int(os.getenv("TOPK_MATCHES", 3))
 OCR_ENABLED = os.getenv("OCR_ENABLED", "1") == "1"
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "examples")
 SAVE_JSON = os.getenv("SAVE_JSON", "1") == "1"
+
+# Person/ROI/capture settings
+PERSON_MODEL = os.getenv("PERSON_MODEL", "yolov8n.pt")        # COCO model for 'person'
+PRESENCE_CONF = float(os.getenv("PRESENCE_CONF", 0.35))       # person conf
+PRESENCE_CONSEC = int(os.getenv("PRESENCE_CONSEC", 3))        # frames to confirm entry
+ABSENCE_CONSEC  = int(os.getenv("ABSENCE_CONSEC", 8))         # frames to confirm exit
+PRE_BUFFER_SEC  = float(os.getenv("PRE_BUFFER_SEC", 2.0))     # seconds of empty frames to buffer
+POST_COOLDOWN_SEC = float(os.getenv("POST_COOLDOWN_SEC", 1.0))# extra stillness time
+ROI = os.getenv("ROI", "")  # "x,y,w,h" for shelf area; empty=full frame
+MOTION_STILL_THRESH = float(os.getenv("MOTION_STILL_THRESH", 2.5e-3))  # normalized sum-diff
+FPS_HINT = int(os.getenv("FPS_HINT", 30))  # used for buffer sizing
+
