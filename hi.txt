@@ -29,6 +29,9 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
   const baselinesRef = useRef({
     ear: null,
     horizontal: null,
+    frameCount: 0,
+    earSum: 0,
+    horizontalSum: 0,
   });
 
   const BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -121,7 +124,7 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
       startVideoRecording();
     } else {
       setStatus('detecting');
-      setFeedback('Please look at the camera and follow instructions...');
+      setFeedback('Initializing face detection...');
       startLivenessDetection();
     }
   };
@@ -151,7 +154,7 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
       mediaRecorderRef.current = recorder;
 
       setStatus('detecting');
-      setFeedback('Recording started. Please blink and turn your head...');
+      setFeedback('Recording started. Initializing face detection...');
       startLivenessDetection();
 
       // Auto-stop after 30s
@@ -185,7 +188,13 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
   // =========== LIVENESS DETECTION ===========
   const startLivenessDetection = () => {
     actionsDoneRef.current = { blink: false, left: false, right: false };
-    baselinesRef.current = { ear: null, horizontal: null };
+    baselinesRef.current = {
+      ear: null,
+      horizontal: null,
+      frameCount: 0,
+      earSum: 0,
+      horizontalSum: 0,
+    };
     
     let lastVideoTime = -1;
 
@@ -223,37 +232,71 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
 
   const processLivenessActions = (landmarks) => {
     const actions = actionsDoneRef.current;
+    
+    // Check if all actions completed
     if (actions.blink && actions.left && actions.right) {
       onLivenessSuccess();
       return;
     }
 
-    // Calculate EAR for blink
-    const ear = calculateEAR(landmarks);
-    if (baselinesRef.current.ear === null) {
-      baselinesRef.current.ear = ear;
-    }
-    if (!actions.blink && ear < baselinesRef.current.ear * 0.7) {
-      actions.blink = true;
-      setFeedback('✓ Blink detected! Now turn your head LEFT...');
+    // ========== STABILIZATION PHASE ==========
+    // Collect baseline over first 30 frames (~1 second)
+    if (!baselinesRef.current.frameCount) {
+      baselinesRef.current.frameCount = 0;
+      baselinesRef.current.earSum = 0;
+      baselinesRef.current.horizontalSum = 0;
     }
 
-    // Calculate horizontal position for head turns (REDUCED SENSITIVITY)
-    const horizontal = landmarks[33].x - landmarks[263].x;
-    if (baselinesRef.current.horizontal === null) {
-      baselinesRef.current.horizontal = horizontal;
+    if (baselinesRef.current.frameCount < 30) {
+      const ear = calculateEAR(landmarks);
+      const horizontal = landmarks[33].x - landmarks[263].x;
+      
+      baselinesRef.current.earSum += ear;
+      baselinesRef.current.horizontalSum += horizontal;
+      baselinesRef.current.frameCount++;
+      
+      if (baselinesRef.current.frameCount === 30) {
+        // Set stable baseline
+        baselinesRef.current.ear = baselinesRef.current.earSum / 30;
+        baselinesRef.current.horizontal = baselinesRef.current.horizontalSum / 30;
+        setFeedback('✓ Ready! Please BLINK your eyes...');
+      } else {
+        setFeedback(`Stabilizing camera... ${baselinesRef.current.frameCount}/30`);
+      }
+      return;
     }
-    
-    // LEFT TURN - Need 30% change (was 15%)
-    if (!actions.left && horizontal > baselinesRef.current.horizontal * 1.30) {
-      actions.left = true;
-      setFeedback('✓ Left turn detected! Now turn your head RIGHT...');
+
+    // ========== STEP 1: BLINK DETECTION ==========
+    if (!actions.blink) {
+      const ear = calculateEAR(landmarks);
+      if (ear < baselinesRef.current.ear * 0.65) {
+        actions.blink = true;
+        setFeedback('✓ Blink detected! Now turn your head LEFT...');
+      }
+      return; // Don't check other actions until blink is done
     }
-    
-    // RIGHT TURN - Need 30% change (was 15%)
-    if (!actions.right && horizontal < baselinesRef.current.horizontal * 0.70) {
-      actions.right = true;
-      setFeedback('✓ Right turn detected! Processing...');
+
+    // ========== STEP 2: LEFT TURN DETECTION ==========
+    if (actions.blink && !actions.left) {
+      const horizontal = landmarks[33].x - landmarks[263].x;
+      
+      // Must turn significantly left
+      if (horizontal > baselinesRef.current.horizontal * 1.35) {
+        actions.left = true;
+        setFeedback('✓ Left turn detected! Now turn your head RIGHT...');
+      }
+      return; // Don't check right turn until left is done
+    }
+
+    // ========== STEP 3: RIGHT TURN DETECTION ==========
+    if (actions.blink && actions.left && !actions.right) {
+      const horizontal = landmarks[33].x - landmarks[263].x;
+      
+      // Must turn significantly right
+      if (horizontal < baselinesRef.current.horizontal * 0.65) {
+        actions.right = true;
+        setFeedback('✓ Right turn detected! Processing...');
+      }
     }
   };
 
