@@ -1,54 +1,529 @@
-curl -X 'POST' \
-  'http://127.0.0.1:8001/shelf-diff' \
-  -H 'accept: application/json' \
-  -H 'Content-Type: multipart/form-data' \
-  -F 'file=@Ankit_video_16promax.mp4;type=video/mp4'
-Request URL
-http://127.0.0.1:8001/shelf-diff
-Server response
-Code	Details
-500
-Undocumented
-Error: Internal Server Error
+// src/components/Unified_Check.jsx
+import React, { useState, useRef, useEffect } from 'react';
+import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
-Response body
-Download
-{
-  "error": "(InvalidRequest) Invalid request.\nCode: InvalidRequest\nMessage: Invalid request.\nInner error: {\n    \"code\": \"InvalidContentDimensions\",\n    \"message\": \"The input image dimensions are out of range. Refer to documentation for supported image dimensions.\"\n}"
-}
-Response headers
- content-length: 280 
- content-type: application/json 
- date: Fri,10 Oct 2025 10:41:02 GMT 
- server: uvicorn     gave 500 error  
-(venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\regrets>uvicorn sheldiff:app --port 8001
-WARNING ⚠️ Ultralytics settings reset to default values. This may be due to a possible problem wiith your settings or a recent ultralytics package update.
-View Ultralytics Settings with 'yolo settings' or at 'C:\Users\aditya.chauhan2\AppData\Roaming\Ultralytics\settings.json'
-Update Settings with 'yolo settings key=value', i.e. 'yolo settings runs_dir=path/to/dir'. For help see https://docs.ultralytics.com/quickstart/#ultralytics-settings.
-INFO:     Started server process [30260]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
-INFO:     127.0.0.1:62938 - "GET / HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:62938 - "GET /docs HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62938 - "GET /openapi.json HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59905 - "POST /shelf-diff HTTP/1.1" 500 Internal Server Error
+const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
+  const [feedback, setFeedback] = useState('Please wait, loading AI model...');
+  const [status, setStatus] = useState('loading'); 
+  // States: loading, choice, camera-starting, detecting, uploading, done
+  
+  const [groomingResult, setGroomingResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [mode, setMode] = useState(null); // 'photo' | 'video'
+  const [recTimer, setRecTimer] = useState(0);
 
+  const recIntervalRef = useRef(null);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const landmarkerRef = useRef(null);
+  const detectionLoopRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
 
+  const actionsDoneRef = useRef({
+    blink: false,
+    left: false,
+    right: false,
+  });
 
+  const baselinesRef = useRef({
+    ear: null,
+    horizontal: null,
+  });
 
-# YOLO weights (paths are relative to project root)
-YOLO_PERSON_WEIGHTS=weights/yolov8n.pt
-YOLO_BOOK_WEIGHTS=weights/model.pt
+  const BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-# Optional: restrict detections to these class names from the custom model
-# Leave empty to disable filtering
-BOOK_CLASS_NAMES=book,book_spine
+  // =========== INITIALIZATION ===========
+  useEffect(() => {
+    (async () => {
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'
+        );
+        const lm = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            delegate: 'GPU',
+          },
+          outputFaceBlendshapes: true,
+          runningMode: 'VIDEO',
+          numFaces: 1,
+        });
+        landmarkerRef.current = lm;
+        
+        setStatus('choice');
+        setFeedback('Choose how you want to proceed:');
+      } catch (err) {
+        console.error('MediaPipe init error:', err);
+        setError('Failed to load AI model. Please refresh.');
+      }
+    })();
 
-# Optional tuning (can keep defaults)
-BOOK_CONF_THRESHOLD=0.2
-BOOK_IOU_THRESHOLD=0.6
+    return () => {
+      stopCamera();
+      cancelDetectionLoop();
+    };
+  }, []);
 
-# Debug crops to see what OCR receives
-DEBUG_SAVE=1
-DEBUG_DIR=captures/debug
+  // =========== CAMERA CONTROL ===========
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      return true;
+    } catch (err) {
+      console.error('Camera error:', err);
+      setError('Could not access camera. Please grant permission.');
+      return false;
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  // =========== USER CHOICE ===========
+  const handleModeChoice = async (selectedMode) => {
+    setMode(selectedMode);
+    setStatus('camera-starting');
+    setFeedback('Starting camera...');
+
+    const cameraOk = await startCamera();
+    if (!cameraOk) return;
+
+    // Wait for video to be ready
+    await new Promise((resolve) => {
+      if (videoRef.current && videoRef.current.readyState >= 2) {
+        resolve();
+      } else {
+        videoRef.current.onloadeddata = resolve;
+      }
+    });
+
+    if (selectedMode === 'video') {
+      startVideoRecording();
+    } else {
+      setStatus('detecting');
+      setFeedback('Please look at the camera and follow instructions...');
+      startLivenessDetection();
+    }
+  };
+
+  // =========== VIDEO RECORDING ===========
+  const startVideoRecording = () => {
+    if (!videoRef.current || !videoRef.current.srcObject) {
+      setError('Camera not ready');
+      return;
+    }
+
+    recordedChunksRef.current = [];
+    const stream = videoRef.current.srcObject;
+    const options = { mimeType: 'video/webm;codecs=vp9' };
+    
+    try {
+      const recorder = new MediaRecorder(stream, options);
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+      recorder.onstop = () => {
+        uploadVideoGrooming();
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+
+      setStatus('detecting');
+      setFeedback('Recording started. Please blink and turn your head...');
+      startLivenessDetection();
+
+      // Auto-stop after 30s
+      setTimeout(() => {
+        if (mediaRecorderRef.current?.state === 'recording') {
+          stopVideoRecording();
+        }
+      }, 30000);
+
+      // Timer
+      setRecTimer(0);
+      recIntervalRef.current = setInterval(() => {
+        setRecTimer((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('MediaRecorder error:', err);
+      setError('Could not start recording. Browser may not support this feature.');
+    }
+  };
+
+  const stopVideoRecording = () => {
+    if (recIntervalRef.current) {
+      clearInterval(recIntervalRef.current);
+      recIntervalRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
+  // =========== LIVENESS DETECTION ===========
+  const startLivenessDetection = () => {
+    actionsDoneRef.current = { blink: false, left: false, right: false };
+    baselinesRef.current = { ear: null, horizontal: null };
+    
+    let lastVideoTime = -1;
+
+    const detect = () => {
+      const video = videoRef.current;
+      if (!video || !landmarkerRef.current || status === 'done') return;
+
+      const now = performance.now();
+      if (video.currentTime === lastVideoTime) {
+        detectionLoopRef.current = requestAnimationFrame(detect);
+        return;
+      }
+      lastVideoTime = video.currentTime;
+
+      const results = landmarkerRef.current.detectForVideo(video, now);
+      if (!results.faceLandmarks || results.faceLandmarks.length === 0) {
+        detectionLoopRef.current = requestAnimationFrame(detect);
+        return;
+      }
+
+      const lm = results.faceLandmarks[0];
+      processLivenessActions(lm);
+      detectionLoopRef.current = requestAnimationFrame(detect);
+    };
+
+    detectionLoopRef.current = requestAnimationFrame(detect);
+  };
+
+  const cancelDetectionLoop = () => {
+    if (detectionLoopRef.current) {
+      cancelAnimationFrame(detectionLoopRef.current);
+      detectionLoopRef.current = null;
+    }
+  };
+
+  const processLivenessActions = (landmarks) => {
+    const actions = actionsDoneRef.current;
+    if (actions.blink && actions.left && actions.right) {
+      onLivenessSuccess();
+      return;
+    }
+
+    // Calculate EAR for blink
+    const ear = calculateEAR(landmarks);
+    if (baselinesRef.current.ear === null) {
+      baselinesRef.current.ear = ear;
+    }
+    if (!actions.blink && ear < baselinesRef.current.ear * 0.7) {
+      actions.blink = true;
+      setFeedback('✓ Blink detected! Now turn your head LEFT...');
+    }
+
+    // Calculate horizontal position for head turns (REDUCED SENSITIVITY)
+    const horizontal = landmarks[33].x - landmarks[263].x;
+    if (baselinesRef.current.horizontal === null) {
+      baselinesRef.current.horizontal = horizontal;
+    }
+    
+    // LEFT TURN - Need 30% change (was 15%)
+    if (!actions.left && horizontal > baselinesRef.current.horizontal * 1.30) {
+      actions.left = true;
+      setFeedback('✓ Left turn detected! Now turn your head RIGHT...');
+    }
+    
+    // RIGHT TURN - Need 30% change (was 15%)
+    if (!actions.right && horizontal < baselinesRef.current.horizontal * 0.70) {
+      actions.right = true;
+      setFeedback('✓ Right turn detected! Processing...');
+    }
+  };
+
+  const calculateEAR = (lm) => {
+    const leftEye = [
+      distance(lm[159], lm[145]),
+      distance(lm[158], lm[153]),
+      distance(lm[33], lm[133]),
+    ];
+    const rightEye = [
+      distance(lm[386], lm[374]),
+      distance(lm[385], lm[380]),
+      distance(lm[263], lm[362]),
+    ];
+    const avgLeft = (leftEye[0] + leftEye[1]) / (2 * leftEye[2]);
+    const avgRight = (rightEye[0] + rightEye[1]) / (2 * rightEye[2]);
+    return (avgLeft + avgRight) / 2;
+  };
+
+  const distance = (p1, p2) =>
+    Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
+
+  // =========== LIVENESS SUCCESS ===========
+  const onLivenessSuccess = () => {
+    cancelDetectionLoop();
+
+    if (mode === 'video') {
+      setFeedback('Liveness passed! Stopping recording...');
+      stopVideoRecording();
+    } else {
+      setFeedback('Liveness passed! Capturing photo...');
+      autoCapturePhoto();
+    }
+  };
+
+  // =========== AUTO PHOTO CAPTURE ===========
+  const autoCapturePhoto = () => {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(videoRef.current, 0, 0);
+      
+      const imageB64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+      
+      setStatus('uploading');
+      setFeedback('Uploading photo for grooming check...');
+      stopCamera();
+      
+      uploadPhotoGrooming(imageB64);
+    } catch (err) {
+      console.error('Photo capture error:', err);
+      setError('Could not capture photo.');
+    }
+  };
+
+  // =========== UPLOAD HANDLERS ===========
+  const uploadPhotoGrooming = (imageBase64) => {
+    fetch(`${BASE_URL}/check-grooming`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imageBase64: `data:image/jpeg;base64,${imageBase64}`,
+        crewName,
+        igaCode,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        setGroomingResult(data.result);
+        setStatus('done');
+        setFeedback('Photo grooming check complete!');
+        if (onComplete) onComplete(data.result);
+      })
+      .catch((err) => {
+        console.error('Photo upload error:', err);
+        setError('Failed to check grooming from photo.');
+      });
+  };
+
+  const uploadVideoGrooming = () => {
+    if (recordedChunksRef.current.length === 0) {
+      setError('No video recorded.');
+      return;
+    }
+
+    const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+    const formData = new FormData();
+    formData.append('video', blob, 'grooming.webm');
+    formData.append('name', crewName);
+    formData.append('iga_code', igaCode);
+
+    setStatus('uploading');
+    setFeedback('Uploading video for grooming check...');
+    stopCamera();
+
+    fetch(`${BASE_URL}/check-grooming-video`, {
+      method: 'POST',
+      body: formData,
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        setGroomingResult(data.result);
+        setStatus('done');
+        setFeedback('Video grooming check complete!');
+        if (onComplete) onComplete(data.result);
+      })
+      .catch((err) => {
+        console.error('Video upload error:', err);
+        setError('Failed to check grooming from video.');
+      });
+  };
+
+  // =========== RENDER ===========
+  return (
+    <div style={{ padding: '20px', maxWidth: '800px', margin: 'auto' }}>
+      <h2>Grooming Check with Liveness Detection</h2>
+
+      {error && (
+        <div style={{ 
+          background: '#fee', 
+          color: '#c00', 
+          padding: '12px', 
+          borderRadius: '8px', 
+          marginBottom: '16px',
+          border: '1px solid #fcc'
+        }}>
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
+      <p style={{ 
+        fontSize: '16px', 
+        marginBottom: '16px', 
+        color: '#555',
+        fontWeight: '500'
+      }}>
+        {feedback}
+      </p>
+
+      {/* INITIAL CHOICE BUTTONS */}
+      {status === 'choice' && (
+        <div style={{ display: 'flex', gap: '16px', marginBottom: '20px' }}>
+          <button
+            onClick={() => handleModeChoice('photo')}
+            style={{
+              flex: 1,
+              padding: '16px',
+              fontSize: '18px',
+              background: '#32b88d',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontWeight: '600',
+              transition: 'all 0.2s',
+            }}
+            onMouseOver={(e) => e.target.style.background = '#2a9d7a'}
+            onMouseOut={(e) => e.target.style.background = '#32b88d'}
+          >
+            📷 Photo Check
+          </button>
+          <button
+            onClick={() => handleModeChoice('video')}
+            style={{
+              flex: 1,
+              padding: '16px',
+              fontSize: '18px',
+              background: '#3498db',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontWeight: '600',
+              transition: 'all 0.2s',
+            }}
+            onMouseOver={(e) => e.target.style.background = '#2980b9'}
+            onMouseOut={(e) => e.target.style.background = '#3498db'}
+          >
+            🎥 Video Check
+          </button>
+        </div>
+      )}
+
+      {/* VIDEO ELEMENT */}
+      {(status === 'camera-starting' || status === 'detecting') && (
+        <div style={{ position: 'relative', marginBottom: '16px' }}>
+          <video
+            ref={videoRef}
+            style={{
+              width: '100%',
+              maxWidth: '640px',
+              borderRadius: '12px',
+              background: '#000',
+              display: 'block',
+              margin: '0 auto',
+            }}
+            playsInline
+            muted
+          />
+          {mode === 'video' && recTimer > 0 && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '10px',
+                right: '10px',
+                background: 'rgba(255,0,0,0.8)',
+                color: 'white',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                fontSize: '16px',
+                fontWeight: 'bold',
+              }}
+            >
+              🔴 REC {recTimer}s
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* UPLOADING INDICATOR */}
+      {status === 'uploading' && (
+        <div style={{ textAlign: 'center', padding: '20px' }}>
+          <div
+            style={{
+              border: '4px solid #f3f3f3',
+              borderTop: '4px solid #32b88d',
+              borderRadius: '50%',
+              width: '50px',
+              height: '50px',
+              animation: 'spin 1s linear infinite',
+              margin: '0 auto 16px',
+            }}
+          />
+          <style>{`
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+          `}</style>
+          <p>Processing your {mode}...</p>
+        </div>
+      )}
+
+      {/* RESULTS */}
+      {status === 'done' && groomingResult && (
+        <div style={{ 
+          background: '#f9f9f9', 
+          padding: '16px', 
+          borderRadius: '8px',
+          border: '1px solid #e0e0e0'
+        }}>
+          <h3 style={{ marginTop: 0 }}>Grooming Report</h3>
+          <pre style={{ 
+            whiteSpace: 'pre-wrap', 
+            fontSize: '14px',
+            background: 'white',
+            padding: '12px',
+            borderRadius: '6px',
+            overflow: 'auto'
+          }}>
+            {JSON.stringify(groomingResult, null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default UnifiedCheck;
