@@ -28,10 +28,10 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
 
   const baselinesRef = useRef({
     ear: null,
-    horizontal: null,
+    noseX: null,
     frameCount: 0,
     earSum: 0,
-    horizontalSum: 0,
+    noseXSum: 0,
   });
 
   const BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -185,15 +185,15 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
     }
   };
 
-  // =========== LIVENESS DETECTION ===========
+  // =========== LIVENESS DETECTION (ORIGINAL WORKING VERSION) ===========
   const startLivenessDetection = () => {
     actionsDoneRef.current = { blink: false, left: false, right: false };
     baselinesRef.current = {
       ear: null,
-      horizontal: null,
+      noseX: null,
       frameCount: 0,
       earSum: 0,
-      horizontalSum: 0,
+      noseXSum: 0,
     };
     
     let lastVideoTime = -1;
@@ -215,8 +215,13 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
         return;
       }
 
-      const lm = results.faceLandmarks[0];
-      processLivenessActions(lm);
+      const landmarks = results.faceLandmarks[0];
+      if (!landmarks || landmarks.length < 470) {
+        detectionLoopRef.current = requestAnimationFrame(detect);
+        return;
+      }
+
+      processLivenessActions(landmarks);
       detectionLoopRef.current = requestAnimationFrame(detect);
     };
 
@@ -239,26 +244,32 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
       return;
     }
 
-    // ========== STABILIZATION PHASE ==========
-    // Collect baseline over first 30 frames (~1 second)
-    if (!baselinesRef.current.frameCount) {
-      baselinesRef.current.frameCount = 0;
-      baselinesRef.current.earSum = 0;
-      baselinesRef.current.horizontalSum = 0;
-    }
+    // ========== USE ORIGINAL LANDMARK INDICES ===========
+    const LEYE = [33, 160, 158, 133, 153, 144];
+    const REYE = [362, 385, 387, 263, 373, 380];
+    const NOSE = 1; // Nose tip landmark
 
+    const dist = (p1, p2) => 
+      Math.hypot(p1.x - p2.x, p1.y - p2.y, (p1.z ?? 0) - (p2.z ?? 0));
+
+    const getEAR = (idx) => {
+      const p1 = landmarks[idx[0]], p2 = landmarks[idx[1]], p3 = landmarks[idx[2]];
+      const p4 = landmarks[idx[3]], p5 = landmarks[idx[4]], p6 = landmarks[idx[5]];
+      return (dist(p2, p6) + dist(p3, p5)) / (2 * dist(p1, p4));
+    };
+
+    const ear = (getEAR(LEYE) + getEAR(REYE)) / 2;
+    const noseX = landmarks[NOSE].x;
+
+    // ========== STABILIZATION PHASE ==========
     if (baselinesRef.current.frameCount < 30) {
-      const ear = calculateEAR(landmarks);
-      const horizontal = landmarks[33].x - landmarks[263].x;
-      
       baselinesRef.current.earSum += ear;
-      baselinesRef.current.horizontalSum += horizontal;
+      baselinesRef.current.noseXSum += noseX;
       baselinesRef.current.frameCount++;
       
       if (baselinesRef.current.frameCount === 30) {
-        // Set stable baseline
         baselinesRef.current.ear = baselinesRef.current.earSum / 30;
-        baselinesRef.current.horizontal = baselinesRef.current.horizontalSum / 30;
+        baselinesRef.current.noseX = baselinesRef.current.noseXSum / 30;
         setFeedback('✓ Ready! Please BLINK your eyes...');
       } else {
         setFeedback(`Stabilizing camera... ${baselinesRef.current.frameCount}/30`);
@@ -266,58 +277,34 @@ const UnifiedCheck = ({ crewName, igaCode, onComplete }) => {
       return;
     }
 
-    // ========== STEP 1: BLINK DETECTION ==========
-    if (!actions.blink) {
-      const ear = calculateEAR(landmarks);
-      if (ear < baselinesRef.current.ear * 0.65) {
-        actions.blink = true;
-        setFeedback('✓ Blink detected! Now turn your head LEFT...');
-      }
-      return; // Don't check other actions until blink is done
+    // ========== BLINK DETECTION ==========
+    if (!actions.blink && ear < baselinesRef.current.ear * 0.70) {
+      actions.blink = true;
+      setFeedback('✓ Blink detected! Now turn your head LEFT...');
     }
 
-    // ========== STEP 2: LEFT TURN DETECTION ==========
-    if (actions.blink && !actions.left) {
-      const horizontal = landmarks[33].x - landmarks[263].x;
-      
-      // Must turn significantly left
-      if (horizontal > baselinesRef.current.horizontal * 1.35) {
-        actions.left = true;
-        setFeedback('✓ Left turn detected! Now turn your head RIGHT...');
-      }
-      return; // Don't check right turn until left is done
+    // ========== HEAD TURN DETECTION (ORIGINAL METHOD) ==========
+    const deviation = noseX - baselinesRef.current.noseX;
+    
+    if (!actions.left && deviation < -0.04) { // Slightly more than original 0.03
+      actions.left = true;
+      setFeedback('✓ Left turn detected! Now turn your head RIGHT...');
+    }
+    
+    if (!actions.right && deviation > 0.04) { // Slightly more than original 0.03
+      actions.right = true;
+      setFeedback('✓ Right turn detected! Processing...');
     }
 
-    // ========== STEP 3: RIGHT TURN DETECTION ==========
-    if (actions.blink && actions.left && !actions.right) {
-      const horizontal = landmarks[33].x - landmarks[263].x;
-      
-      // Must turn significantly right
-      if (horizontal < baselinesRef.current.horizontal * 0.65) {
-        actions.right = true;
-        setFeedback('✓ Right turn detected! Processing...');
-      }
+    // Update feedback with progress
+    if (!actions.blink || !actions.left || !actions.right) {
+      const status = 
+        `${actions.blink ? '✓ Blink' : 'Blink'} | ` +
+        `${actions.left ? '✓ Left' : 'Left'} | ` +
+        `${actions.right ? '✓ Right' : 'Right'}`;
+      setFeedback(status);
     }
   };
-
-  const calculateEAR = (lm) => {
-    const leftEye = [
-      distance(lm[159], lm[145]),
-      distance(lm[158], lm[153]),
-      distance(lm[33], lm[133]),
-    ];
-    const rightEye = [
-      distance(lm[386], lm[374]),
-      distance(lm[385], lm[380]),
-      distance(lm[263], lm[362]),
-    ];
-    const avgLeft = (leftEye[0] + leftEye[1]) / (2 * leftEye[2]);
-    const avgRight = (rightEye[0] + rightEye[1]) / (2 * rightEye[2]);
-    return (avgLeft + avgRight) / 2;
-  };
-
-  const distance = (p1, p2) =>
-    Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
 
   // =========== LIVENESS SUCCESS ===========
   const onLivenessSuccess = () => {
