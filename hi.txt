@@ -1,11 +1,8 @@
-
-
-// UnifiedCheck.tsx
+/ UnifiedCheck.tsx
 import React, { useState, useEffect, useCallback } from 'react';
+import { FaceLandmarker, FilesetResolver, NormalizedLandmark } from '@mediapipe/tasks-vision';
 import { UnifiedCheckProps } from '../types';
 import { apiConfig } from '../utils/groomingHelpers';
-import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
-
 
 interface UnifiedCheckPropsExtended extends UnifiedCheckProps {
   onUploadVideo?: () => void;
@@ -34,157 +31,6 @@ type Status =
   | 'uploading'
   | 'done';
 
-// ---- BEGIN LIVENESS DETECTION BLOCK ----
-type Callbacks = {
-  onBlink?: () => void;
-  onLeft?: () => void;
-  onRight?: () => void;
-  onFeedback?: (msg: string) => void;
-  onError?: (msg: string) => void;
-};
-
-type LivenessConfig = {
-  earThresh: number;
-  earMinFrames: number;
-  yawLeftThresh: number;
-  yawRightThresh: number;
-  yawMinFrames: number;
-  maxFaceTranslatePx: number;
-  minFaceScore: number;
-};
-
-const DEFAULTS: LivenessConfig = {
-  earThresh: 0.21,
-  earMinFrames: 3,
-  yawLeftThresh: 12,
-  yawRightThresh: -12,
-  yawMinFrames: 6,
-  maxFaceTranslatePx: 24,
-  minFaceScore: 0.5,
-};
-
-const L = { cornerOut: 33, cornerIn: 133, upper: 159, lower: 145 };
-const R = { cornerOut: 362, cornerIn: 263, upper: 386, lower: 374 };
-
-function dist(a: any, b: any) {
-  if (!a || !b) return 0;
-  const dx = a.x - b.x, dy = a.y - b.y;
-  return Math.hypot(dx, dy);
-}
-
-function eyeEAR(landmarks: any[], eye: { cornerOut: number; cornerIn: number; upper: number; lower: number }) {
-  const p1 = landmarks[eye.cornerOut];
-  const p2 = landmarks[eye.cornerIn];
-  const pu = landmarks[eye.upper];
-  const pl = landmarks[eye.lower];
-  const vert = dist(pu, pl);
-  const horiz = dist(p1, p2);
-  return vert / Math.max(horiz, 1e-6);
-}
-
-function approxYawDegrees(landmarks: any[]) {
-  const leftCheek = landmarks[234];
-  const rightCheek = landmarks[454];
-  const nose = landmarks[1];
-  if (!leftCheek || !rightCheek || !nose) return 0;
-  const faceW = Math.max(dist(leftCheek, rightCheek), 1e-6);
-  const rel = ((nose.x - (leftCheek.x + rightCheek.x) / 2) / faceW);
-  return rel * 50;
-}
-
-class LivenessEngine {
-  private lm?: FaceLandmarker;
-  private cfg: LivenessConfig;
-  private cb: Callbacks;
-  private blinkCnt = 0;
-  private yawCntLeft = 0;
-  private yawCntRight = 0;
-  private lastBox?: { x: number; y: number; w: number; h: number };
-  private blinkDone = false;
-  private leftDone = false;
-  private rightDone = false;
-
-  constructor(cfg?: Partial<LivenessConfig>, cb?: Callbacks) {
-    this.cfg = { ...DEFAULTS, ...(cfg || {}) };
-    this.cb = cb || {};
-  }
-
-  async init() {
-    const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm");
-    this.lm = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-assets/face_landmarker.task",
-      },
-      runningMode: "VIDEO",
-      numFaces: 1,
-    });
-  }
-
-  private stableFace(prev: any, curr: any) {
-    if (!prev) return true;
-    const cx0 = prev.x + prev.w / 2, cy0 = prev.y + prev.h / 2;
-    const cx1 = curr.x + curr.w / 2, cy1 = curr.y + curr.h / 2;
-    return Math.hypot(cx1 - cx0, cy1 - cy0) <= this.cfg.maxFaceTranslatePx;
-  }
-
-  process(video: HTMLVideoElement, tsMs: number) {
-    if (!this.lm) return;
-    const res = this.lm.detectForVideo(video, tsMs);
-    if (!res.faceLandmarks?.length) return;
-    // Compute bounding box from landmarks
-    const landmarks = res.faceLandmarks[0];
-    const xs = landmarks.map((pt: any) => pt.x);
-    const ys = landmarks.map((pt: any) => pt.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-    const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const box = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
-
-    // Use face presence score if available, otherwise default to 1
-    const score = res.faceBlendshapes?.[0]?.categories?.[0]?.score ?? 1;
-    if (score < this.cfg.minFaceScore) return;
-
-    if (!this.stableFace(this.lastBox, box)) {
-      this.blinkCnt = 0; this.yawCntLeft = 0; this.yawCntRight = 0;
-    }
-    this.lastBox = box;
-    const ear = (eyeEAR(landmarks, L) + eyeEAR(landmarks, R)) / 2;
-    if (ear < this.cfg.earThresh) {
-      this.blinkCnt++;
-    } else {
-      if (this.blinkCnt >= this.cfg.earMinFrames && !this.blinkDone) {
-        this.blinkDone = true;
-        this.cb.onBlink?.();
-      }
-      this.blinkCnt = 0;
-    }
-    const yaw = approxYawDegrees(landmarks);
-    if (yaw >= this.cfg.yawLeftThresh) {
-      this.yawCntLeft++; this.yawCntRight = 0;
-    } else if (yaw <= this.cfg.yawRightThresh) {
-      this.yawCntRight++; this.yawCntLeft = 0;
-    } else {
-      if (this.yawCntLeft >= this.cfg.yawMinFrames && !this.leftDone) {
-        this.leftDone = true;
-        this.cb.onLeft?.();
-      }
-      if (this.yawCntRight >= this.cfg.yawMinFrames && !this.rightDone) {
-        this.rightDone = true;
-        this.cb.onRight?.();
-      }
-      this.yawCntLeft = 0; this.yawCntRight = 0;
-    }
-    this.cb.onFeedback?.(`${this.blinkDone ? 'Blink ✓' : 'Blink'}  ${this.leftDone ? 'Left ✓' : 'Left'}  ${this.rightDone ? 'Right ✓' : 'Right'}`);
-  }
-
-  reset() {
-    this.blinkDone = this.leftDone = this.rightDone = false;
-    this.blinkCnt = this.yawCntLeft = this.yawCntRight = 0;
-    this.lastBox = undefined;
-  }
-}
-// ---- END LIVENESS DETECTION BLOCK ----
-
-
 const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   crewName,
   igaCode,
@@ -205,11 +51,15 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   const streamRef = React.useRef<MediaStream | null>(null);
   const landmarkerRef = React.useRef<FaceLandmarker | null>(null);
   const detectionLoopRef = React.useRef<number | null>(null);
-  const engineRef = React.useRef<LivenessEngine | null>(null);
 
   // liveliness actions tracking
   const actionsDoneRef = React.useRef({ blink: false, left: false, right: false });
- 
+  const baselinesRef = React.useRef<{
+    ear: number | null;
+    noseX: number | null;
+    faceWidth: number | null;
+    faceHeight: number | null;
+  }>({ ear: null, noseX: null, faceWidth: null, faceHeight: null });
 
   // flow control
   const flowRef = React.useRef<'photo' | 'video' | null>(null);
@@ -261,27 +111,177 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   /** -------------------- DETECTION LOOP -------------------- **/
   const runLiveDetectionLoop = useCallback(() => {
     const video = videoRef.current;
-    let rafId: number;
-  
+
+    // keep the loop going regardless; we'll exit when status changes
     const loop = () => {
-      if (!video || video.paused || !engineRef.current) {
+      if (!video || video.paused || !landmarkerRef.current) {
         detectionLoopRef.current = requestAnimationFrame(loop);
         return;
       }
+
       // Only run detection during detecting/recording
       if (status !== 'detecting' && status !== 'recording') {
         return;
       }
-  
-      // NEW: Use LivenessEngine for robust, gated detection
-      engineRef.current.process(video, performance.now());
-  
+
+      try {
+        const results = landmarkerRef.current.detectForVideo(video, performance.now());
+        if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+          const landmarks = results.faceLandmarks[0];
+          if (!landmarks || landmarks.length < 470) {
+            detectionLoopRef.current = requestAnimationFrame(loop);
+            return;
+          }
+
+          // indices
+          const LEYE = [33, 160, 158, 133, 153, 144];
+          const REYE = [362, 385, 387, 263, 373, 380];
+          const NOSE = 1;
+          const NOSE_TIP = 4;
+          const LEFT_CHEEK = 234;
+          const RIGHT_CHEEK = 454;
+          const CHIN = 152;
+          const FOREHEAD = 10;
+
+          const dist = (p1: NormalizedLandmark, p2: NormalizedLandmark): number =>
+            Math.hypot(p1.x - p2.x, p1.y - p2.y, (p1.z ?? 0) - (p2.z ?? 0));
+
+          const getEAR = (idx: number[]): number => {
+            const p1 = landmarks[idx[0]],
+              p2 = landmarks[idx[1]],
+              p3 = landmarks[idx[2]];
+            const p4 = landmarks[idx[3]],
+              p5 = landmarks[idx[4]],
+              p6 = landmarks[idx[5]];
+            return (dist(p2, p6) + dist(p3, p5)) / (2 * dist(p1, p4));
+          };
+
+          const ear = (getEAR(LEYE) + getEAR(REYE)) / 2;
+          const noseX = landmarks[NOSE].x;
+
+          // Calculate face metrics for validation
+          const leftEyeCenter = {
+            x: (landmarks[33].x + landmarks[133].x) / 2,
+            y: (landmarks[33].y + landmarks[133].y) / 2,
+            z: ((landmarks[33].z ?? 0) + (landmarks[133].z ?? 0)) / 2
+          };
+          const rightEyeCenter = {
+            x: (landmarks[362].x + landmarks[263].x) / 2,
+            y: (landmarks[362].y + landmarks[263].y) / 2,
+            z: ((landmarks[362].z ?? 0) + (landmarks[263].z ?? 0)) / 2
+          };
+
+          // Face width (inter-eye distance) - should remain relatively stable
+          const faceWidth = dist(leftEyeCenter as NormalizedLandmark, rightEyeCenter as NormalizedLandmark);
+
+          // Face height (forehead to chin) - should remain relatively stable
+          const faceHeight = dist(landmarks[FOREHEAD], landmarks[CHIN]);
+
+          // Calculate average position of key facial points for head turn detection
+          const leftFaceX = (landmarks[LEFT_CHEEK].x + leftEyeCenter.x + landmarks[234].x) / 3;
+          const rightFaceX = (landmarks[RIGHT_CHEEK].x + rightEyeCenter.x + landmarks[454].x) / 3;
+          const avgFaceX = (leftFaceX + rightFaceX + noseX) / 3;
+
+          // Initialize baselines
+          if (baselinesRef.current.ear === null) baselinesRef.current.ear = ear;
+          if (baselinesRef.current.noseX === null) baselinesRef.current.noseX = avgFaceX;
+          if (baselinesRef.current.faceWidth === null) baselinesRef.current.faceWidth = faceWidth;
+          if (baselinesRef.current.faceHeight === null) baselinesRef.current.faceHeight = faceHeight;
+
+          // Validate face stability - reject if face size changed significantly
+          const widthDeviation = Math.abs(faceWidth - (baselinesRef.current.faceWidth ?? faceWidth));
+          const heightDeviation = Math.abs(faceHeight - (baselinesRef.current.faceHeight ?? faceHeight));
+
+          // Face should not move more than 2% in size (prevents hand covering face or moving away)
+          const isFaceStable = widthDeviation < 0.02 && heightDeviation < 0.02;
+
+          if (!isFaceStable) {
+            // Face size changed significantly - likely occlusion or movement, don't count gestures
+            detectionLoopRef.current = requestAnimationFrame(loop);
+            return;
+          }
+
+          // Check if eyes are clearly visible (both eye aspect ratios should be reasonable)
+          const leftEAR = getEAR(LEYE);
+          const rightEAR = getEAR(REYE);
+          const eyesVisible = leftEAR > 0.1 && rightEAR > 0.1 && Math.abs(leftEAR - rightEAR) < 0.15;
+
+          if (!eyesVisible) {
+            // Eyes not clearly visible - likely occlusion, don't count gestures
+            detectionLoopRef.current = requestAnimationFrame(loop);
+            return;
+          }
+
+          // Blink detection - only when face is stable and eyes were visible
+          if (baselinesRef.current.ear !== null && ear < baselinesRef.current.ear * 0.7) {
+            // Additional check: both eyes should close similarly for a real blink
+            if (Math.abs(leftEAR - rightEAR) < 0.08) {
+              if (!actionsDoneRef.current.blink) actionsDoneRef.current.blink = true;
+            }
+          }
+
+          // Head turn detection - use multiple facial points, not just nose
+          if (baselinesRef.current.noseX !== null && isFaceStable) {
+            const deviation = avgFaceX - baselinesRef.current.noseX;
+
+            // Additional validation: check that left and right sides of face move coherently
+            const leftSideMovement = leftFaceX - (baselinesRef.current.noseX - 0.05);
+            const rightSideMovement = rightFaceX - (baselinesRef.current.noseX + 0.05);
+
+            // Left turn: entire face should move left coherently
+            if (deviation < -0.04 && leftSideMovement < -0.03) {
+              // Verify eyes moved with the face
+              const eyeCenterX = (leftEyeCenter.x + rightEyeCenter.x) / 2;
+              if (eyeCenterX < baselinesRef.current.noseX - 0.03) {
+                if (!actionsDoneRef.current.left) {
+                  actionsDoneRef.current.left = true;
+                }
+              }
+            }
+
+            // Right turn: entire face should move right coherently
+            if (deviation > 0.04 && rightSideMovement > 0.03) {
+              // Verify eyes moved with the face
+              const eyeCenterX = (leftEyeCenter.x + rightEyeCenter.x) / 2;
+              if (eyeCenterX > baselinesRef.current.noseX + 0.03) {
+                if (!actionsDoneRef.current.right) {
+                  actionsDoneRef.current.right = true;
+                }
+              }
+            }
+          }
+
+          const { blink, left, right } = actionsDoneRef.current;
+
+          setFeedback(
+            `${blink ? 'Blink ✓' : 'Blink'}  ${left ? 'Left ✓' : 'Left'}  ${right ? 'Right ✓' : 'Right'}`
+          );
+
+          // Passed liveliness
+          if (blink && left && right) {
+            livenessPassedRef.current = true;
+
+            if (flowRef.current === 'photo' && status === 'detecting') {
+              // Capture the frame immediately and upload
+              handlePhotoPassAndUpload();
+              return; // stop loop after capture
+            }
+
+            // For video flow we continue recording; on stop, we decide to upload
+          }
+        } else {
+          setFeedback('No face detected - please position yourself in the camera');
+        }
+      } catch (err) {
+        console.error('Detection loop error:', err);
+      }
+
       detectionLoopRef.current = requestAnimationFrame(loop);
     };
-  
+
     detectionLoopRef.current = requestAnimationFrame(loop);
   }, [status]);
-  
+
   useEffect(() => {
     if ((status === 'detecting' || status === 'recording') && !detectionLoopRef.current) {
       runLiveDetectionLoop();
@@ -301,18 +301,6 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
         numFaces: 1,
       });
       landmarkerRef.current = landmarker;
-      // Now initialize detection engine
-      engineRef.current = new LivenessEngine(
-        undefined,
-        {
-          onBlink: () => actionsDoneRef.current.blink = true,
-          onLeft: () => actionsDoneRef.current.left = true,
-          onRight: () => actionsDoneRef.current.right = true,
-          onFeedback: (msg) => setFeedback(msg),
-          onError: (msg) => setError(msg),
-        }
-      );
-      await engineRef.current.init();
       setStatus('ready');
       setFeedback('Choose how you want to continue.');
     } catch (err) {
@@ -320,9 +308,21 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
       setError('Could not load AI model. Please refresh and try again.');
     }
   }, []);
-  
-  /** -------------------- FLOWS -------------------- **/
 
+  useEffect(() => {
+    loadModel();
+    return () => {
+      cancelDetectionLoop();
+      stopCamera();
+    };
+  }, [loadModel, cancelDetectionLoop, stopCamera]);
+
+  /** -------------------- FLOWS -------------------- **/
+  const resetLiveliness = () => {
+    actionsDoneRef.current = { blink: false, left: false, right: false };
+    baselinesRef.current = { ear: null, noseX: null };
+    livenessPassedRef.current = false;
+  };
 
   // Entry from "Do Live Check"
   const goToLiveOptions = useCallback(() => {
@@ -820,7 +820,3 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
 };
 
 export default UnifiedCheck;
-
-function resetLiveliness() {
-  throw new Error('Function not implemented.');
-}
