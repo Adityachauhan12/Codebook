@@ -1,10 +1,7 @@
-npm install @mediapipe/tasks-vision
-
 
 
 // UnifiedCheck.tsx
 import React, { useState, useEffect, useCallback } from 'react';
-import { FaceLandmarker, FilesetResolver, NormalizedLandmark } from '@mediapipe/tasks-vision';
 import { UnifiedCheckProps } from '../types';
 import { apiConfig } from '../utils/groomingHelpers';
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
@@ -99,9 +96,13 @@ class LivenessEngine {
   private lm?: FaceLandmarker;
   private cfg: LivenessConfig;
   private cb: Callbacks;
-  private blinkCnt = 0, yawCntLeft = 0, yawCntRight = 0;
+  private blinkCnt = 0;
+  private yawCntLeft = 0;
+  private yawCntRight = 0;
   private lastBox?: { x: number; y: number; w: number; h: number };
-  private blinkDone = false, leftDone = false, rightDone = false;
+  private blinkDone = false;
+  private leftDone = false;
+  private rightDone = false;
 
   constructor(cfg?: Partial<LivenessConfig>, cb?: Callbacks) {
     this.cfg = { ...DEFAULTS, ...(cfg || {}) };
@@ -129,17 +130,24 @@ class LivenessEngine {
   process(video: HTMLVideoElement, tsMs: number) {
     if (!this.lm) return;
     const res = this.lm.detectForVideo(video, tsMs);
-    if (!res.faceLandmarks?.length || !res.faceDetections?.length) return;
-    const det = res.faceDetections[0];
-    const score = det.categories?.[0]?.score ?? 1;
+    if (!res.faceLandmarks?.length) return;
+    // Compute bounding box from landmarks
+    const landmarks = res.faceLandmarks[0];
+    const xs = landmarks.map((pt: any) => pt.x);
+    const ys = landmarks.map((pt: any) => pt.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const box = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+
+    // Use face presence score if available, otherwise default to 1
+    const score = res.faceBlendshapes?.[0]?.categories?.[0]?.score ?? 1;
     if (score < this.cfg.minFaceScore) return;
-    const box = det.boundingBox;
+
     if (!this.stableFace(this.lastBox, box)) {
       this.blinkCnt = 0; this.yawCntLeft = 0; this.yawCntRight = 0;
     }
     this.lastBox = box;
-    const lm = res.faceLandmarks[0];
-    const ear = (eyeEAR(lm, L) + eyeEAR(lm, R)) / 2;
+    const ear = (eyeEAR(landmarks, L) + eyeEAR(landmarks, R)) / 2;
     if (ear < this.cfg.earThresh) {
       this.blinkCnt++;
     } else {
@@ -149,7 +157,7 @@ class LivenessEngine {
       }
       this.blinkCnt = 0;
     }
-    const yaw = approxYawDegrees(lm);
+    const yaw = approxYawDegrees(landmarks);
     if (yaw >= this.cfg.yawLeftThresh) {
       this.yawCntLeft++; this.yawCntRight = 0;
     } else if (yaw <= this.cfg.yawRightThresh) {
@@ -197,6 +205,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   const streamRef = React.useRef<MediaStream | null>(null);
   const landmarkerRef = React.useRef<FaceLandmarker | null>(null);
   const detectionLoopRef = React.useRef<number | null>(null);
+  const engineRef = React.useRef<LivenessEngine | null>(null);
 
   // liveliness actions tracking
   const actionsDoneRef = React.useRef({ blink: false, left: false, right: false });
@@ -811,3 +820,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
 };
 
 export default UnifiedCheck;
+
+function resetLiveliness() {
+  throw new Error('Function not implemented.');
+}
