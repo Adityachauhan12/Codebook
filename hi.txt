@@ -1,4 +1,4 @@
-/ UnifiedCheck.tsx
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { FaceLandmarker, FilesetResolver, NormalizedLandmark } from '@mediapipe/tasks-vision';
 import { UnifiedCheckProps } from '../types';
@@ -213,7 +213,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
           }
 
           // Blink detection - only when face is stable and eyes were visible
-          if (baselinesRef.current.ear !== null && ear < baselinesRef.current.ear * 0.7) {
+          if (baselinesRef.current.ear !== null && ear < baselinesRef.current.ear * 0.8) {
             // Additional check: both eyes should close similarly for a real blink
             if (Math.abs(leftEAR - rightEAR) < 0.08) {
               if (!actionsDoneRef.current.blink) actionsDoneRef.current.blink = true;
@@ -229,10 +229,10 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
             const rightSideMovement = rightFaceX - (baselinesRef.current.noseX + 0.05);
 
             // Left turn: entire face should move left coherently
-            if (deviation < -0.04 && leftSideMovement < -0.03) {
+            if (deviation < -0.02 && leftSideMovement < -0.06) {
               // Verify eyes moved with the face
               const eyeCenterX = (leftEyeCenter.x + rightEyeCenter.x) / 2;
-              if (eyeCenterX < baselinesRef.current.noseX - 0.03) {
+              if (eyeCenterX < baselinesRef.current.noseX - 0.06) {
                 if (!actionsDoneRef.current.left) {
                   actionsDoneRef.current.left = true;
                 }
@@ -320,7 +320,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   /** -------------------- FLOWS -------------------- **/
   const resetLiveliness = () => {
     actionsDoneRef.current = { blink: false, left: false, right: false };
-    baselinesRef.current = { ear: null, noseX: null };
+    baselinesRef.current = { ear: null, noseX: null, faceWidth: null, faceHeight: null };
     livenessPassedRef.current = false;
   };
 
@@ -368,7 +368,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
       console.error(e);
       setError('Could not capture photo.');
     }
-  }, [cancelDetectionLoop, stopCamera]);
+  }, []);
 
   const runGroomingPhoto = async (imageBase64: string) => {
     try {
