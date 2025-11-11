@@ -1,5 +1,813 @@
-FACE_GROOMING_PROMPT
-"FACE_GROOMING_PROMPT = """\nSECTION: Role & Objective \n- You are an AI assistant specialized in assessing grooming standards for IndiGo Airlines cabin crew using a strict, evidence‑first analytic rubric. \n- Judge only what is clearly visible from provided images or uniformly sampled video frames; never speculate or infer absent details. \n\nSECTION: Deterministic Evidence Protocol \n- Images: assess the single image directly using the rubric and the evidence‑first rule. \n- Videos: sample frames uniformly at 1 fps with a 0.5 s start offset, up to 12 frames maximum, with no randomness so repeated inputs yield identical frames and outcomes. \n- For each sub‑criterion, take a majority across the sampled frames; if tied, select the stricter outcome (non‑compliant for that sub‑criterion) for safety and consistency. \n- Disable nondeterministic operations and fix all seeds in the execution stack to preserve reproducibility across runs. \n\nSECTION: Order of Checks \n- Evaluate categories in this fixed order: Hairstyle → Makeup → Nails → Accessories → Uniform. \n- Within each category, apply the defined sub‑criteria sequentially and record short evidence tags like "Frame 5.0s" or "Image: Left profile". \n\nSECTION: Policy Reference (what to assess) \n- Approved hairstyles: Chignon, Braid Roll, Twisted Bun, Twisted/Braid Roll Bun with Bow, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls; Ponytails are not allowed. \n- Hair maintenance: hair must be neat and professional; fringe or bangs must not fall beyond the eyebrows. \n- Hair color/highlights: approved colors are Ash Grey, Caramel, Hot Toffee, Sparkling Amber, Chocolate Cherry, Midnight Ruby/Burgundy; highlights must be fine (≤ 2 mm) and seamlessly blended. \n- Makeup details: approved eye shadow palettes are Swiss Beauty 05, Makeup Revolution Achieve, Nykaa Eyes On Me Night Out, Lakme Smokey Glam, Nykaa Tinsel Twilight, Sugar Blend The Rules 02 Warrior; eye pencil brown for fair→wheatish and black for dusky→olive; artificial lashes permissible (MAC or PAC recommended); mascara black and volumizing; lenses FreshLook Hazel/Grey; foundation mandatory and matched; concealer on dark circles/blemishes; lip color in burgundy/wine/cranberry; overall professional and well‑blended; no visible tattoos. \n- Nails: not too long; neatly filed; approved colors Pearl white or French manicure; extensions in squoval/rounded/square; well‑maintained and polished. \n- Accessories: rings max one per hand in silver/rose gold on ring or middle finger only; earrings white/rose gold pearl studs or small diamond studs; bangles max one plain silver/rose‑gold bangle; watch must have seconds hand in black/silver/rose‑gold/dark blue; no visible religious threads, nose pins, extra piercings, or inappropriate jewelry. \n- Uniform: tunic clean, well‑fitted, stain‑free, hemmed; scarf with Flower/Square knot and positioned correctly; name badge visible and positioned; stockings dark blue with no ladders/wrinkles; overall professional and neat. \n- Prohibited items: visible tattoos, nose pins, sindoor, mangal sutra, second ear piercings, religious threads, inappropriate nail colors/lengths, unprofessional hairstyles/colors, excessive/inappropriate makeup, or wrong accessories/jewelry. \n\nSECTION: Analytic Scoring Rubric (total = 10) \n- Category weights: Uniform 3.0, Nails 1.0, Hairstyle 2.0, Makeup 2.0, Accessories 2.0; do not exceed any sub‑criterion’s cap even if multiple issues occur. \n- Partial rule: minor or borderline issues deduct half the sub‑criterion value; clear violations deduct the full sub‑criterion value. \n- NOT VISIBLE rule: if a sub‑criterion is not visible in the analyzed evidence, write NOT VISIBLE and assign 0 to that sub‑criterion; do not guess. \n\nHairstyle (2.0) \n- Style compliance and disallowed forms (0.6): approved style present and no ponytail; deduct 0.6 for ponytail/unapproved style; deduct 0.3 if borderline/unclear but visible. \n- Neatness and fringe (0.6): hair neat and fringe not beyond eyebrows; deduct 0.6 if fringe below brows or visibly messy; deduct 0.3 for minor strays. \n- Color/highlights (0.4): approved color; highlights ≤ 2 mm and blended; deduct 0.4 if unapproved color or thick/contrasting highlights; deduct 0.2 if slightly over spec. \n- Finish/integrity (0.4): bun/braid secure; flyaways controlled; deduct 0.4 if undone; deduct 0.2 for minor flyaways. \n\nMakeup (2.0) \n- Base (0.6): foundation matched; concealer used for dark circles/blemishes; deduct 0.6 if mismatch or absent; deduct 0.3 for slight mismatch. \n- Eyes (0.6): approved palette; correct eye pencil tone; mascara black; lashes permissible; deduct 0.6 if unapproved palette or wrong liner tone; deduct 0.3 for blending issues. \n- Lips (0.4): burgundy/wine/cranberry tone; deduct 0.4 if off‑tone; deduct 0.2 if borderline shade. \n- Overall (0.4): professional, well‑blended; skin clear; no visible tattoos; deduct 0.4 if overdone or tattoo visible; deduct 0.2 for minor patchiness. \n\nNails (1.0) \n- Length/shape (0.5): not too long; neatly filed; extensions squoval/rounded/square; deduct 0.5 if long/untidy/wrong shape; deduct 0.25 for minor roughness. \n- Color/finish (0.5): Pearl white or French manicure; well‑polished; deduct 0.5 if wrong color or chipped; deduct 0.25 for slight wear. \n\nAccessories (2.0) \n- Rings (0.5): max one per hand; silver/rose gold; ring or middle finger only; deduct 0.5 if count exceeded or wrong finger/metal; deduct 0.25 if ambiguous but visible. \n- Earrings (0.5): only pearl studs or small diamond studs in white/rose gold; deduct 0.5 if hoops/danglers/colored; deduct 0.25 if oversized studs. \n- Watch (0.5): must have seconds hand; acceptable colors black/silver/rose‑gold/dark blue; deduct 0.5 if missing seconds hand or off‑color; deduct 0.25 if seconds hand unclear. \n- Prohibitions (0.5): no religious threads, nose pins, extra piercings, or inappropriate jewelry; deduct 0.5 if any visible; deduct 0.25 if uncertain but suggestive. \n\nUniform (3.0) \n- Tunic (1.0): clean, well‑fitted, stain‑free, hemmed; deduct 1.0 if stained/poor fit; deduct 0.5 for minor wrinkles. \n- Scarf (0.5): Flower/Square knot; positioned correctly; deduct 0.5 if wrong knot/position; deduct 0.25 if slightly off. \n- Name badge (0.5): visible and positioned; deduct 0.5 if missing; deduct 0.25 if misaligned. \n- Stockings (0.5): dark blue; no ladders/wrinkles; deduct 0.5 for laddered/wrong color; deduct 0.25 for minor wrinkles. \n- Overall presentation (0.5): professional, neat, well‑groomed; deduct 0.5 if notably unkempt; deduct 0.25 for lint/creases. \n\nSECTION: Prohibitions Handling \n- If a prohibited item is clearly visible, record it once under Accessories → Prohibitions and in Issues Found; apply only that sub‑criterion’s deduction and do not double‑count elsewhere. \n\nSECTION: Compliance Decision & Rounding \n- Compute total out of 10 using the fixed weights and sub‑criterion caps; overall status is COMPLIANT only if total ≥ 9.0/10 and no major prohibition violations were observed. \n- Round sub‑scores to the nearest 0.1 and the Overall Score to one decimal place. \n\nSECTION: Execution Notes & Evidence Tags \n- Include brief evidence tags in each category line such as "Frame 4.0s: fringe above brows" or "NOT VISIBLE: nails" to tie scoring to observable proof. \n- Use majority rule across frames; on a tie, apply the stricter (non‑compliant) outcome to maintain consistency. \n\nSECTION: Example Deduction Mapping (Rings) \n- If a second ring is visible or a ring is on a disallowed finger/metal, deduct 0.5 from Accessories → Rings and list the issue once; if visibility is ambiguous across frames, deduct 0.25 and recommend a clear compliant configuration. \n\nSECTION: Output Contract Reminder \n- Respond strictly using the OUTPUT_FORMAT provided below, keeping section order, labels, and 1–2 line limits for category notes. \n""" "​
+npm install @mediapipe/tasks-vision
 
-OUTPUT_FORMAT
-"OUTPUT_FORMAT = """\nImportant: Output must include exactly these sections in order: \n\n1) Overall Assessment: <COMPLIANT or NON-COMPLIANT> \n\n2) Detailed Assessment: \n- Hairstyle: <1–2 lines> \n- Makeup: <1–2 lines> \n- Nails: <1–2 lines> \n- Accessories: <1–2 lines> \n- Uniform: <1–2 lines> \n\n3) Issues Found: \n- <bullet 1> \n- <bullet 2> \n\n4) Recommendations: \n- <bullet 1> \n- <bullet 2> \n\n5) Overall Score: <X>/10 \n- Uniform: <x>/3 \n- Nails: <x>/1 \n- Hairstyle: <x>/2 \n- Makeup: <x>/2 \n- Accessories: <x>/2 \n""" "
+
+
+// UnifiedCheck.tsx
+import React, { useState, useEffect, useCallback } from 'react';
+import { FaceLandmarker, FilesetResolver, NormalizedLandmark } from '@mediapipe/tasks-vision';
+import { UnifiedCheckProps } from '../types';
+import { apiConfig } from '../utils/groomingHelpers';
+import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+
+
+interface UnifiedCheckPropsExtended extends UnifiedCheckProps {
+  onUploadVideo?: () => void;
+}
+
+interface GroomingResult {
+  assessment: string;
+  score: number;
+  scores?: {
+    uniform: number;
+    hairstyle: number;
+    makeup: number;
+    nails: number;
+    accessories: number;
+  };
+  issues?: string[];
+  recommendations?: string[];
+}
+
+type Status =
+  | 'loading'
+  | 'ready'
+  | 'chooseLive'   // choose Photo or 10s Live Video (after selecting "Do Live Check")
+  | 'detecting'    // running liveliness for Photo flow
+  | 'recording'    // recording 10s and running liveliness for Video flow
+  | 'uploading'
+  | 'done';
+
+// ---- BEGIN LIVENESS DETECTION BLOCK ----
+type Callbacks = {
+  onBlink?: () => void;
+  onLeft?: () => void;
+  onRight?: () => void;
+  onFeedback?: (msg: string) => void;
+  onError?: (msg: string) => void;
+};
+
+type LivenessConfig = {
+  earThresh: number;
+  earMinFrames: number;
+  yawLeftThresh: number;
+  yawRightThresh: number;
+  yawMinFrames: number;
+  maxFaceTranslatePx: number;
+  minFaceScore: number;
+};
+
+const DEFAULTS: LivenessConfig = {
+  earThresh: 0.21,
+  earMinFrames: 3,
+  yawLeftThresh: 12,
+  yawRightThresh: -12,
+  yawMinFrames: 6,
+  maxFaceTranslatePx: 24,
+  minFaceScore: 0.5,
+};
+
+const L = { cornerOut: 33, cornerIn: 133, upper: 159, lower: 145 };
+const R = { cornerOut: 362, cornerIn: 263, upper: 386, lower: 374 };
+
+function dist(a: any, b: any) {
+  if (!a || !b) return 0;
+  const dx = a.x - b.x, dy = a.y - b.y;
+  return Math.hypot(dx, dy);
+}
+
+function eyeEAR(landmarks: any[], eye: { cornerOut: number; cornerIn: number; upper: number; lower: number }) {
+  const p1 = landmarks[eye.cornerOut];
+  const p2 = landmarks[eye.cornerIn];
+  const pu = landmarks[eye.upper];
+  const pl = landmarks[eye.lower];
+  const vert = dist(pu, pl);
+  const horiz = dist(p1, p2);
+  return vert / Math.max(horiz, 1e-6);
+}
+
+function approxYawDegrees(landmarks: any[]) {
+  const leftCheek = landmarks[234];
+  const rightCheek = landmarks[454];
+  const nose = landmarks[1];
+  if (!leftCheek || !rightCheek || !nose) return 0;
+  const faceW = Math.max(dist(leftCheek, rightCheek), 1e-6);
+  const rel = ((nose.x - (leftCheek.x + rightCheek.x) / 2) / faceW);
+  return rel * 50;
+}
+
+class LivenessEngine {
+  private lm?: FaceLandmarker;
+  private cfg: LivenessConfig;
+  private cb: Callbacks;
+  private blinkCnt = 0, yawCntLeft = 0, yawCntRight = 0;
+  private lastBox?: { x: number; y: number; w: number; h: number };
+  private blinkDone = false, leftDone = false, rightDone = false;
+
+  constructor(cfg?: Partial<LivenessConfig>, cb?: Callbacks) {
+    this.cfg = { ...DEFAULTS, ...(cfg || {}) };
+    this.cb = cb || {};
+  }
+
+  async init() {
+    const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm");
+    this.lm = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-assets/face_landmarker.task",
+      },
+      runningMode: "VIDEO",
+      numFaces: 1,
+    });
+  }
+
+  private stableFace(prev: any, curr: any) {
+    if (!prev) return true;
+    const cx0 = prev.x + prev.w / 2, cy0 = prev.y + prev.h / 2;
+    const cx1 = curr.x + curr.w / 2, cy1 = curr.y + curr.h / 2;
+    return Math.hypot(cx1 - cx0, cy1 - cy0) <= this.cfg.maxFaceTranslatePx;
+  }
+
+  process(video: HTMLVideoElement, tsMs: number) {
+    if (!this.lm) return;
+    const res = this.lm.detectForVideo(video, tsMs);
+    if (!res.faceLandmarks?.length || !res.faceDetections?.length) return;
+    const det = res.faceDetections[0];
+    const score = det.categories?.[0]?.score ?? 1;
+    if (score < this.cfg.minFaceScore) return;
+    const box = det.boundingBox;
+    if (!this.stableFace(this.lastBox, box)) {
+      this.blinkCnt = 0; this.yawCntLeft = 0; this.yawCntRight = 0;
+    }
+    this.lastBox = box;
+    const lm = res.faceLandmarks[0];
+    const ear = (eyeEAR(lm, L) + eyeEAR(lm, R)) / 2;
+    if (ear < this.cfg.earThresh) {
+      this.blinkCnt++;
+    } else {
+      if (this.blinkCnt >= this.cfg.earMinFrames && !this.blinkDone) {
+        this.blinkDone = true;
+        this.cb.onBlink?.();
+      }
+      this.blinkCnt = 0;
+    }
+    const yaw = approxYawDegrees(lm);
+    if (yaw >= this.cfg.yawLeftThresh) {
+      this.yawCntLeft++; this.yawCntRight = 0;
+    } else if (yaw <= this.cfg.yawRightThresh) {
+      this.yawCntRight++; this.yawCntLeft = 0;
+    } else {
+      if (this.yawCntLeft >= this.cfg.yawMinFrames && !this.leftDone) {
+        this.leftDone = true;
+        this.cb.onLeft?.();
+      }
+      if (this.yawCntRight >= this.cfg.yawMinFrames && !this.rightDone) {
+        this.rightDone = true;
+        this.cb.onRight?.();
+      }
+      this.yawCntLeft = 0; this.yawCntRight = 0;
+    }
+    this.cb.onFeedback?.(`${this.blinkDone ? 'Blink ✓' : 'Blink'}  ${this.leftDone ? 'Left ✓' : 'Left'}  ${this.rightDone ? 'Right ✓' : 'Right'}`);
+  }
+
+  reset() {
+    this.blinkDone = this.leftDone = this.rightDone = false;
+    this.blinkCnt = this.yawCntLeft = this.yawCntRight = 0;
+    this.lastBox = undefined;
+  }
+}
+// ---- END LIVENESS DETECTION BLOCK ----
+
+
+const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
+  crewName,
+  igaCode,
+  onComplete,
+  onCancel,
+  onUploadVideo,
+}) => {
+  /** -------------------- STATE -------------------- **/
+  const [status, setStatus] = useState<Status>('loading');
+  const [feedback, setFeedback] = useState<string>('Please wait, loading AI model...');
+  const [declarationAccepted, setDeclarationAccepted] = useState<boolean>(false);
+  const [groomingResult, setGroomingResult] = useState<GroomingResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [recTimer, setRecTimer] = useState<number>(0);
+
+  /** -------------------- REFS -------------------- **/
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const streamRef = React.useRef<MediaStream | null>(null);
+  const landmarkerRef = React.useRef<FaceLandmarker | null>(null);
+  const detectionLoopRef = React.useRef<number | null>(null);
+
+  // liveliness actions tracking
+  const actionsDoneRef = React.useRef({ blink: false, left: false, right: false });
+ 
+
+  // flow control
+  const flowRef = React.useRef<'photo' | 'video' | null>(null);
+  const livenessPassedRef = React.useRef<boolean>(false);
+
+  // recording
+  const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = React.useRef<Blob[]>([]);
+  const recIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  /** -------------------- HELPERS -------------------- **/
+  const apiUrl = (path: string) =>
+    `${apiConfig.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
+
+  const cancelDetectionLoop = useCallback(() => {
+    if (detectionLoopRef.current) {
+      cancelAnimationFrame(detectionLoopRef.current);
+      detectionLoopRef.current = null;
+      console.log('Detection loop cancelled');
+    }
+  }, []);
+
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      console.log('Camera stopped');
+    }
+  }, []);
+
+  const startCamera = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1280 } },
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        // Ensure video plays; detection loop will check pause/ready state
+        await videoRef.current.play().catch(() => void 0);
+      }
+      return true;
+    } catch (e) {
+      setError('Camera permission denied.');
+      return false;
+    }
+  }, []);
+
+  /** -------------------- DETECTION LOOP -------------------- **/
+  const runLiveDetectionLoop = useCallback(() => {
+    const video = videoRef.current;
+    let rafId: number;
+  
+    const loop = () => {
+      if (!video || video.paused || !engineRef.current) {
+        detectionLoopRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      // Only run detection during detecting/recording
+      if (status !== 'detecting' && status !== 'recording') {
+        return;
+      }
+  
+      // NEW: Use LivenessEngine for robust, gated detection
+      engineRef.current.process(video, performance.now());
+  
+      detectionLoopRef.current = requestAnimationFrame(loop);
+    };
+  
+    detectionLoopRef.current = requestAnimationFrame(loop);
+  }, [status]);
+  
+  useEffect(() => {
+    if ((status === 'detecting' || status === 'recording') && !detectionLoopRef.current) {
+      runLiveDetectionLoop();
+    }
+  }, [status, runLiveDetectionLoop]);
+
+  /** -------------------- MODEL LOAD / CLEANUP -------------------- **/
+  const loadModel = useCallback(async () => {
+    try {
+      const fileset = await FilesetResolver.forVisionTasks(apiConfig.visionWasmBase);
+      const landmarker = await FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath:
+            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+        },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+      });
+      landmarkerRef.current = landmarker;
+      // Now initialize detection engine
+      engineRef.current = new LivenessEngine(
+        undefined,
+        {
+          onBlink: () => actionsDoneRef.current.blink = true,
+          onLeft: () => actionsDoneRef.current.left = true,
+          onRight: () => actionsDoneRef.current.right = true,
+          onFeedback: (msg) => setFeedback(msg),
+          onError: (msg) => setError(msg),
+        }
+      );
+      await engineRef.current.init();
+      setStatus('ready');
+      setFeedback('Choose how you want to continue.');
+    } catch (err) {
+      console.error('Model loading error:', err);
+      setError('Could not load AI model. Please refresh and try again.');
+    }
+  }, []);
+  
+  /** -------------------- FLOWS -------------------- **/
+
+
+  // Entry from "Do Live Check"
+  const goToLiveOptions = useCallback(() => {
+    setStatus('chooseLive');
+    setFeedback('Choose your live assessment method.');
+  }, []);
+
+  /** -------- Photo flow: start + auto-capture on pass -------- **/
+  const startPhotoFlow = useCallback(async () => {
+    if (!declarationAccepted || !crewName || !igaCode) return;
+
+    resetLiveliness();
+    flowRef.current = 'photo';
+
+    const ok = await startCamera();
+    if (!ok) return;
+
+    setStatus('detecting');
+    setFeedback('Look at the camera. Blink, turn left, then right. We will auto-capture on pass.');
+  }, [declarationAccepted, crewName, igaCode, startCamera]);
+
+  const handlePhotoPassAndUpload = useCallback(() => {
+    try {
+      cancelDetectionLoop();
+      // Capture current frame
+      const canvas = document.createElement('canvas');
+      const video = videoRef.current;
+      if (!video) return;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      ctx.drawImage(video, 0, 0);
+      const imageB64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+
+      setStatus('uploading');
+      stopCamera();
+
+      runGroomingPhoto(imageB64);
+    } catch (e) {
+      console.error(e);
+      setError('Could not capture photo.');
+    }
+  }, [cancelDetectionLoop, stopCamera]);
+
+  const runGroomingPhoto = async (imageBase64: string) => {
+    try {
+      const res = await fetch(apiUrl('/check-grooming'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64, crewName, igaCode }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text()}`);
+      const data = await res.json();
+      setGroomingResult(data?.result ?? null);
+      setStatus('done');
+    } catch (e) {
+      console.error(e);
+      setError('Grooming check failed.');
+    }
+  };
+
+  /** -------- Live Video (10s) flow: record + pass check -------- **/
+  const startVideoFlow = useCallback(async () => {
+    if (!declarationAccepted || !crewName || !igaCode) return;
+
+    resetLiveliness();
+    flowRef.current = 'video';
+
+    const ok = await startCamera();
+    if (!ok) return;
+
+    // prepare recording
+    recordedChunksRef.current = [];
+    setRecTimer(0);
+
+    const options: MediaRecorderOptions = { mimeType: 'video/webm;codecs=vp8' };
+    let mr: MediaRecorder;
+    try {
+      mr = new MediaRecorder(streamRef.current as MediaStream, options);
+    } catch (err) {
+      setError('Unable to start video recording.');
+      return;
+    }
+
+    mediaRecorderRef.current = mr;
+    mr.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+    };
+    mr.onstop = handleRecordingStop;
+
+    setStatus('recording');
+    setFeedback('Recording for 10s. Blink, turn left, then right to pass liveliness.');
+
+    // timer for UI
+    if (recIntervalRef.current) clearInterval(recIntervalRef.current);
+    recIntervalRef.current = setInterval(() => setRecTimer((t) => t + 1), 1000);
+
+    mr.start(100); // gather in chunks
+
+    // Stop automatically at 10s
+    setTimeout(() => {
+      if (mr.state !== 'inactive') mr.stop();
+    }, 10000);
+  }, [declarationAccepted, crewName, igaCode, startCamera]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+  }, []);
+
+  const handleRecordingStop = useCallback(() => {
+    if (recIntervalRef.current) {
+      clearInterval(recIntervalRef.current);
+      recIntervalRef.current = null;
+    }
+
+    // If liveliness failed within 10s → do not upload
+    if (!livenessPassedRef.current) {
+      cancelDetectionLoop();
+      stopCamera();
+      setStatus('ready');
+      setError('Liveliness failed. Video will not be sent for assessment.');
+      return;
+    }
+
+    // Liveliness passed → upload the 10s clip
+    const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+    const file = new File([blob], 'grooming.webm', { type: 'video/webm' });
+    const fd = new FormData();
+    fd.append('video', file);
+    fd.append('name', crewName);
+    fd.append('iga_code', igaCode);
+
+    setStatus('uploading');
+    cancelDetectionLoop();
+    stopCamera();
+
+    fetch(apiUrl('/check-grooming-video'), { method: 'POST', body: fd })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status} ${await r.text()}`);
+        return r.json();
+      })
+      .then((data) => {
+        if (!data || data.status !== 'ok') throw new Error(data?.error ?? 'API error');
+        setGroomingResult(data.result);
+        setStatus('done');
+      })
+      .catch((e) => {
+        console.error(e);
+        setError('Video grooming check failed.');
+      });
+  }, [cancelDetectionLoop, stopCamera, crewName, igaCode]);
+
+  /** -------------------- CANCEL / NAV -------------------- **/
+  const handleCancel = useCallback(() => {
+    cancelDetectionLoop();
+    stopCamera();
+    setStatus('ready');
+    if (onCancel) onCancel();
+  }, [cancelDetectionLoop, stopCamera, onCancel]);
+
+  const handleBackToDashboard = useCallback(() => {
+    if (onComplete && groomingResult) {
+      onComplete(groomingResult);
+    } else if (onCancel) {
+      onCancel();
+    }
+  }, [onComplete, onCancel, groomingResult]);
+
+  /** -------------------- UI -------------------- **/
+  return (
+    <div className="max-w-4xl mx-auto p-6">
+      {/* Header */}
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">AI Grooming Assessment</h2>
+        <p className="text-gray-600 text-sm">Automated liveliness detection and grooming evaluation</p>
+      </div>
+
+      {/* Crew Info */}
+      <div className="bg-gradient-to-r from-[#000099] to-blue-700 rounded-2xl p-6 mb-8 border border-blue-200">
+        <div className="flex justify-center items-center gap-6">
+          <div className="text-center">
+            <div className="text-white font-bold text-lg">{crewName}</div>
+            <div className="text-blue-100 text-sm">Crew Member</div>
+          </div>
+          <div className="w-px h-12 bg-blue-300"></div>
+          <div className="text-center">
+            <div className="text-white font-bold text-lg">{igaCode}</div>
+            <div className="text-blue-100 text-sm">IGA Code</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Declaration */}
+      <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6 mb-8">
+        <div className="flex items-start gap-4">
+          <div className="flex-shrink-0 mt-1">
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={declarationAccepted}
+                onChange={(e) => setDeclarationAccepted(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="relative w-5 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded border-2 border-gray-300 peer-checked:bg-[#000099] peer-checked:border-[#000099] transition-all duration-300">
+                <div
+                  className={`absolute inset-0 flex items-center justify-center transition-all duration-300 ${
+                    declarationAccepted ? 'opacity-100' : 'opacity-0'
+                  }`}
+                >
+                  <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                    <path
+                      fillRule="evenodd"
+                      d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </div>
+              </div>
+            </label>
+          </div>
+          <div className="flex-1">
+            <p className="text-gray-800 text-sm leading-relaxed">
+              I hereby declare that all the information provided is correct and accurate. I understand that this
+              assessment will be used for grooming compliance evaluation and I consent to the use of camera for this
+              purpose.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Camera surface (visible whenever we're using the camera) */}
+      {status !== 'uploading' && !groomingResult && (
+        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden mb-8">
+          <div className="relative">
+            <video ref={videoRef} autoPlay playsInline muted className="w-full h-auto bg-black max-h-96 object-cover" />
+            {/* Liveliness overlay during detecting/recording */}
+            {(status === 'detecting' || status === 'recording') && (
+              <div className="absolute top-4 left-4 right-4">
+                <div className="bg-black bg-opacity-50 backdrop-blur-sm rounded-xl p-4">
+                  <p className="feedback-overlay text-center text-white">
+                    <span style={{ color: actionsDoneRef.current?.blink ? '#16a34a' : '#ffffff' }}>
+                      Blink {actionsDoneRef.current?.blink ? '✓' : ''}
+                    </span>
+                    {'  '}
+                    <span style={{ color: actionsDoneRef.current?.left ? '#16a34a' : '#ffffff' }}>
+                      Left {actionsDoneRef.current?.left ? '✓' : ''}
+                    </span>
+                    {'  '}
+                    <span style={{ color: actionsDoneRef.current?.right ? '#16a34a' : '#ffffff' }}>
+                      Right {actionsDoneRef.current?.right ? '✓' : ''}
+                    </span>
+                    {status === 'recording' && (
+                      <span className="ml-3 inline-block rounded-full bg-blue-600 px-2 py-0.5 text-xs">
+                        {recTimer}s / 10s
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Feedback bar */}
+          <div className="bg-gray-50 p-4 border-t">
+            <div className="text-center">
+              <p className="text-gray-700 text-sm font-medium">{feedback}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Controls */}
+      <div className="flex flex-col items-center gap-6 mb-8">
+        {status === 'ready' && (
+          <div className="flex flex-col items-center gap-4">
+            <div className="flex flex-wrap justify-center gap-4">
+              <button
+                onClick={goToLiveOptions}
+                disabled={!crewName || !igaCode || !declarationAccepted}
+                className={`px-8 py-4 rounded-xl text-sm font-semibold transition-all duration-300 transform hover:scale-105 ${
+                  declarationAccepted
+                    ? 'bg-gradient-to-r from-[#000099] to-blue-700 text-white hover:shadow-lg'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                Do Live Check
+              </button>
+
+              {declarationAccepted && onUploadVideo && (
+                <button
+                  onClick={onUploadVideo}
+                  className="bg-gradient-to-r from-blue-700 to-blue-600 text-white px-8 py-4 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105"
+                >
+                  Upload Existing Video
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {status === 'chooseLive' && (
+          <div className="flex flex-col items-center gap-6">
+            <p className="text-gray-700 text-center font-medium">Choose your live assessment method:</p>
+            <div className="flex flex-wrap justify-center gap-4">
+              <button
+                onClick={startPhotoFlow}
+                className="bg-gradient-to-r from-green-600 to-green-500 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105"
+              >
+                Photo (with Liveliness)
+              </button>
+              <button
+                onClick={startVideoFlow}
+                className="bg-gradient-to-r from-[#000099] to-blue-700 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105"
+              >
+                Live Video (10s + Liveliness)
+              </button>
+            </div>
+          </div>
+        )}
+
+        {(status === 'detecting' || status === 'recording') && (
+          <div className="flex flex-wrap justify-center gap-4">
+            {status === 'recording' && (
+              <button
+                onClick={stopRecording}
+                className="bg-gradient-to-r from-amber-600 to-amber-500 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105"
+              >
+                Stop Recording ({recTimer}s)
+              </button>
+            )}
+            <button
+              onClick={handleCancel}
+              className="bg-gradient-to-r from-red-600 to-red-500 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Processing */}
+      {status === 'uploading' && (
+        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-12 text-center">
+          <div className="flex flex-col items-center gap-6">
+            <div className="relative">
+              <div className="w-16 h-16 border-4 border-blue-200 rounded-full animate-spin border-t-[#000099]"></div>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-8 h-8 bg-[#000099] rounded-full animate-pulse"></div>
+              </div>
+            </div>
+            <div>
+              <p className="text-gray-900 font-semibold text-lg mb-2">Analyzing Your Assessment</p>
+              <p className="text-gray-600 text-sm">Our AI is evaluating your grooming standards...</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Results */}
+      {status === 'done' && groomingResult && (
+        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-8">
+          <div className="text-center mb-8">
+            <h3 className="text-2xl font-bold text-gray-900 mb-4">Assessment Complete</h3>
+            <div className="flex justify-center items-center gap-6 mb-6">
+              <div
+                className={`px-6 py-3 rounded-full text-white font-bold text-lg ${
+                  groomingResult.assessment === 'COMPLIANT'
+                    ? 'bg-gradient-to-r from-green-600 to-green-500'
+                    : 'bg-gradient-to-r from-red-600 to-red-500'
+                }`}
+              >
+                {groomingResult.assessment}
+              </div>
+              <div className="text-center">
+                <div className="text-4xl font-bold text-[#000099]">{groomingResult.score ?? 0}/10</div>
+                <div className="text-gray-600 text-sm">Overall Score</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Detailed Scores */}
+          {groomingResult.scores && (
+            <div className="mb-8">
+              <h4 className="text-lg font-semibold text-gray-900 mb-4 text-center">Category Breakdown</h4>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                {[
+                  { key: 'uniform', label: 'Uniform', max: 3 },
+                  { key: 'hairstyle', label: 'Hairstyle', max: 2 },
+                  { key: 'makeup', label: 'Makeup', max: 2 },
+                  { key: 'nails', label: 'Nails', max: 1 },
+                  { key: 'accessories', label: 'Accessories', max: 2 },
+                ].map((item) => {
+                  const score = groomingResult.scores![item.key as keyof typeof groomingResult.scores];
+                  const percentage = Math.round((score / item.max) * 100);
+                  return (
+                    <div key={item.key} className="bg-blue-50 rounded-xl p-4 text-center border border-blue-200">
+                      <div className="text-2xl font-bold text-[#000099] mb-1">
+                        {score}/{item.max}
+                      </div>
+                      <div className="text-gray-600 text-sm mb-2">{item.label}</div>
+                      <div
+                        className={`text-xs font-medium ${
+                          percentage >= 80 ? 'text-green-600' : percentage >= 60 ? 'text-yellow-600' : 'text-red-600'
+                        }`}
+                      >
+                        {percentage}%
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Issues */}
+          {groomingResult.issues && groomingResult.issues.length > 0 && (
+            <div className="bg-red-50 rounded-xl p-6 border border-red-200 mb-6">
+              <h4 className="text-red-800 font-semibold text-lg mb-4">Issues Identified</h4>
+              <ul className="space-y-2">
+                {groomingResult.issues.map((issue, i) => (
+                  <li key={i} className="flex items-start gap-3 text-red-700">
+                    <span className="bg-red-200 text-red-800 rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
+                      {i + 1}
+                    </span>
+                    <span className="text-sm">{issue}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Recommendations */}
+          {groomingResult.recommendations && groomingResult.recommendations.length > 0 && (
+            <div className="bg-green-50 rounded-xl p-6 border border-green-200 mb-6">
+              <h4 className="text-green-800 font-semibold text-lg mb-4">Recommendations</h4>
+              <ul className="space-y-2">
+                {groomingResult.recommendations.map((rec, i) => (
+                  <li key={i} className="flex items-start gap-3 text-green-700">
+                    <span className="bg-green-200 text-green-800 rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
+                      {i + 1}
+                    </span>
+                    <span className="text-sm">{rec}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex justify-center gap-4 mt-8">
+            <button
+              onClick={() => window.location.reload()}
+              className="bg-[#000099] text-white px-6 py-3 rounded-xl text-sm font-semibold hover:bg-blue-800 transition-colors duration-300"
+            >
+              New Assessment
+            </button>
+            <button
+              onClick={handleBackToDashboard}
+              className="bg-gray-600 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:bg-gray-700 transition-colors duration-300"
+            >
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-center">
+          <h3 className="text-red-800 font-semibold text-lg mb-2">Assessment Error</h3>
+          <p className="text-red-700 text-sm mb-4">{error}</p>
+          <div className="flex justify-center gap-4">
+            <button
+              onClick={() => window.location.reload()}
+              className="bg-red-600 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:bg-red-700 transition-colors duration-300"
+            >
+              Try Again
+            </button>
+            <button
+              onClick={handleCancel}
+              className="bg-gray-600 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:bg-gray-700 transition-colors duration-300"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default UnifiedCheck;
