@@ -1,34 +1,109 @@
-# Trend for date range
-trend_map = {}
+from datetime import datetime, timedelta
+from fastapi import Query
+import os
 
-for a in all_assessments:
-    ts = a.get("timestamp")
-    if not ts:
-        # Skip assessments missing timestamp instead of defaulting to current date
-        continue
+@app.get("/v1/individual-analysis")
+async def individual_analysis(
+    igaCode: str = Query(..., description="IGA code"),
+    crewName: str = Query(..., description="Crew name"),
+    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD"),
+    dateTo: str = Query(..., description="End date in YYYY-MM-DD"),
+):
     try:
-        dt = datetime.fromisoformat(ts).date()
-    except Exception:
-        # Skip if timestamp format is invalid
-        continue
-    
-    key = dt.strftime("%b %d")
-    if key not in trend_map:
-        trend_map[key] = {"compliant": 0, "nonCompliant": 0}
-    
-    if a.get("parsed", {}).get("assessment") == "COMPLIANT":
-        trend_map[key]["compliant"] += 1
-    else:
-        trend_map[key]["nonCompliant"] += 1
+        # Parse dates
+        start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
+        end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
 
-# Pad trend for all dates in range
-trend_list = []
-current_date = start_date
-while current_date <= end_date:
-    key = current_date.strftime("%b %d")
-    trend_list.append({
-        "date": key,
-        "compliant": trend_map.get(key, {}).get("compliant", 0),
-        "nonCompliant": trend_map.get(key, {}).get("nonCompliant", 0)
-    })
-    current_date += timedelta(days=1)
+        # Validate date range
+        if start_date > end_date:
+            return {"error": "dateFrom cannot be after dateTo"}
+
+        base_folder = os.getenv("GCS_BASE_FOLDER") or "Grooming-Results"
+        iga_slug = igaCode.strip().replace(" ", "-")
+
+        # Collect all assessments in date range
+        all_assessments = []
+        current_date = start_date
+        while current_date <= end_date:
+            date_str = current_date.strftime("%Y%m%d")
+            prefix = f"{base_folder}/{date_str}/{crewName}/{iga_slug}/"
+            names = listbyprefix(prefix)  # List files at path
+
+            for blob_name in names:
+                doc = downloadjson(blob_name)  # Download json content
+                if doc.get("igaCode") == igaCode and doc.get("crewName") == crewName:
+                    all_assessments.extend(doc.get("assessments", []))
+
+            current_date += timedelta(days=1)
+
+        if not all_assessments:
+            return {"error": "No assessments found for this crew in given date range"}
+
+        # Summary statistics
+        total = len(all_assessments)
+        compliant = sum(1 for a in all_assessments if a.get("parsed", {}).get("assessment") == "COMPLIANT")
+        noncompliant = total - compliant
+        passrate = f"{round(compliant / total * 100, 2)}%" if total > 0 else "0%"
+
+        # Category-wise non-compliance counts
+        categories = ["uniform", "hairstyle", "makeup", "nails", "accessories"]
+        category_counts = {c.capitalize(): 0 for c in categories}
+        for a in all_assessments:
+            details = a.get("parsed", {}).get("details", {})
+            for c in categories:
+                if details.get(c) and "NON" in details.get(c).upper():
+                    category_counts[c.capitalize()] += 1
+
+        # Trend for date range
+        trend_map = {}
+        for a in all_assessments:
+            ts = a.get("timestamp")
+            if not ts:
+                # Skip assessments missing timestamp instead of defaulting to current date
+                continue
+            try:
+                dt = datetime.fromisoformat(ts).date()
+            except Exception:
+                # Skip if timestamp format is invalid
+                continue
+            
+            key = dt.strftime("%b %d")
+            if key not in trend_map:
+                trend_map[key] = {"compliant": 0, "nonCompliant": 0}
+            
+            if a.get("parsed", {}).get("assessment") == "COMPLIANT":
+                trend_map[key]["compliant"] += 1
+            else:
+                trend_map[key]["nonCompliant"] += 1
+
+        # Pad trend for all dates in range
+        trend_list = []
+        current_date = start_date
+        while current_date <= end_date:
+            key = current_date.strftime("%b %d")
+            trend_list.append({
+                "date": key,
+                "compliant": trend_map.get(key, {}).get("compliant", 0),
+                "nonCompliant": trend_map.get(key, {}).get("nonCompliant", 0)
+            })
+            current_date += timedelta(days=1)
+
+        return {
+            "crew": {
+                "igaCode": igaCode,
+                "name": crewName,
+            },
+            "summary": {
+                "totalAssessments": total,
+                "compliant": compliant,
+                "nonCompliant": noncompliant,
+                "passRate": passrate,
+            },
+            "nonComplianceByCategory": category_counts,
+            "trend": trend_list,
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
