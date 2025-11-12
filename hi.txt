@@ -1,6 +1,77 @@
-from datetime import datetime, timedelta
-from fastapi import Query
+from __future__ import annotations
+
 import os
+import re
+import base64
+import shutil
+from datetime import datetime, timedelta, date as _date
+from typing import Optional, Dict, Any, Tuple, List
+
+from gcs_utils import _list_by_prefix, _download_json
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, UploadFile, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+# Load environment variables
+load_dotenv()
+
+import config  # noqa: E402
+
+from grooming_utils import (  # noqa: E402
+    check_grooming as run_grooming_analysis,
+    check_grooming_from_video,
+)
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Endpoint updated to accept videos only mp4 and max 20MB, plus other fixes
+
+@app.post("/check-grooming-video")
+async def check_grooming_video(
+    video: UploadFile = File(...),
+    name: str = Form(...),
+    iga_code: str = Form(...),
+):
+    # Accept only .mp4 files
+    if not video.filename.lower().endswith(".mp4"):
+        return JSONResponse({"error": "Only .mp4 files are allowed"}, status_code=400)
+
+    # Limit file size to 20 MB
+    video.file.seek(0, 2)  # seek to end of the file
+    size = video.file.tell()
+    video.file.seek(0)  # reset seek position
+
+    if size > 20 * 1024 * 1024:  # 20 MB limit
+        return JSONResponse({"error": "Video size must be <= 20 MB"}, status_code=400)
+    try:
+        videos_dir = os.path.join("uploads", "videos")
+        os.makedirs(videos_dir, exist_ok=True)
+        video_path = os.path.join(videos_dir, video.filename)
+        with open(video_path, "wb") as f:
+            shutil.copyfileobj(video.file, f)
+
+        full_text = check_grooming_from_video(video_path, name, iga_code)
+        parsed = _parse_text_to_ui(full_text, name, iga_code)
+        # Upload and event logging skipped for brevity
+
+        return {"status": "ok", "result": parsed}
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# The full individual analysis endpoint with trend fix and safe date parsing
 
 @app.get("/v1/individual-analysis")
 async def individual_analysis(
@@ -10,27 +81,24 @@ async def individual_analysis(
     dateTo: str = Query(..., description="End date in YYYY-MM-DD"),
 ):
     try:
-        # Parse dates
         start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
         end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
 
-        # Validate date range
         if start_date > end_date:
             return {"error": "dateFrom cannot be after dateTo"}
 
-        base_folder = os.getenv("GCS_BASE_FOLDER") or "Grooming-Results"
+        base_folder = os.getenv("GCS_BASE_FOLDER", "Grooming-Results")
         iga_slug = igaCode.strip().replace(" ", "-")
 
-        # Collect all assessments in date range
         all_assessments = []
         current_date = start_date
         while current_date <= end_date:
             date_str = current_date.strftime("%Y%m%d")
             prefix = f"{base_folder}/{date_str}/{crewName}/{iga_slug}/"
-            names = listbyprefix(prefix)  # List files at path
+            names = _list_by_prefix(prefix)
 
             for blob_name in names:
-                doc = downloadjson(blob_name)  # Download json content
+                doc = _download_json(blob_name)
                 if doc.get("igaCode") == igaCode and doc.get("crewName") == crewName:
                     all_assessments.extend(doc.get("assessments", []))
 
@@ -39,13 +107,11 @@ async def individual_analysis(
         if not all_assessments:
             return {"error": "No assessments found for this crew in given date range"}
 
-        # Summary statistics
         total = len(all_assessments)
         compliant = sum(1 for a in all_assessments if a.get("parsed", {}).get("assessment") == "COMPLIANT")
         noncompliant = total - compliant
         passrate = f"{round(compliant / total * 100, 2)}%" if total > 0 else "0%"
 
-        # Category-wise non-compliance counts
         categories = ["uniform", "hairstyle", "makeup", "nails", "accessories"]
         category_counts = {c.capitalize(): 0 for c in categories}
         for a in all_assessments:
@@ -54,29 +120,25 @@ async def individual_analysis(
                 if details.get(c) and "NON" in details.get(c).upper():
                     category_counts[c.capitalize()] += 1
 
-        # Trend for date range
         trend_map = {}
         for a in all_assessments:
             ts = a.get("timestamp")
             if not ts:
-                # Skip assessments missing timestamp instead of defaulting to current date
                 continue
             try:
                 dt = datetime.fromisoformat(ts).date()
             except Exception:
-                # Skip if timestamp format is invalid
                 continue
-            
+
             key = dt.strftime("%b %d")
             if key not in trend_map:
                 trend_map[key] = {"compliant": 0, "nonCompliant": 0}
-            
+
             if a.get("parsed", {}).get("assessment") == "COMPLIANT":
                 trend_map[key]["compliant"] += 1
             else:
                 trend_map[key]["nonCompliant"] += 1
 
-        # Pad trend for all dates in range
         trend_list = []
         current_date = start_date
         while current_date <= end_date:
@@ -89,10 +151,7 @@ async def individual_analysis(
             current_date += timedelta(days=1)
 
         return {
-            "crew": {
-                "igaCode": igaCode,
-                "name": crewName,
-            },
+            "crew": {"igaCode": igaCode, "name": crewName},
             "summary": {
                 "totalAssessments": total,
                 "compliant": compliant,
@@ -102,8 +161,60 @@ async def individual_analysis(
             "nonComplianceByCategory": category_counts,
             "trend": trend_list,
         }
-
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return {"error": str(e)}
+
+
+
+
+
+
+import base64
+import google.auth
+import google.generativeai as genai
+import re
+from typing import Optional, Dict, Any, List
+
+# Setup Gemini, API credentials, prompts etc.
+
+# Hardcoded threshold for compliance
+COMPLIANCE_THRESHOLD = 7
+
+# Grooming prompt and outputs setup omitted for brevity
+
+def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
+    # Your existing regex extraction and parsing logic...
+
+    # Example placeholders for extracted data (replace with your actual logic)
+    assessment = None  # extracted from text
+    score = None  # extracted from text
+
+    # After extraction, hardcode compliance threshold:
+    if score is not None:
+        assessment = "COMPLIANT" if score >= COMPLIANCE_THRESHOLD else "NON-COMPLIANT"
+
+    # Your existing code to extract details, issues, recommendations, scores etc.
+
+    return {
+        "name": name or "",
+        "igaCode": iga or "",
+        "assessment": assessment,
+        "score": score,
+        # other parsed fields here
+    }
+
+def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
+    with open(video_path, "rb") as f:
+        video_b64 = base64.b64encode(f.read()).decode("utf-8")
+    # Send to Gemini API with prompt etc.
+    prompt = "Your prompt..."
+    response = genai.generate_content(
+        model="gemini-2.5-pro",
+        prompt=prompt,
+        inline_data={"data": video_b64, "mimetype": "video/mp4"},
+        temperature=0.0,
+    )
+    return response.text
