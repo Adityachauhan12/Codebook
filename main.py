@@ -1,171 +1,389 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
-from fastapi.responses import JSONResponse
-from pathlib import Path
-import uuid
-from typing import List, Optional, Dict
-from app.capture_photo import analyze_video
-from app.book_find import extract_text_from_image, get_books_present_via_gpt, ALL_BOOKS, fuzzy_match_books
-from app.compare_books import compare_book_lists
-import cv2
+# main.py — Grooming checks + Insights/Search APIs (FastAPI)
+
+from __future__ import annotations
+
 import os
+import re
+import base64
+import shutil
 
-CAPTURED_DIR = Path("captured_frames")
-DETECTED_DIR = Path("detected_faces")
+from datetime import datetime, timedelta, date as _date
+from typing import Optional, Dict, Any, Tuple, List
+from gcs_utils import _list_by_prefix, _download_json
 
-app = FastAPI()
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, UploadFile, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-@app.on_event("startup")
-def startup():
-    CAPTURED_DIR.mkdir(parents=True, exist_ok=True)
-    DETECTED_DIR.mkdir(parents=True, exist_ok=True)
-    print("📚 Books-Cam System started")
+# Load environment variables
+load_dotenv()
 
-@app.get("/")
-def root():
-    return {"message": "Books-Cam System is running", "status": "ok"}
+import config  # noqa: E402
 
-def parse_books_param(books_list: Optional[List[str]], books_csv: Optional[str]) -> List[str]:
-    if books_list and isinstance(books_list, list):
-        cleaned = [b.strip() for b in books_list if isinstance(b, str) and b.strip()]
-        if cleaned:
-            return cleaned
-    if books_csv and isinstance(books_csv, str):
-        parts = [p.strip() for p in books_csv.split(",") if p.strip()]
-        if parts:
-            return parts
-    return ALL_BOOKS
+# ---------------- Grooming analysis (Gemini) ----------------
+from grooming_utils import (  # noqa: E402
+    check_grooming as run_grooming_analysis,
+    check_grooming_from_video,
+)
 
-def _crop_and_save(img_path: str, roi: Dict[str,int], out_path: str) -> str:
-    img = cv2.imread(img_path)
-    if img is None:
-        raise RuntimeError(f"Cannot read image: {img_path}")
-    H, W = img.shape[:2]
-    x = max(0, min(roi['x'], W-1)); y = max(0, min(roi['y'], H-1))
-    w = max(1, min(roi['w'], W-x)); h = max(1, min(roi['h'], H-y))
-    crop = img[y:y+h, x:x+w]
-    cv2.imwrite(out_path, crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-    return out_path
+# ---------------- Regex helpers to parse Gemini text ----------------
+_rx = {
+    "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
+    # Broaden label tolerance: Overall or Total
+    "overall_score": re.compile(
+        r"(?:Overall|Total)\s*Score\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10", re.I
+    ),
+    "uniform_score": re.compile(r"Uniform\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*3", re.I),
+    "nails_score": re.compile(r"Nails\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*1", re.I),
+    "hairstyle_score": re.compile(r"Hairstyle\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
+    "makeup_score": re.compile(r"Makeup\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
+    "accessories_score": re.compile(
+        r"Accessories\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I
+    ),
+    "hair_detail": re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
+    "makeup_detail": re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
+    "nails_detail": re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
+    "acc_detail": re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
+    "uniform_detail": re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
+    "issues_block": re.compile(r"Issues\s*Found\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
+    "reco_block": re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
+}
 
-@app.post("/monitor-bookshelf")
-async def monitor_bookshelf(
-    file: UploadFile = File(...),
-    shelf_x: Optional[int] = Form(default=None),
-    shelf_y: Optional[int] = Form(default=None),
-    shelf_w: Optional[int] = Form(default=None),
-    shelf_h: Optional[int] = Form(default=None),
-    wait_seconds: float = Form(default=3.0),
-    min_change_hamming: int = Form(default=8),
-    min_hist_diff: float = Form(default=0.18),
-    books: Optional[List[str]] = Form(default=None),
-    books_csv: Optional[str] = Form(default=None),
-    use_gpt: bool = Form(default=False),
-):
-    print(f"\n{'='*60}")
-    print(f"📹 New request: {file.filename}")
-    print(f"{'='*60}")
-    
-    ext = Path(file.filename).suffix.lower()
-    if ext not in {".mp4", ".mov", ".avi", ".mkv"}:
-        raise HTTPException(status_code=400, detail="Unsupported video format")
-    video_path = CAPTURED_DIR / f"{uuid.uuid4()}{ext}"
+
+def _extract(pat: re.Pattern, text: str) -> Tuple[bool, str]:
+    m = pat.search(text or "")
+    return (m is not None, m.group(1).strip() if m else "")
+
+
+def _num(s: str) -> Optional[float]:
     try:
-        with video_path.open("wb") as f:
-            while True:
-                chunk = await file.read(1024*1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-        print(f"✅ Video saved: {video_path}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save video: {e}")
+        return float(s)
+    except Exception:
+        return None
 
-    shelf_roi = None
-    if all(v is not None for v in (shelf_x, shelf_y, shelf_w, shelf_h)) and (shelf_w or 0) > 0 and (shelf_h or 0) > 0:
-        shelf_roi = {"x": shelf_x, "y": shelf_y, "w": shelf_w, "h": shelf_h}
-        print(f"📐 Using shelf ROI: {shelf_roi}")
-    else:
-        print(f"📐 No shelf ROI specified, using full frame")
 
-    known_titles = parse_books_param(books, books_csv)
-    print(f"📚 Monitoring {len(known_titles)} books")
+def _lines_to_list(block: str) -> List[str]:
+    out: List[str] = []
+    for ln in (block or "").splitlines():
+        t = ln.strip()
+        if not t:
+            continue
+        if t.startswith("-"):
+            out.append(t.lstrip("- ").strip())
+        elif t[0:2].isdigit() or t.startswith(("1.", "2.", "3.", "4.", "5.")):
+            out.append(t.split(".", 1)[-1].strip() if "." in t else t)
+    return out
+
+
+def _normalize_assessment(a: Optional[str]) -> Optional[str]:
+    if a is None:
+        return None
+    a = a.strip().upper()
+    a = a.replace("NONCOMPLIANT", "NON-COMPLIANT")
+    return a if a in ("COMPLIANT", "NON-COMPLIANT") else None
+
+
+def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
+    ok_assess, a_text = _extract(_rx["overall_assessment"], text)
+    ok_score, s_text = _extract(_rx["overall_score"], text)
+
+    score = _num(s_text) if ok_score else None
+    assessment = _normalize_assessment(a_text if ok_assess else None)
+
+    details: Dict[str, str] = {}
+    for key, rx_key in [
+        ("uniform", "uniform_detail"),
+        ("hairstyle", "hair_detail"),
+        ("makeup", "makeup_detail"),
+        ("nails", "nails_detail"),
+        ("accessories", "acc_detail"),
+    ]:
+        _, v = _extract(_rx[rx_key], text)
+        details[key] = v
+
+    cats: Dict[str, Optional[float]] = {}
+    for c, rx_c in [
+        ("uniform", "uniform_score"),
+        ("nails", "nails_score"),
+        ("hairstyle", "hairstyle_score"),
+        ("makeup", "makeup_score"),
+        ("accessories", "accessories_score"),
+    ]:
+        ok, val = _extract(_rx[rx_c], text)
+        cats[c] = _num(val) if ok else None
+
+    # Normalization + fallbacks to guarantee stable UI
+    cats = {k: (int(v) if v is not None else None) for k, v in cats.items()}
+
+    if score is None:
+        score = int(sum(v or 0 for v in cats.values()))
+        if score > 10:
+            score = 10
+
+    if assessment is None and score is not None:
+        assessment = "COMPLIANT" if score >= 7 else "NON-COMPLIANT"
+
+    ok_i, block_i = _extract(_rx["issues_block"], text)
+    ok_r, block_r = _extract(_rx["reco_block"], text)
+
+    return {
+        "person": {"name": name or "", "iga_code": iga or ""},
+        "assessment": assessment,
+        "score": score,
+        "scores": cats,
+        "details": details,
+        "issues": _lines_to_list(block_i) if ok_i else [],
+        "recommendations": _lines_to_list(block_r) if ok_r else [],
+    }
+
+
+# ---------------- GCS utils used by grooming routes ----------------
+from gcs_utils import (  # noqa: E402
+    upload_image_bytes,
+    upload_grooming_result_text,
+    append_event_to_crew_log,
+    create_ticket,
+)
+
+# ---------------- App setup ----------------
+app = FastAPI(title="Grooming Checks + Insights API", version="2.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class GroomingRequest(BaseModel):
+    imageBase64: str
+    crewName: Optional[str] = None
+    igaCode: Optional[str] = None
+    base: Optional[str] = None  # currently unused; kept for forward compatibility
+    department: Optional[str] = None  # currently unused
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok", "time": datetime.now().isoformat()}
+
+
+# ---------------- Grooming (image) ----------------
+@app.post("/check-grooming")
+async def check_grooming_endpoint(payload: GroomingRequest):
+    if not payload.imageBase64 or len(payload.imageBase64) < 10:
+        return JSONResponse({"error": "Invalid image"}, status_code=400)
 
     try:
-        print(f"\n--- Video Analysis ---")
-        person_id, person_name, before_img, after_img, changed_rois = analyze_video(
-            str(video_path),
-            shelf_roi=shelf_roi,
-            wait_seconds=wait_seconds,
-            min_change_hamming=min_change_hamming,
-            min_hist_diff=min_hist_diff,
+        b64 = payload.imageBase64.split(",")[-1]
+        img_bytes = base64.b64decode(b64)
+
+        # Run Gemini grooming analysis
+        report = run_grooming_analysis(b64)
+        parsed = _parse_text_to_ui(report, payload.crewName, payload.igaCode)
+
+        # Persist artifacts/results in GCS
+        img_path = upload_image_bytes(img_bytes, payload.igaCode, "image", payload.crewName)
+        upload_grooming_result_text(report, payload.crewName, payload.igaCode, img_path,parsed=parsed)
+        append_event_to_crew_log(
+            {"type": "image", "parsed": parsed, "image_path": img_path},
+            payload.crewName,
+            payload.igaCode,
+        )
+        create_ticket(
+            {"type": "image", "igaCode": payload.igaCode, "crewName": payload.crewName, "image_path": img_path}
         )
 
-        print(f"\n--- OCR Processing (Changed Cells) ---")
-        before_books_all: List[str] = []
-        after_books_all: List[str] = []
-        debug_cells = []
-        if not changed_rois:
-            changed_rois = [{"x":0,"y":0,"w":0,"h":0,"cell":"all","score":0.0}]
-        for idx, roi in enumerate(changed_rois):
-            b_out = str(CAPTURED_DIR / f"roi_before_{idx}.jpg")
-            a_out = str(CAPTURED_DIR / f"roi_after_{idx}.jpg")
-            roi_use = {"x":0,"y":0,"w":999999,"h":999999} if roi["w"] == 0 or roi["h"] == 0 else roi
-            _crop_and_save(before_img, roi_use, b_out)
-            _crop_and_save(after_img, roi_use, a_out)
+        return {"status": "ok", "result": parsed}
+    except Exception as e:
+        import traceback
 
-            b_lines = extract_text_from_image(b_out)
-            a_lines = extract_text_from_image(a_out)
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
 
-            if use_gpt:
-                b_gpt = get_books_present_via_gpt(b_lines, known_titles)
-                a_gpt = get_books_present_via_gpt(a_lines, known_titles)
+
+# ---------------- Grooming (video) ----------------
+@app.post("/check-grooming-video")
+async def check_grooming_video(
+    video: UploadFile = File(...),
+    name: str = Form(...),
+    iga_code: str = Form(...),
+):
+    try:
+        video_dir = "uploads/videos"
+        os.makedirs(video_dir, exist_ok=True)
+        video_path = os.path.join(video_dir, video.filename)
+        with open(video_path, "wb") as f:
+            shutil.copyfileobj(video.file, f)
+
+        full_text = check_grooming_from_video(video_path, name, iga_code)
+        parsed = _parse_text_to_ui(full_text, name, iga_code)
+
+        upload_grooming_result_text(full_text, name, iga_code, None,parsed=parsed)
+        append_event_to_crew_log({"type": "video", "parsed": parsed}, name, iga_code)
+        create_ticket({"type": "video", "iga_code": iga_code, "crew_name": name})
+
+        return {"status": "ok", "result": parsed}
+    except Exception as e:
+        print(f"Error in /check-grooming-video: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ---------------- The 3 requested APIs ----------------
+from dashboard_service import get_insights, get_info, search_people  # noqa: E402
+
+
+def _resolve_range(dateFrom: Optional[_date], dateTo: Optional[_date], days: Optional[int]):
+    """
+    Resolve final date range.
+    If days is supplied (e.g., 7), returns last N days including today.
+    Else uses dateFrom/dateTo. Defaults to last 7 days.
+    """
+    today = datetime.utcnow().date()
+    if days and int(days) > 0:
+        d = int(days)
+        _from = today - timedelta(days=d - 1)
+        _to = today
+        return _from, _to
+    _from = dateFrom or (today - timedelta(days=6))
+    _to = dateTo or today
+    return _from, _to
+
+
+# 1) MAIN insights — grooming vs non-grooming, categories, daily hover graph, top 5 groomed/non-groomed, recent tests
+@app.get("/v1/insights")
+async def insights(
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None, description="custom duration in days; e.g., 7 for last 7 days"),
+    page: int = 1,
+    pageSize: int = 25,
+):
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    return get_insights(_from, _to, page, pageSize)
+
+
+# 2) General info box — cards-like KPIs with base=null
+@app.get("/v1/info")
+async def info_box(
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None),
+):
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    return get_info(_from, _to)
+
+
+# 3) Search — by IGA code or crew name (case-insensitive), paginated
+@app.get("/v1/search")
+async def search_endpoint(
+    q: str = Query("", description="search by IGA code or crew name (case-insensitive)"),
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None),
+    page: int = 1,
+    pageSize: int = 25,
+):
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    return search_people(_from, _to, q, page, pageSize)
+
+# 4) Individual crew analysis — by IGA code or crew name, last 7 days by default
+
+@app.get("/v1/individual-analysis")
+async def individual_analysis(
+    igaCode: str = Query(..., description="IGA code"),
+    crewName: str = Query(..., description="Crew name"),
+    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD"),
+    dateTo: str = Query(..., description="End date in YYYY-MM-DD")
+):
+    try:
+        # Parse dates
+        start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
+        end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
+        if start_date > end_date:
+            return {"error": "dateFrom cannot be after dateTo"}
+
+        base_folder = os.getenv("GCS_BASE_FOLDER", "Grooming-Results")
+        iga_slug = igaCode.strip().replace(" ", "_")
+
+        # Collect assessments within date range
+        all_assessments = []
+        current_date = start_date
+        while current_date <= end_date:
+            date_str = current_date.strftime("%Y%m%d")
+            prefix = f"{base_folder}/{date_str}/crew_{iga_slug}_"
+            names = _list_by_prefix(prefix)
+            for blob_name in names:
+                doc = _download_json(blob_name)
+                if doc.get("iga_code") == igaCode and doc.get("crew_name") == crewName:
+                    all_assessments.extend(doc.get("assessments", []))
+            current_date += timedelta(days=1)
+
+        if not all_assessments:
+            return {"error": "No assessments found for this crew in given date range"}
+
+        # Summary
+        total = len(all_assessments)
+        compliant = sum(1 for a in all_assessments if a.get("parsed", {}).get("assessment") == "COMPLIANT")
+        non_compliant = total - compliant
+        pass_rate = f"{round((compliant / total) * 100, 2)}%"
+
+        # Category-wise non-compliance
+        categories = ["uniform", "hairstyle", "makeup", "nails", "accessories"]
+        category_counts = {c.capitalize(): 0 for c in categories}
+        for a in all_assessments:
+            details = a.get("parsed", {}).get("details", {})
+            for c in categories:
+                if details.get(c) and "NON" in details.get(c).upper():
+                    category_counts[c.capitalize()] += 1
+
+        # Trend for date range
+        trend_map = {}
+        for a in all_assessments:
+            ts = a.get("timestamp") or datetime.utcnow().isoformat()
+            dt = datetime.fromisoformat(ts).date()
+            key = dt.strftime("%b %d")
+            if key not in trend_map:
+                trend_map[key] = {"compliant": 0, "nonCompliant": 0}
+            if a.get("parsed", {}).get("assessment") == "COMPLIANT":
+                trend_map[key]["compliant"] += 1
             else:
-                b_gpt = []; a_gpt = []
-            b_books = b_gpt if b_gpt else fuzzy_match_books(b_lines, known_titles)
-            a_books = a_gpt if a_gpt else fuzzy_match_books(a_lines, known_titles)
+                trend_map[key]["nonCompliant"] += 1
 
-            before_books_all.extend(b_books)
-            after_books_all.extend(a_books)
-            debug_cells.append({
-                "cell": roi.get("cell", str(idx)),
-                "score": roi.get("score", 0.0),
-                "before_lines": len(b_lines),
-                "after_lines": len(a_lines),
-                "before_books": b_books,
-                "after_books": a_books
+        # Pad trend for all dates in range
+        trend_list = []
+        current_date = start_date
+        while current_date <= end_date:
+            key = current_date.strftime("%b %d")
+            trend_list.append({
+                "date": key,
+                "compliant": trend_map.get(key, {}).get("compliant", 0),
+                "nonCompliant": trend_map.get(key, {}).get("nonCompliant", 0)
             })
+            current_date += timedelta(days=1)
 
-        before_books_all = list(dict.fromkeys(before_books_all))
-        after_books_all = list(dict.fromkeys(after_books_all))
-        print(f"\n--- Book Identification (Aggregated) ---")
-        diff = compare_book_lists(before_books_all, after_books_all)
-
-        result = {
-            "personId": person_id or "Unknown",
-            "personName": person_name or "Unknown",
-            "taken": diff["removed"],
-            "placed": diff["added"],
-            "debug": {
-                "changed_cells": debug_cells,
-                "before_books": before_books_all,
-                "after_books": after_books_all,
-                "before_image": before_img,
-                "after_image": after_img
-            }
+        return {
+            "crew": {"igaCode": igaCode, "name": crewName},
+            "summary": {
+                "totalAssessments": total,
+                "compliant": compliant,
+                "nonCompliant": non_compliant,
+                "passRate": pass_rate
+            },
+            "nonComplianceByCategory": category_counts,
+            "trend": trend_list
         }
 
-        print(f"\n--- Results ---")
-        print(f"Person: {result['personName']}")
-        print(f"Taken: {result['taken']}")
-        print(f"Placed: {result['placed']}")
-        print(f"{'='*60}\n")
-
-        return JSONResponse(result)
     except Exception as e:
-        print(f"\n❌ Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path.exists():
-            try:
-                os.remove(video_path)
-            except Exception:
-                pass
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+# ---------------- Entrypoint ----------------
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=True)
