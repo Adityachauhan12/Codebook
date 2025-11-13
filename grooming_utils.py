@@ -5,6 +5,7 @@ Grooming Assessment Module with Strict Evidence-First Rubric
 - Decimal scoring with no rounding (preserves precision)
 - Sub-category breakdown for fine-grained scoring
 - Compliance threshold: score >= 7.0
+- NO (Evidence: Frame X.Xs) tags in output
 """
 
 import base64
@@ -49,7 +50,7 @@ SECTION: Hardcoded Policies (NO SPECULATION)
 
 SECTION: Order of Checks
 - Evaluate categories in this fixed order: Hairstyle → Makeup → Nails → Accessories → Uniform.
-- Within each category, apply the defined sub‑criteria sequentially and record short evidence tags like "Frame 5.0s" or "Image: Left profile".
+- Within each category, apply the defined sub‑criteria sequentially and record deductions clearly.
 
 SECTION: Policy Reference (what to assess)
 
@@ -159,7 +160,8 @@ SECTION: Output Contract Reminder
 - Respond strictly using the OUTPUT_FORMAT provided below
 - Maintain section order, labels, and 1–2 line limits for category notes
 - Include (NOT VISIBLE) tags where applicable
-- Use decimal scores (e.g., 8.5, 7.2) with no rounding
+- Use decimal scores (e.g., 8.5, 7.2, 1.5) with no rounding
+- DO NOT include any (Evidence: Frame X.Xs) or (Evidence: ...) tags in output
 """
 
 # ===================================================================
@@ -168,32 +170,43 @@ SECTION: Output Contract Reminder
 OUTPUT_FORMAT = """
 Important: Output must include exactly these sections in order:
 
-1) Overall Assessment: <COMPLIANT or NON-COMPLIANT>
+GROOMING ASSESSMENT RESULT
 
-2) Detailed Assessment:
-- Hairstyle: <1–2 lines with evidence tag or NOT VISIBLE>
-- Makeup: <1–2 lines with evidence tag or NOT VISIBLE>
-- Nails: <1–2 lines with evidence tag or NOT VISIBLE>
-- Accessories: <1–2 lines with evidence tag or NOT VISIBLE>
-- Uniform: <1–2 lines with evidence tag or NOT VISIBLE>
+Overall Assessment: <COMPLIANT or NON-COMPLIANT>
+Overall Score: <X.X>/10.0 [e.g., 8.5, 7.2, 9.0]
 
-3) Issues Found:
-- <specific visible violation or issue only if present>
+Category Scores:
+
+Hairstyle: <x.x>/2.0
+<1-2 line description or NOT VISIBLE>
+
+Makeup: <x.x>/2.0
+<1-2 line description or NOT VISIBLE>
+[If deductions: Breakdown: Base x.x + Eyes x.x + Lips x.x + Overall x.x = total]
+
+Nails: <x.x>/1.0
+<1-2 line description or NOT VISIBLE>
+
+Accessories: <x.x>/2.0
+<1-2 line description or NOT VISIBLE>
+
+Uniform: <x.x>/3.0
+<1-2 line description or NOT VISIBLE>
+
+Issues Found:
+- <specific visible violation only if present>
 - <next issue only if present>
 
-4) Recommendations:
+Recommendations:
 - <actionable recommendation if needed>
 - <next recommendation if needed>
 
-5) Scores (all decimals, no rounding):
-Overall Score: <X.X>/10.0 [e.g., 8.5, 7.2, 7.0]
-
-Detailed Breakdown:
-- Hairstyle: <x.x>/2.0 [style: 0.0 or 0.3 or 0.6, neatness: 0.0 or 0.3 or 0.6, color: 0.0 or 0.2 or 0.4, finish: 0.0 or 0.2 or 0.4] or (NOT VISIBLE)
-- Makeup: <x.x>/2.0 [base: 0.0 or 0.3 or 0.6, eyes: 0.0 or 0.3 or 0.6, lips: 0.0 or 0.2 or 0.4, overall: 0.0 or 0.2 or 0.4] or (NOT VISIBLE)
-- Nails: <x.x>/1.0 [length/shape: 0.0 or 0.25 or 0.5, color/finish: 0.0 or 0.25 or 0.5] or (NOT VISIBLE)
-- Accessories: <x.x>/2.0 [rings: 0.0 or 0.25 or 0.5, earrings: 0.0 or 0.25 or 0.5, watch: 0.0 or 0.25 or 0.5, prohibitions: 0.0 or 0.25 or 0.5]
-- Uniform: <x.x>/3.0 [tunic: 0.0 or 0.5 or 1.0, scarf: 0.0 or 0.25 or 0.5, badge: 0.0 or 0.25 or 0.5, stockings: 0.0 or 0.25 or 0.5, overall: 0.0 or 0.25 or 0.5]
+SCORING DETAILS (if deductions occurred):
+- Hairstyle: [style: x.x, neatness: x.x, color: x.x, finish: x.x]
+- Makeup: [base: x.x, eyes: x.x, lips: x.x, overall: x.x]
+- Nails: [length/shape: x.x, color/finish: x.x]
+- Accessories: [rings: x.x, earrings: x.x, watch: x.x, prohibitions: x.x]
+- Uniform: [tunic: x.x, scarf: x.x, badge: x.x, stockings: x.x, overall: x.x]
 """
 
 def check_grooming(image_b64: str) -> str:
@@ -215,7 +228,8 @@ def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
         "Analyze this short clip for grooming compliance as if it were clear frames of the same person.\n"
         "Sample frames uniformly at 1 fps with 0.5s offset, maximum 12 frames.\n"
         "Use majority rule across frames; on tie, apply stricter (non-compliant) outcome for that sub-criterion.\n"
-        "Do NOT hallucinate missing items. If nails, watch, rings, or stockings are not visible, mark (NOT VISIBLE) and do not deduct.\n\n"
+        "Do NOT hallucinate missing items. If nails, watch, rings, or stockings are not visible, mark (NOT VISIBLE) and do not deduct.\n"
+        "Do NOT include any (Evidence: Frame X.Xs) tags in the output.\n\n"
         f"{OUTPUT_FORMAT}"
     )
     response = model.generate_content([
