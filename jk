@@ -1,3 +1,100 @@
-{
-  "error": "cannot import name 'load_records' from 'dashboard_service' (C:\\Users\\aditya.chauhan2\\OneDrive - InterGlobe Aviation Limited\\Desktop\\brand new\\IFS_GROOMING_BE\\dashboard_service.py)"
-}
+@app.get("/v1/individual-analysis")
+async def individual_analysis(
+    igaCode: str = Query(..., description="IGA code"),
+    crewName: str = Query(..., description="Crew name"),
+    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD"),
+    dateTo: str = Query(..., description="End date in YYYY-MM-DD"),
+):
+    try:
+        # Parse dates
+        start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
+        end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
+
+        if start_date > end_date:
+            return {"error": "dateFrom cannot be after dateTo"}
+
+        # Import the internal function directly
+        from dashboard_service import _load_records, Filters
+        
+        # Load all records in date range (same as insights API)
+        filters = Filters(date_from=start_date, date_to=end_date)
+        all_records = _load_records(filters)
+
+        # Filter for this specific crew (case-insensitive)
+        iga_normalized = igaCode.strip().upper()
+        crew_normalized = crewName.strip().upper()
+        
+        crew_records = [
+            r for r in all_records 
+            if (r.get("iga_code") or "").strip().upper() == iga_normalized 
+            and (r.get("crew_name") or "").strip().upper() == crew_normalized
+        ]
+
+        if not crew_records:
+            return {"error": "No assessments found for this crew in given date range"}
+
+        # Summary statistics
+        total = len(crew_records)
+        compliant = sum(1 for r in crew_records if r.get("assessment") == "COMPLIANT")
+        noncompliant = total - compliant
+        passrate = f"{round(compliant / total * 100, 2)}%" if total > 0 else "0%"
+
+        # Category-wise non-compliance counts
+        categories = ["uniform", "hairstyle", "makeup", "nails", "accessories"]
+        category_counts = {c.capitalize(): 0 for c in categories}
+        for r in crew_records:
+            issues = r.get("issues") or []
+            for issue in issues:
+                issue_lower = (issue or "").lower()
+                for c in categories:
+                    if c in issue_lower:
+                        category_counts[c.capitalize()] += 1
+                        break
+
+        # Trend for date range
+        trend_map = {}
+        for r in crew_records:
+            date_obj = r.get("date")
+            if not date_obj:
+                continue
+            
+            key = date_obj.strftime("%Y-%m-%d")
+            if key not in trend_map:
+                trend_map[key] = {"compliant": 0, "nonCompliant": 0}
+            
+            if r.get("assessment") == "COMPLIANT":
+                trend_map[key]["compliant"] += 1
+            else:
+                trend_map[key]["nonCompliant"] += 1
+
+        # Pad trend for all dates in range
+        trend_list = []
+        current_date = start_date
+        while current_date <= end_date:
+            key = current_date.strftime("%Y-%m-%d")
+            trend_list.append({
+                "date": key,
+                "compliant": trend_map.get(key, {}).get("compliant", 0),
+                "nonCompliant": trend_map.get(key, {}).get("nonCompliant", 0)
+            })
+            current_date += timedelta(days=1)
+
+        return {
+            "crew": {
+                "igaCode": igaCode,
+                "name": crewName,
+            },
+            "summary": {
+                "totalAssessments": total,
+                "compliant": compliant,
+                "nonCompliant": noncompliant,
+                "passRate": passrate,
+            },
+            "nonComplianceByCategory": category_counts,
+            "trend": trend_list,
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
