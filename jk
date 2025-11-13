@@ -5,6 +5,7 @@ image or video data to the Gemini API along with a detailed prompt.
 """
 
 import base64
+import re
 import google.auth
 import google.generativeai as genai
 
@@ -26,7 +27,7 @@ RULES:
 - If whole category compliant, score full marks
 - If violation exists, show: [Category Score breakdown only for that category]
 - Concise explanations per category
-- If part of uniform and nails are not visible mark them as "NOT VISIBLE" and state in issue but no reduction in marks and state the in Issues and Recommendations
+- If part of uniform and nails are not visible mark them as "NOT VISIBLE" and state in issue but no reduction in marks and state it in Issues and Recommendations
 - If Visible and not Compliant then deduct marks
 
 HAIRSTYLE (2.0):
@@ -65,7 +66,7 @@ UNIFORM (3.0):
 - Badge: visible, aligned
 - Stockings: (if NOT VISIBLE mark as such) compliant color
 - If all compliant: 3.0. If violation: [Tunic 1.0 + Scarf 0.5 + Badge 0.5 + Stockings 0.5 + Overall 0.5]
-- If name badge/id badge is not visble then state as NOT VISIBLE but dont deduct marks and state the in Issues and Recommendations
+- If name badge/id badge is not visible then state as NOT VISIBLE but dont deduct marks and state it in Issues and Recommendations
 
 COMPLIANCE: Score >= 7.0 = COMPLIANT, else NON-COMPLIANT
 
@@ -92,17 +93,6 @@ Recommendations:
 - [Actionable fix] (only if needed)
 """
 
-def _post_gemini(parts):
-    """Send request to Gemini API and return text response."""
-    headers = {"Content-Type": "application/json"}
-    payload = {"contents": [{"parts": parts}]}
-    r = requests.post(GEMINI_ENDPOINT, headers=headers, json=payload, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        return ""
 
 def _normalize_output(report_text: str) -> str:
     """Normalize scores to X.X format."""
@@ -122,39 +112,62 @@ def _normalize_output(report_text: str) -> str:
     
     for cat, maxval in category_maxes.items():
         pattern = rf'({re.escape(cat)}\s*:\s*)([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)'
+        
         def replace_score(m):
             num = float(m.group(2))
             return f"{m.group(1)}{num:.1f}/{m.group(3)}"
+        
         report_text = re.sub(pattern, replace_score, report_text, flags=re.IGNORECASE)
     
     return report_text
 
+
 def check_grooming(image_b64: str) -> str:
     """Single image assessment - concise format."""
-    prompt = f"{FACE_GROOMING_PROMPT}"
-    parts = [
-        {"text": prompt},
-        {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
-    ]
-    raw = _post_gemini(parts)
-    return _normalize_output(raw)
+    try:
+        image_data = base64.b64decode(image_b64)
+        response = model.generate_content(
+            [
+                FACE_GROOMING_PROMPT,
+                {
+                    "mime_type": "image/jpeg",
+                    "data": image_data
+                }
+            ]
+        )
+        return _normalize_output(response.text)
+    except Exception as e:
+        return f"Error processing image: {str(e)}"
+
 
 def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
     """Video assessment - concise format with crew info."""
-    with open(video_path, "rb") as f:
-        video_b64 = base64.b64encode(f.read()).decode("utf-8")
+    try:
+        with open(video_path, "rb") as f:
+            video_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    prompt = (
-        f"{FACE_GROOMING_PROMPT}\n\n"
-        "This is a video. Sample frames uniformly. Use majority rule for assessment.\n"
-        "Output format:\nGrooming Result (Video)\nIGA: {iga_code}\n...[rest of concise format]"
-    )
-    parts = [
-        {"text": prompt},
-        {"inline_data": {"mime_type": "video/webm", "data": video_b64}},
-    ]
-    raw = _post_gemini(parts)
-    return _normalize_output(raw)
+        video_data = base64.b64decode(video_b64)
+        
+        prompt = (
+            f"{FACE_GROOMING_PROMPT}\n\n"
+            "This is a video. Sample frames uniformly. Use majority rule for assessment.\n"
+            f"Output format:\nGrooming Result (Video)\nIGA: {iga_code}\n...[rest of concise format]"
+        )
+        
+        response = model.generate_content(
+            [
+                prompt,
+                {
+                    "mime_type": "video/mp4",
+                    "data": video_data
+                }
+            ]
+        )
+        
+        return _normalize_output(response.text)
+    except Exception as e:
+        return f"Error processing video: {str(e)}"
+
 
 def check_grooming_from_frames(frames_b64: list, name: str, iga_code: str) -> str:
     """Multiple frames assessment."""
