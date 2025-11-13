@@ -1,16 +1,21 @@
+"""
+A toolkit for communicating with the Google Gemini API for grooming checks.
+This module provides standalone functions to assess grooming standards by sending
+image or video data to the Gemini API along with a detailed prompt.
+"""
+
 import base64
-import os
-import re
-import requests
-from dotenv import load_dotenv
+import google.auth
+import google.generativeai as genai
 
-load_dotenv()
-API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_ENDPOINT = (
-    "https://generativelanguage.googleapis.com/v1/models/"
-    f"gemini-2.5-pro:generateContent?key={API_KEY}"
-)
+# Setup Gemini with ADC
+SCOPES = ["https://www.googleapis.com/auth/generative-language"]
+creds, _ = google.auth.default(scopes=SCOPES)
+genai.configure(credentials=creds)
 
+model = genai.GenerativeModel("models/gemini-2.5-pro", generation_config={"temperature": 0.0})
+
+# Core prompt: policy + rubric
 FACE_GROOMING_PROMPT = """
 You are assessing IndiGo Airlines cabin crew grooming standards. Be concise but complete.
 
