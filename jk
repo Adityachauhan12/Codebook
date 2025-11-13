@@ -21,6 +21,8 @@ RULES:
 - If whole category compliant, score full marks
 - If violation exists, show: [Category Score breakdown only for that category]
 - Concise explanations per category
+- If part of uniform and nails are not visible mark them as "NOT VISIBLE" and state in issue but no reduction in marks
+- If Visible and not Compliant then deduct marks
 
 HAIRSTYLE (2.0):
 - Approved: Chignon, Braid Roll, Twisted Bun, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls
@@ -35,7 +37,7 @@ MAKEUP (2.0):
 - Liner: brown (fair-wheatish), black (dusky-olive)
 - Mascara: black, volumizing
 - Lips: burgundy, wine, cranberry
-- If all compliant: 2.0. If violation: [Base 0.6 + Eyes 0.6 + Lips 0.4 + Overall 0.4]
+- If all compliant: 2.0. If violation: [Base 0.5 + Eyes 0.5 + Lips 0.5 + Overall 0.5]
 
 NAILS (1.0):
 - Colors: Pearl white or French manicure
