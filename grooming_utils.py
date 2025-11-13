@@ -4,7 +4,7 @@ Grooming Assessment Module with Strict Evidence-First Rubric
 - NOT VISIBLE items do not deduct points
 - Decimal scoring with no rounding (preserves precision)
 - Sub-category breakdown for fine-grained scoring
-- Compliance only if score >= 9.0
+- Compliance threshold: score >= 7.0
 """
 
 import base64
@@ -152,7 +152,7 @@ SECTION: Prohibitions Handling
 
 SECTION: Final Compliance Decision (NO ROUNDING)
 - Calculate total score with ALL decimals preserved (e.g., 7.5, 8.2, 9.0).
-- COMPLIANT only if total score ≥ 9.0 AND no major prohibition violations
+- COMPLIANT if total score >= 7.0 AND no major prohibition violations
 - Do NOT round individual scores or total to integers; preserve all decimal places
 
 SECTION: Output Contract Reminder
@@ -186,7 +186,7 @@ Important: Output must include exactly these sections in order:
 - <next recommendation if needed>
 
 5) Scores (all decimals, no rounding):
-Overall Score: <X.X>/10.0 [e.g., 8.5, 7.2, 9.0]
+Overall Score: <X.X>/10.0 [e.g., 8.5, 7.2, 7.0]
 
 Detailed Breakdown:
 - Hairstyle: <x.x>/2.0 [style: 0.0 or 0.3 or 0.6, neatness: 0.0 or 0.3 or 0.6, color: 0.0 or 0.2 or 0.4, finish: 0.0 or 0.2 or 0.4] or (NOT VISIBLE)
