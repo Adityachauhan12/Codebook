@@ -21,7 +21,7 @@ RULES:
 - If whole category compliant, score full marks
 - If violation exists, show: [Category Score breakdown only for that category]
 - Concise explanations per category
-- If part of uniform and nails are not visible mark them as "NOT VISIBLE" and state in issue but no reduction in marks
+- If part of uniform and nails are not visible mark them as "NOT VISIBLE" and state in issue but no reduction in marks and state the in Issues and Recommendations
 - If Visible and not Compliant then deduct marks
 
 HAIRSTYLE (2.0):
@@ -60,6 +60,7 @@ UNIFORM (3.0):
 - Badge: visible, aligned
 - Stockings: (if NOT VISIBLE mark as such) compliant color
 - If all compliant: 3.0. If violation: [Tunic 1.0 + Scarf 0.5 + Badge 0.5 + Stockings 0.5 + Overall 0.5]
+- If name badge/id badge is not visble then state as NOT VISIBLE but dont deduct marks and state the in Issues and Recommendations
 
 COMPLIANCE: Score >= 7.0 = COMPLIANT, else NON-COMPLIANT
 
