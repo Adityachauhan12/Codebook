@@ -1,19 +1,184 @@
-Grooming Result (Video)
-s • IGA: IGA567002
+{
+  "meta": {
+    "generatedAt": "2025-11-13T06:04:09.640092Z",
+    "filters": {
+      "dateFrom": "2025-11-07",
+      "dateTo": "2025-11-13"
+    }
+  },
+  "overview": {
+    "total": 9,
+    "compliant": 6,
+    "nonCompliant": 3,
+    "passRate": 0.6666666666666666,
+    "failRate": 0.3333333333333333,
+    "base": null
+  },
+  "trends": {
+    "daily": [
+      {
+        "date": "2025-11-11",
+        "compliant": 6,
+        "nonCompliant": 2,
+        "base": null
+      },
+      {
+        "date": "2025-11-13",
+        "compliant": 0,
+        "nonCompliant": 1,
+        "base": null
+      }
+    ]
+  },
+  "categories": [
+    {
+      "category": "uniform",
+      "nonCompliantCount": 2,
+      "share": 0.667,
+      "base": null
+    },
+    {
+      "category": "hairstyle",
+      "nonCompliantCount": 2,
+      "share": 0.667,
+      "base": null
+    },
+    {
+      "category": "makeup",
+      "nonCompliantCount": 2,
+      "share": 0.667,
+      "base": null
+    },
+    {
+      "category": "accessories",
+      "nonCompliantCount": 1,
+      "share": 0.333,
+      "base": null
+    }
+  ],
+  "top": {
+    "groomed": [],
+    "nonGroomed": []
+  },
+  "recentTests": {
+    "items": [
+      {
+        "testId": "T-1763013834",
+        "crewId": "IGA123",
+        "crewName": "abcd",
+        "base": null,
+        "score": 3,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-13T11:33:54.941795"
+      },
+      {
+        "testId": "T-1762850487",
+        "crewId": "s",
+        "crewName": "s",
+        "base": null,
+        "score": 3,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-11T14:11:27.284846"
+      },
+      {
+        "testId": "T-1762848748",
+        "crewId": "Unknown",
+        "crewName": "Unknown",
+        "base": null,
+        "score": 10,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-11T13:42:28.571814"
+      },
+      {
+        "testId": "T-1762847155",
+        "crewId": "Unknown",
+        "crewName": "Unknown",
+        "base": null,
+        "score": 10,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-11T13:15:55.193430"
+      },
+      {
+        "testId": "T-1762847015",
+        "crewId": "Unknown",
+        "crewName": "Unknown",
+        "base": null,
+        "score": 10,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-11T13:13:35.005931"
+      },
+      {
+        "testId": "T-1762846782",
+        "crewId": "Unknown",
+        "crewName": "Unknown",
+        "base": null,
+        "score": 9,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-11T13:09:42.804364"
+      },
+      {
+        "testId": "T-1762845820",
+        "crewId": "Unknown",
+        "crewName": "Unknown",
+        "base": null,
+        "score": 7,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-11T12:53:40.169081"
+      },
+      {
+        "testId": "T-1762844113",
+        "crewId": "wg",
+        "crewName": "ew",
+        "base": null,
+        "score": 7,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-11T12:25:13.113933"
+      },
+      {
+        "testId": "T-1762842108",
+        "crewId": "kjh",
+        "crewName": "kj",
+        "base": null,
+        "score": 6,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-11T11:51:48.498390"
+      }
+    ],
+    "page": 1,
+    "pageSize": 25,
+    "total": 9
+  }
+}
 
-COMPLIANTScore: 9/10
-Category Scores
-Uniform
-3/3 (Tunic, scarf, and name badge are immaculate and correctly positioned; stockings are not visible. (Evidence: Frame 0.5s))
-Hairstyle
-2/2 (The Centre Partition with Braided Band style is neat, compliant, and professionally maintained. (Evidence: Frame 3.5s))
-Makeup
-1/2 (Base and lip color are compliant, but eye makeup is borderline unprofessional due to excessive shimmer. (Evidence: Frame 0.5s))
-Nails
-1/1 (Not visible in the provided upper-body view.)
-Accessories
-2/2 (Compliant stud earrings are visible; rings and watch are not visible. (Evidence: Frame 2.5s))
-Issues
-Makeup - Overall: Eyeshadow contains a high level of shimmer, which is a borderline issue for a professional daytime standard. (-0.2 points)
-Recommendations
-Makeup: Opt for a more subdued, matte or satin finish eyeshadow from the approved palettes to ensure a consistently professional appearance.
+
+curl -X 'GET' \
+  'http://127.0.0.1:8000/v1/individual-analysis?igaCode=IGA123&crewName=abcd&dateFrom=2025-10-01&dateTo=2025-11-13' \
+  -H 'accept: application/json'
+Request URL
+http://127.0.0.1:8000/v1/individual-analysis?igaCode=IGA123&crewName=abcd&dateFrom=2025-10-01&dateTo=2025-11-13
+Server response
+Code	Details
+200	
+Response body
+Download
+{
+  "error": "No assessments found for this crew in given date range"
+}   the individual api analysis is still isnt working 
