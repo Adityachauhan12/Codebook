@@ -1,11 +1,11 @@
 """
 Grooming Assessment Module using Gemini API with HTTP requests.
-- No hallucinations; only assess what is clearly visible
-- NOT VISIBLE items marked explicitly, no marks deducted
-- Decimal scoring (1.5, 2.0, etc.)
+- Only assess what is clearly visible
+- NOT VISIBLE items marked explicitly with full score, no marks deducted
+- Decimal scoring with sub-category breakdown for transparency
 - Compliance threshold >= 7.0
-- NO (Evidence: Frame X.Xs) tags in output
-- Strict validation - no dashes (-) in scores
+- NO (Evidence: Frame X.Xs) tags
+- Detailed explanatory output for crew member review
 """
 
 import base64
@@ -23,26 +23,36 @@ GEMINI_ENDPOINT = (
 
 FACE_GROOMING_PROMPT = """
 SECTION: Role & Objective
-- You are an AI assistant specialized in assessing grooming standards for IndiGo Airlines cabin crew using a strict, evidence‑first analytic rubric.
-- Judge only what is clearly visible; never speculate or infer absent details.
+- You are an AI assistant specialized in assessing grooming standards for IndiGo Airlines cabin crew.
+- Judge only what is clearly visible; never speculate.
 - CRITICAL: Do NOT include any (Evidence: Frame X.Xs) tags in your output.
 
 SECTION: Upper-Body-Only View Policy
 - If only upper-body is visible, nails, rings, watch, and stockings may not be visible.
-- Mark these as "(NOT VISIBLE)" and do not deduct points for unseen sub-criteria.
-- Scoring must be strictly based on visible evidence only.
+- Mark these as "(NOT VISIBLE)" and do not deduct points.
+- Score the FULL category amount if items are NOT VISIBLE.
+
+SECTION: Sub-Category Scoring (IMPORTANT)
+- NEVER zero out an entire category for one issue.
+- Each sub-criterion has its own deduction value.
+- Example: Accessories (2.0 total)
+  * Rings: 0.5 (deduct only if violated)
+  * Earrings: 0.5 (deduct only if violated)
+  * Watch: 0.5 (deduct only if violated)
+  * Prohibitions: 0.5 (deduct only if violated)
+  If only earrings are wrong (0.5 deduction), score is 1.5/2.0, NOT 0/2.0.
 
 SECTION: Scoring Rules
 - ALL scores must be numeric with decimals (e.g., 1.5, 2.0, 0.5)
-- NEVER use dashes (-) or question marks (?) in scores
-- If an item is NOT VISIBLE, score the FULL amount for that category (e.g., Nails = 1.0, Makeup = 2.0)
-- Only deduct for VISIBLE violations
+- NEVER use dashes (-) or question marks (?)
+- Deduct ONLY for visible violations, not for NOT VISIBLE items
+- Apply granular sub-category deductions; do not blanket-zero categories
 
 SECTION: Deterministic Evidence Protocol
-- Images: assess directly using the rubric and evidence‑first rule.
+- Images: assess directly using the rubric.
 - Videos: sample frames uniformly at 1 fps with 0.5s offset, maximum 12 frames.
-- For each sub‑criterion, use majority rule across frames; on tie, apply stricter outcome.
-- CRITICAL: Do NOT include frame references in the output.
+- Use majority rule across frames; on tie, apply stricter outcome.
+- Do NOT include frame references in output.
 
 SECTION: Order of Checks
 - Evaluate in this fixed order: Hairstyle → Makeup → Nails → Accessories → Uniform.
@@ -50,55 +60,70 @@ SECTION: Order of Checks
 SECTION: Policy Reference
 
 Hairstyle (total weight: 2.0):
+- Sub-criteria breakdown:
+  * Style compliance (0.6): deduct 0.6 for ponytail/unapproved; 0.3 if borderline; 0 if approved
+  * Neatness/fringe (0.6): deduct 0.6 if fringe below brows/messy; 0.3 for minor strays; 0 if neat
+  * Color/highlights (0.4): deduct 0.4 for unapproved color/thick highlights; 0.2 if slightly over spec; 0 if approved
+  * Finish/integrity (0.4): deduct 0.4 if undone; 0.2 for minor flyaways; 0 if polished
 - Approved styles: Chignon, Braid Roll, Twisted Bun, Twisted/Braid Roll Bun with Bow, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls
 - Ponytails are NOT allowed
-- Hair must be neat and professional; fringe or bangs must NOT fall beyond eyebrows
 - Approved hair colors: Ash Grey, Caramel, Hot Toffee, Sparkling Amber, Chocolate Cherry, Midnight Ruby/Burgundy
-- Highlights must be fine (≤ 2 mm) and seamlessly blended
+- Highlights: fine (≤ 2 mm) and seamlessly blended
 
 Makeup (total weight: 2.0):
-- Eye shadow palettes: Swiss Beauty 05, Makeup Revolution Achieve, Nykaa Eyes On Me Night Out, Lakme Smokey Glam, Nykaa Tinsel Twilight, Sugar Blend The Rules 02 Warrior
+- Sub-criteria breakdown:
+  * Base (0.6): deduct 0.6 for mismatch/absent; 0.3 for slight mismatch; 0 if matched
+  * Eyes (0.6): deduct 0.6 for unapproved palette/wrong liner; 0.3 for blending issues; 0 if approved
+  * Lips (0.4): deduct 0.4 for off-tone; 0.2 for borderline shade; 0 if correct tone
+  * Overall (0.4): deduct 0.4 for overdone/visible tattoo; 0.2 for patchiness; 0 if professional
+- Approved eye shadow palettes: Swiss Beauty 05, Makeup Revolution Achieve, Nykaa Eyes On Me Night Out, Lakme Smokey Glam, Nykaa Tinsel Twilight, Sugar Blend The Rules 02 Warrior
 - Eye pencil: brown for fair→wheatish, black for dusky→olive
-- Artificial lashes permissible (MAC or PAC)
 - Mascara: black and volumizing
-- Lenses: FreshLook Hazel/Grey
-- Foundation mandatory and matched; concealer on dark circles/blemishes
 - Lip color: burgundy/wine/cranberry
-- Overall makeup must be professional, well‑blended; skin clear; no visible tattoos
+- Lenses: FreshLook Hazel/Grey (if visible)
 
 Nails (total weight: 1.0):
-- Not too long; neatly filed
+- Sub-criteria breakdown:
+  * Length/shape (0.5): deduct 0.5 for long/untidy/wrong shape; 0.25 for roughness; 0 if neat
+  * Color/finish (0.5): deduct 0.5 for wrong color/chipped; 0.25 for slight wear; 0 if compliant
 - Approved colors: Pearl white or French manicure
 - Extensions: squoval/rounded/square
-- Must be well‑maintained and polished
-- If nails NOT VISIBLE: mark "(NOT VISIBLE)" and score 1.0
+- If nails NOT VISIBLE: mark "(NOT VISIBLE)" and score 1.0 (full marks)
 
 Accessories (total weight: 2.0):
+- Sub-criteria breakdown:
+  * Rings (0.5): deduct 0.5 for excess/wrong finger/metal; 0.25 if ambiguous; 0 if compliant or NOT VISIBLE
+  * Earrings (0.5): deduct 0.5 for hoops/danglers/colored; 0.25 for oversized studs; 0 if compliant or NOT VISIBLE
+  * Watch (0.5): deduct 0.5 for missing seconds hand/off-color; 0.25 if unclear; 0 if compliant or NOT VISIBLE
+  * Prohibitions (0.5): deduct 0.5 if prohibited item clearly visible; 0.25 if suggestive; 0 if none visible
 - Rings: max one per hand in silver/rose gold on ring or middle finger only
 - Earrings: white/rose gold pearl studs or small diamond studs only
-- Bangles: max one plain silver/rose‑gold bangle
-- Watch: must have seconds hand in black/silver/rose‑gold/dark blue
+- Bangles: max one plain silver/rose-gold bangle
+- Watch: must have seconds hand in black/silver/rose-gold/dark blue
 - No visible religious threads, nose pins, extra piercings, or inappropriate jewelry
-- If any item NOT VISIBLE: do not deduct for that sub-item
 
 Uniform (total weight: 3.0):
-- Tunic: clean, well‑fitted, stain‑free, hemmed
-- Scarf: Flower knot or Square knot, positioned correctly
-- Name badge: MUST be visible and positioned on the tunic
-- Stockings: dark blue, no ladders/wrinkles
+- Sub-criteria breakdown:
+  * Tunic (1.0): deduct 1.0 for stains/poor fit; 0.5 for wrinkles; 0 if clean and well-fitted
+  * Scarf (0.5): deduct 0.5 for wrong knot/missing; 0.25 if slightly off-position; 0 if correct knot and positioned
+  * Name badge (0.5): deduct 0.5 if missing from tunic; 0.25 if misaligned; 0 if visible and correctly positioned
+  * Stockings (0.5): deduct 0.5 for laddered/wrong color; 0.25 for wrinkles; 0 if NOT VISIBLE or compliant
+  * Overall (0.5): deduct 0.5 if unkempt; 0.25 for lint/creases; 0 if polished
 - If stockings NOT VISIBLE (upper-body only): mark "(NOT VISIBLE)" and do not deduct
-- Overall appearance: professional, neat, well‑groomed
+- If any uniform item NOT VISIBLE: state which and do not deduct for that sub-item
 
 SECTION: Compliance Decision
 - COMPLIANT if total score >= 7.0 AND no major prohibition violations
-- ALWAYS use decimal format for all scores (7.0, 8.5, 6.2, etc.)
+- ALWAYS use decimal format (7.0, 8.5, 6.2, etc.)
 
 SECTION: Output Contract - STRICT REQUIREMENTS
 - Respond using ONLY the OUTPUT_FORMAT below
 - NEVER include (Evidence: ...) tags
-- NEVER use dashes (-) or question marks (?) in scores
+- NEVER use dashes (-) or question marks (?)
 - ALWAYS use decimal format (X.X)
-- State (NOT VISIBLE) where applicable in category descriptions
+- State what is visible, what is NOT VISIBLE, and why marks were deducted or not
+- Show sub-category breakdown in each category for transparency
+- Be explanatory so the crew member understands the assessment
 - Maintain exact section order and labels
 """
 
@@ -108,22 +133,41 @@ Grooming Assessment Result
 Overall Assessment: <COMPLIANT or NON-COMPLIANT>
 Overall Score: <X.X>/10.0
 
-Category Scores:
+Category Scores & Breakdown:
 
 Hairstyle: <x.x>/2.0
-<1-2 line description. If not visible, state "(NOT VISIBLE)" here>
+<Detailed 2-3 line description stating:
+- What was observed (e.g., "Hair is styled in a Centre Braid")
+- Sub-category scores if deductions made (e.g., "Style: 0.6, Neatness: 0.6, Color: 0.4, Finish: 0.4")
+- Any NOT VISIBLE items (e.g., "Hair clips not clearly visible")>
 
 Makeup: <x.x>/2.0
-<1-2 line description. If not visible, state "(NOT VISIBLE)" here>
+<Detailed 2-3 line description stating:
+- What was observed
+- Sub-category scores if deductions (e.g., "Base: 0.6, Eyes: 0.3 (blending issue), Lips: 0.4, Overall: 0.4")
+- Any NOT VISIBLE items (e.g., "Lenses not visible")>
 
 Nails: <x.x>/1.0
-<1-2 line description. If not visible, state "(NOT VISIBLE)" here>
+<State explicitly:
+- If visible: describe condition (e.g., "Nails are well-maintained, Pearl white color, neat file") and scores
+- If NOT VISIBLE: state "(NOT VISIBLE: Upper-body view only; nails cannot be assessed; score 1.0)")>
 
 Accessories: <x.x>/2.0
-<1-2 line description. If any item not visible, mention which and mark "(NOT VISIBLE)">
+<Detailed 2-3 line description stating:
+- What was observed for each sub-item
+- Which sub-items visible/not visible (e.g., "Earrings: compliant studs visible (0.5)")
+- Which sub-items NOT VISIBLE (e.g., "Rings: NOT VISIBLE (0.5)")
+- Which sub-items had deductions (e.g., "Watch: missing seconds hand (-0.5)")
+- Total breakdown (e.g., "Earrings 0.5 + Rings 0.5 + Watch 0.0 + Prohibitions 0.5 = 1.5")>
 
 Uniform: <x.x>/3.0
-<1-2 line description. If items not visible, state "(NOT VISIBLE)" here>
+<Detailed 2-3 line description stating:
+- Tunic condition and score (e.g., "Tunic: clean, well-fitted (1.0)")
+- Scarf condition and score (e.g., "Scarf: correct knot, properly positioned (0.5)")
+- Name badge status and score (e.g., "Badge: visible and aligned (0.5)")
+- Stockings status and score (e.g., "Stockings: NOT VISIBLE (0.5 - upper body only)")
+- Overall appearance (e.g., "Overall: neat, professional (0.5)")
+- Total breakdown (e.g., "1.0 + 0.5 + 0.5 + 0.5 + 0.5 = 3.0")>
 
 Issues Found:
 - <specific visible violation only if present>
@@ -151,15 +195,14 @@ def _normalize_output(report_text: str) -> str:
     Clean and normalize the report:
     1. Remove any (Evidence: Frame X.Xs) tags
     2. Ensure all scores are in X.X format (decimal)
-    3. Replace dashes (-) in scores with proper values (0.0 or full score)
-    4. Keep (NOT VISIBLE) tags
+    3. Replace dashes (-) in scores with proper values
+    4. Keep (NOT VISIBLE) tags and explanations
     """
     
     # Remove (Evidence: ...) tags completely
     report_text = re.sub(r'\s*\(Evidence:[^)]*\)', '', report_text, flags=re.IGNORECASE)
     
     # Fix Overall Score line: ensure decimal format
-    # Match: "Overall Score: 7/10" or "Overall Score: 7.5/10" → "Overall Score: 7.0/10" or "Overall Score: 7.5/10.0"
     report_text = re.sub(
         r'(Overall\s*Score)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10(?:[.\s]|$)',
         lambda m: f"{m.group(1)}: {float(m.group(2)):.1f}/10.0\n",
@@ -167,9 +210,7 @@ def _normalize_output(report_text: str) -> str:
         flags=re.IGNORECASE
     )
     
-    # Fix per-category score lines: Uniform, Nails, Hairstyle, Makeup, Accessories
-    # Match: "Uniform: 2/3" or "Uniform: 2.0/3" → "Uniform: 2.0/3.0"
-    # Keep (NOT VISIBLE) tags intact
+    # Fix per-category score lines with proper handling
     category_maxes = {
         "Uniform": 3.0,
         "Nails": 1.0,
@@ -179,7 +220,7 @@ def _normalize_output(report_text: str) -> str:
     }
     
     for cat, maxval in category_maxes.items():
-        # Pattern: "Uniform: X/3" or "Uniform: -/3" or "Uniform: 2.0/3.0 (NOT VISIBLE)"
+        # Pattern: "Hairstyle: X/2" or "Hairstyle: -/2" or "Hairstyle: 1.5/2.0"
         pattern = rf'(^-?\s*{cat}\s*:\s*)([0-9]+(?:\.[0-9]+)?|-)\s*/\s*([0-9]+(?:\.[0-9]+)?)'
         
         def replace_score(m):
@@ -187,9 +228,9 @@ def _normalize_output(report_text: str) -> str:
             num_str = m.group(2)
             denom_str = m.group(3)
             
-            # If numerator is a dash, check if (NOT VISIBLE) appears after - if so, use full score
+            # If numerator is a dash, use full score (for NOT VISIBLE items)
             if num_str == '-':
-                num = maxval  # Use full score for NOT VISIBLE
+                num = maxval
             else:
                 num = float(num_str)
             
@@ -202,7 +243,7 @@ def _normalize_output(report_text: str) -> str:
 
 def check_grooming(image_b64: str) -> str:
     """
-    Sends a single base64 image and returns a normalized grooming report.
+    Sends a single base64 image and returns a detailed, normalized grooming report.
     """
     prompt = f"{FACE_GROOMING_PROMPT}\n\n{OUTPUT_FORMAT}"
     parts = [
@@ -214,7 +255,7 @@ def check_grooming(image_b64: str) -> str:
 
 def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
     """
-    Encodes a video and returns a normalized grooming report.
+    Encodes a video and returns a detailed, normalized grooming report.
     """
     with open(video_path, "rb") as f:
         video_b64 = base64.b64encode(f.read()).decode("utf-8")
@@ -224,7 +265,8 @@ def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
         "CRITICAL: Do NOT include any (Evidence: Frame X.Xs) tags in your output.\n"
         "Analyze this short clip for grooming compliance.\n"
         "Sample frames uniformly; mark unseen items as (NOT VISIBLE) and do not deduct.\n"
-        "Base conclusions strictly on visible evidence.\n\n"
+        "For each category, show sub-category breakdown and explain what was observed.\n"
+        "Be detailed and explanatory so the crew member understands the assessment.\n\n"
         f"{OUTPUT_FORMAT}"
     )
     parts = [
@@ -240,7 +282,7 @@ def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
 
 def check_grooming_from_frames(frames_b64: list[str], name: str, iga_code: str) -> str:
     """
-    Sends a list of base64 frames and concatenates normalized reports.
+    Sends a list of base64 frames and concatenates detailed reports.
     """
     results = []
     for idx, image_b64 in enumerate(frames_b64, start=1):
