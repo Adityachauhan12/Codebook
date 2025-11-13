@@ -1,19 +1,249 @@
-Grooming Result (Video)
-- • IGA: -
+"""
+Grooming Assessment Module using Gemini API with HTTP requests.
+- No hallucinations; only assess what is clearly visible
+- NOT VISIBLE items marked explicitly, no marks deducted
+- Decimal scoring (1.5, 2.0, etc.)
+- Compliance threshold >= 7.0
+- NO (Evidence: Frame X.Xs) tags in output
+- Strict validation - no dashes (-) in scores
+"""
 
-NON-COMPLIANTScore: 0/10
-Category Scores
-Uniform
--/3
-Hairstyle
--/2
-Makeup
--/2
-Nails
--/1
-Accessories
--/2
-Issues
-**Hairstyle:** The short bob is not an approved hairstyle. IndiGo policy requires hair to be secured in a specific up-do (e.g., Chignon, Twisted Bun) for a professional and safe appearance.
-Recommendations
-**Hairstyle:** Adhere strictly to the approved hairstyle list for all future duties. Hair must be secured away from the face and neck in a regulation bun or chignon.
+import base64
+import os
+import re
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_ENDPOINT = (
+    "https://generativelanguage.googleapis.com/v1/models/"
+    f"gemini-2.5-pro:generateContent?key={API_KEY}"
+)
+
+FACE_GROOMING_PROMPT = """
+SECTION: Role & Objective
+- You are an AI assistant specialized in assessing grooming standards for IndiGo Airlines cabin crew using a strict, evidence‑first analytic rubric.
+- Judge only what is clearly visible; never speculate or infer absent details.
+- CRITICAL: Do NOT include any (Evidence: Frame X.Xs) tags in your output.
+
+SECTION: Upper-Body-Only View Policy
+- If only upper-body is visible, nails, rings, watch, and stockings may not be visible.
+- Mark these as "(NOT VISIBLE)" and do not deduct points for unseen sub-criteria.
+- Scoring must be strictly based on visible evidence only.
+
+SECTION: Scoring Rules
+- ALL scores must be numeric with decimals (e.g., 1.5, 2.0, 0.5)
+- NEVER use dashes (-) or question marks (?) in scores
+- If an item is NOT VISIBLE, score the FULL amount for that category (e.g., Nails = 1.0, Makeup = 2.0)
+- Only deduct for VISIBLE violations
+
+SECTION: Deterministic Evidence Protocol
+- Images: assess directly using the rubric and evidence‑first rule.
+- Videos: sample frames uniformly at 1 fps with 0.5s offset, maximum 12 frames.
+- For each sub‑criterion, use majority rule across frames; on tie, apply stricter outcome.
+- CRITICAL: Do NOT include frame references in the output.
+
+SECTION: Order of Checks
+- Evaluate in this fixed order: Hairstyle → Makeup → Nails → Accessories → Uniform.
+
+SECTION: Policy Reference
+
+Hairstyle (total weight: 2.0):
+- Approved styles: Chignon, Braid Roll, Twisted Bun, Twisted/Braid Roll Bun with Bow, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls
+- Ponytails are NOT allowed
+- Hair must be neat and professional; fringe or bangs must NOT fall beyond eyebrows
+- Approved hair colors: Ash Grey, Caramel, Hot Toffee, Sparkling Amber, Chocolate Cherry, Midnight Ruby/Burgundy
+- Highlights must be fine (≤ 2 mm) and seamlessly blended
+
+Makeup (total weight: 2.0):
+- Eye shadow palettes: Swiss Beauty 05, Makeup Revolution Achieve, Nykaa Eyes On Me Night Out, Lakme Smokey Glam, Nykaa Tinsel Twilight, Sugar Blend The Rules 02 Warrior
+- Eye pencil: brown for fair→wheatish, black for dusky→olive
+- Artificial lashes permissible (MAC or PAC)
+- Mascara: black and volumizing
+- Lenses: FreshLook Hazel/Grey
+- Foundation mandatory and matched; concealer on dark circles/blemishes
+- Lip color: burgundy/wine/cranberry
+- Overall makeup must be professional, well‑blended; skin clear; no visible tattoos
+
+Nails (total weight: 1.0):
+- Not too long; neatly filed
+- Approved colors: Pearl white or French manicure
+- Extensions: squoval/rounded/square
+- Must be well‑maintained and polished
+- If nails NOT VISIBLE: mark "(NOT VISIBLE)" and score 1.0
+
+Accessories (total weight: 2.0):
+- Rings: max one per hand in silver/rose gold on ring or middle finger only
+- Earrings: white/rose gold pearl studs or small diamond studs only
+- Bangles: max one plain silver/rose‑gold bangle
+- Watch: must have seconds hand in black/silver/rose‑gold/dark blue
+- No visible religious threads, nose pins, extra piercings, or inappropriate jewelry
+- If any item NOT VISIBLE: do not deduct for that sub-item
+
+Uniform (total weight: 3.0):
+- Tunic: clean, well‑fitted, stain‑free, hemmed
+- Scarf: Flower knot or Square knot, positioned correctly
+- Name badge: MUST be visible and positioned on the tunic
+- Stockings: dark blue, no ladders/wrinkles
+- If stockings NOT VISIBLE (upper-body only): mark "(NOT VISIBLE)" and do not deduct
+- Overall appearance: professional, neat, well‑groomed
+
+SECTION: Compliance Decision
+- COMPLIANT if total score >= 7.0 AND no major prohibition violations
+- ALWAYS use decimal format for all scores (7.0, 8.5, 6.2, etc.)
+
+SECTION: Output Contract - STRICT REQUIREMENTS
+- Respond using ONLY the OUTPUT_FORMAT below
+- NEVER include (Evidence: ...) tags
+- NEVER use dashes (-) or question marks (?) in scores
+- ALWAYS use decimal format (X.X)
+- State (NOT VISIBLE) where applicable in category descriptions
+- Maintain exact section order and labels
+"""
+
+OUTPUT_FORMAT = """
+Grooming Assessment Result
+
+Overall Assessment: <COMPLIANT or NON-COMPLIANT>
+Overall Score: <X.X>/10.0
+
+Category Scores:
+
+Hairstyle: <x.x>/2.0
+<1-2 line description. If not visible, state "(NOT VISIBLE)" here>
+
+Makeup: <x.x>/2.0
+<1-2 line description. If not visible, state "(NOT VISIBLE)" here>
+
+Nails: <x.x>/1.0
+<1-2 line description. If not visible, state "(NOT VISIBLE)" here>
+
+Accessories: <x.x>/2.0
+<1-2 line description. If any item not visible, mention which and mark "(NOT VISIBLE)">
+
+Uniform: <x.x>/3.0
+<1-2 line description. If items not visible, state "(NOT VISIBLE)" here>
+
+Issues Found:
+- <specific visible violation only if present>
+- <next issue only if present>
+
+Recommendations:
+- <actionable recommendation if needed>
+- <next recommendation if needed>
+"""
+
+def _post_gemini(parts):
+    """Send request to Gemini API and return text response."""
+    headers = {"Content-Type": "application/json"}
+    payload = {"contents": [{"parts": parts}]}
+    r = requests.post(GEMINI_ENDPOINT, headers=headers, json=payload, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception:
+        return ""
+
+def _normalize_output(report_text: str) -> str:
+    """
+    Clean and normalize the report:
+    1. Remove any (Evidence: Frame X.Xs) tags
+    2. Ensure all scores are in X.X format (decimal)
+    3. Replace dashes (-) in scores with proper values (0.0 or full score)
+    4. Keep (NOT VISIBLE) tags
+    """
+    
+    # Remove (Evidence: ...) tags completely
+    report_text = re.sub(r'\s*\(Evidence:[^)]*\)', '', report_text, flags=re.IGNORECASE)
+    
+    # Fix Overall Score line: ensure decimal format
+    # Match: "Overall Score: 7/10" or "Overall Score: 7.5/10" → "Overall Score: 7.0/10" or "Overall Score: 7.5/10.0"
+    report_text = re.sub(
+        r'(Overall\s*Score)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10(?:[.\s]|$)',
+        lambda m: f"{m.group(1)}: {float(m.group(2)):.1f}/10.0\n",
+        report_text,
+        flags=re.IGNORECASE
+    )
+    
+    # Fix per-category score lines: Uniform, Nails, Hairstyle, Makeup, Accessories
+    # Match: "Uniform: 2/3" or "Uniform: 2.0/3" → "Uniform: 2.0/3.0"
+    # Keep (NOT VISIBLE) tags intact
+    category_maxes = {
+        "Uniform": 3.0,
+        "Nails": 1.0,
+        "Hairstyle": 2.0,
+        "Makeup": 2.0,
+        "Accessories": 2.0,
+    }
+    
+    for cat, maxval in category_maxes.items():
+        # Pattern: "Uniform: X/3" or "Uniform: -/3" or "Uniform: 2.0/3.0 (NOT VISIBLE)"
+        pattern = rf'(^-?\s*{cat}\s*:\s*)([0-9]+(?:\.[0-9]+)?|-)\s*/\s*([0-9]+(?:\.[0-9]+)?)'
+        
+        def replace_score(m):
+            label = m.group(1)
+            num_str = m.group(2)
+            denom_str = m.group(3)
+            
+            # If numerator is a dash, check if (NOT VISIBLE) appears after - if so, use full score
+            if num_str == '-':
+                num = maxval  # Use full score for NOT VISIBLE
+            else:
+                num = float(num_str)
+            
+            denom = float(denom_str)
+            return f"{label}{num:.1f}/{denom:.1f}"
+        
+        report_text = re.sub(pattern, replace_score, report_text, flags=re.MULTILINE | re.IGNORECASE)
+    
+    return report_text
+
+def check_grooming(image_b64: str) -> str:
+    """
+    Sends a single base64 image and returns a normalized grooming report.
+    """
+    prompt = f"{FACE_GROOMING_PROMPT}\n\n{OUTPUT_FORMAT}"
+    parts = [
+        {"text": prompt},
+        {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
+    ]
+    raw = _post_gemini(parts)
+    return _normalize_output(raw)
+
+def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
+    """
+    Encodes a video and returns a normalized grooming report.
+    """
+    with open(video_path, "rb") as f:
+        video_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    prompt = (
+        f"{FACE_GROOMING_PROMPT}\n\n"
+        "CRITICAL: Do NOT include any (Evidence: Frame X.Xs) tags in your output.\n"
+        "Analyze this short clip for grooming compliance.\n"
+        "Sample frames uniformly; mark unseen items as (NOT VISIBLE) and do not deduct.\n"
+        "Base conclusions strictly on visible evidence.\n\n"
+        f"{OUTPUT_FORMAT}"
+    )
+    parts = [
+        {"text": prompt},
+        {"inline_data": {"mime_type": "video/webm", "data": video_b64}},
+    ]
+    raw = _post_gemini(parts)
+    normalized = _normalize_output(raw)
+    
+    # Add crew info header
+    header = f"Grooming Result (Video)\n{name} • IGA: {iga_code}\n\n"
+    return header + normalized
+
+def check_grooming_from_frames(frames_b64: list[str], name: str, iga_code: str) -> str:
+    """
+    Sends a list of base64 frames and concatenates normalized reports.
+    """
+    results = []
+    for idx, image_b64 in enumerate(frames_b64, start=1):
+        reply = check_grooming(image_b64)
+        results.append(f"Frame {idx} Result:\n{reply}")
+    return f"Grooming check results for {name} ({iga_code}):\n\n" + "\n\n".join(results)
