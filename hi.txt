@@ -1,208 +1,334 @@
-@app.get("/v1/individual-analysis")
-async def individual_analysis(
-    igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
-    crewName: str = Query(..., description="Crew name (e.g., Lavanya Singh)"),
-    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD format"),
-    dateTo: str = Query(..., description="End date in YYYY-MM-DD format"),
-):
-    """
-    Get detailed individual analysis for a specific crew member.
-    
-    Uses the exact same data loading pattern as /v1/insights which works correctly.
-    All data normalization (field names, timestamps, assessment values) is handled
-    by dashboard_service._load_records().
-    
-    Args:
-        igaCode: IGA code (e.g., "IGA6781")
-        crewName: Full crew name (e.g., "Lavanya Singh")
-        dateFrom: Start date in YYYY-MM-DD format
-        dateTo: End date in YYYY-MM-DD format
-    
-    Returns:
-        Detailed analysis with summary, category breakdown, and trends
-    """
-    try:
-        # ============= INPUT VALIDATION =============
-        
-        # Parse dates
-        try:
-            start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
-            end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
-        except ValueError as e:
-            return JSONResponse(
-                {
-                    "error": "Invalid date format",
-                    "details": f"Dates must be in YYYY-MM-DD format: {str(e)}"
-                },
-                status_code=400
-            )
-        
-        # Validate date range
-        if start_date > end_date:
-            return JSONResponse(
-                {
-                    "error": "Invalid date range",
-                    "details": "dateFrom cannot be after dateTo"
-                },
-                status_code=400
-            )
-        
-        # ============= LOAD RECORDS USING dashboard_service PATTERN =============
-        
-        # This is the EXACT SAME pattern that works for /v1/insights
-        filters = DashboardFilters(date_from=start_date, date_to=end_date)
-        all_records = _load_records(filters)
-        
-        # ============= FILTER BY CREW (with normalized field names) =============
-        
-        # Normalize search parameters
-        iga_search = igaCode.strip().upper()
-        crew_search = crewName.strip().upper()
-        
-        # Filter records - using CORRECT snake_case field names
-        crew_records = []
-        for record in all_records:
-            record_iga = (record.get("iga_code") or "").strip().upper()
-            record_crew = (record.get("crew_name") or "").strip().upper()
-            
-            if record_iga == iga_search and record_crew == crew_search:
-                crew_records.append(record)
-        
-        # ============= CHECK IF DATA FOUND =============
-        
-        if not crew_records:
-            return JSONResponse(
-                {
-                    "error": "No assessments found for this crew in given date range",
-                    "debug": {
-                        "searchedFor": {
-                            "igaCode": igaCode,
-                            "crewName": crewName,
-                            "dateRange": f"{dateFrom} to {dateTo}"
-                        },
-                        "normalizedQuery": {
-                            "igaCode": iga_search,
-                            "crewName": crew_search
-                        },
-                        "totalRecordsInRange": len(all_records),
-                        "matchingRecords": 0,
-                        "tip": "Verify IGA code and crew name match exactly as stored in GCS"
-                    }
-                },
-                status_code=404
-            )
-        
-        # ============= CALCULATE SUMMARY STATISTICS =============
-        
-        total = len(crew_records)
-        compliant_count = sum(1 for r in crew_records if r["assessment"] == "COMPLIANT")
-        noncompliant_count = total - compliant_count
-        pass_rate = (compliant_count / total * 100) if total > 0 else 0
-        
-        # ============= CATEGORY-WISE BREAKDOWN =============
-        
-        # Count violations by category (only from NON-COMPLIANT assessments)
-        category_counts = defaultdict(int)
-        
-        for record in crew_records:
-            if record["assessment"] == "NON-COMPLIANT":
-                # Extract issues from the record
-                issues = record.get("issues") or []
-                for issue in issues:
-                    # Use the same issue heading extraction as dashboard_service
-                    heading = _issue_heading(issue)
-                    if heading and heading != "other":
-                        category_counts[heading] += 1
-        
-        # Convert to list and sort by count (most violations first)
-        category_breakdown = {
-            category: count
-            for category, count in sorted(
-                category_counts.items(),
-                key=lambda x: x,
-                reverse=True
-            )
-        }
-        
-        # ============= BUILD DAILY TRENDS =============
-        
-        # Group records by date
-        daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
-        
-        for record in crew_records:
-            record_date = record["date"]  # Already a date object from _load_records
-            
-            if record["assessment"] == "COMPLIANT":
-                daily_stats[record_date]["compliant"] += 1
-            else:
-                daily_stats[record_date]["nonCompliant"] += 1
-        
-        # Build trend array with date padding
-        trend_list = []
-        current_date = start_date
-        while current_date <= end_date:
-            date_key = current_date.isoformat()
-            stats = daily_stats.get(current_date, {"compliant": 0, "nonCompliant": 0})
-            
-            trend_list.append({
-                "date": date_key,
-                "compliant": stats["compliant"],
-                "nonCompliant": stats["nonCompliant"]
-            })
-            
-            current_date += timedelta(days=1)
-        
-        # ============= BUILD RESPONSE =============
-        
-        response = {
-            "crew": {
-                "igaCode": igaCode,
-                "name": crewName
-            },
-            "dateRange": {
-                "from": dateFrom,
-                "to": dateTo,
-                "daysAnalyzed": (end_date - start_date).days + 1
-            },
-            "summary": {
-                "totalAssessments": total,
-                "compliant": compliant_count,
-                "nonCompliant": noncompliant_count,
-                "passRate": round(pass_rate, 2),
-                "passRatePercentage": f"{pass_rate:.2f}%"
-            },
-            "nonComplianceByCategory": category_breakdown,
-            "trend": trend_list,
-            "recentAssessments": [
-                {
-                    "timestamp": r["timestamp"].isoformat() if r["timestamp"] else None,
-                    "date": r["date"].isoformat(),
-                    "score": r["score"],
-                    "assessment": r["assessment"],
-                    "issues": r["issues"]
-                }
-                for r in crew_records[:10]  # Most recent 10
-            ]
-        }
-        
-        return response
-        
-    except Exception as e:
-        import traceback
-        print(f"[ERROR] individual_analysis: {str(e)}")
-        print(traceback.format_exc())
-        
-        return JSONResponse(
-            {
-                "error": "Internal server error",
-                "details": str(e),
-                "type": type(e).__name__
-            },
-            status_code=500
-        )
-
-
-Add this import at the top of main.py
-from dashboard_service import _load_records, Filters as DashboardFilters, _issue_heading
-from collections import defaultdict
-from datetime import datetime, date as _date, timedelta
+{
+  "crew": {
+    "igaCode": "IGA6781",
+    "name": "Lavanya Singh"
+  },
+  "dateRange": {
+    "from": "2025-10-01",
+    "to": "2025-11-14",
+    "daysAnalyzed": 45
+  },
+  "summary": {
+    "totalAssessments": 132,
+    "compliant": 54,
+    "nonCompliant": 78,
+    "passRate": 40.91,
+    "passRatePercentage": "40.91%"
+  },
+  "nonComplianceByCategory": {
+    "uniform violation": 1,
+    "uniform": 53,
+    "total non-compliance": 1,
+    "subject-standard mismatch": 1,
+    "scarf": 1,
+    "prohibited accessories are worn": 2,
+    "name badge": 1,
+    "nails": 20,
+    "makeup": 22,
+    "items not visible": 1,
+    "incomplete view": 1,
+    "image quality": 1,
+    "hairstyle": 51,
+    "grooming non-compliance": 1,
+    "facial hair": 4,
+    "accessories": 17
+  },
+  "trend": [
+    {
+      "date": "2025-10-01",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-02",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-03",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-04",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-05",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-06",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-07",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-08",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-09",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-10",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-11",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-12",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-13",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-14",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-15",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-16",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-17",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-18",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-19",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-20",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-21",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-22",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-23",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-24",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-25",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-26",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-27",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-28",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-29",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-30",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-10-31",
+      "compliant": 1,
+      "nonCompliant": 2
+    },
+    {
+      "date": "2025-11-01",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-11-02",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-11-03",
+      "compliant": 3,
+      "nonCompliant": 3
+    },
+    {
+      "date": "2025-11-04",
+      "compliant": 0,
+      "nonCompliant": 1
+    },
+    {
+      "date": "2025-11-05",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-11-06",
+      "compliant": 0,
+      "nonCompliant": 1
+    },
+    {
+      "date": "2025-11-07",
+      "compliant": 1,
+      "nonCompliant": 4
+    },
+    {
+      "date": "2025-11-08",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-11-09",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-11-10",
+      "compliant": 2,
+      "nonCompliant": 5
+    },
+    {
+      "date": "2025-11-11",
+      "compliant": 30,
+      "nonCompliant": 31
+    },
+    {
+      "date": "2025-11-12",
+      "compliant": 14,
+      "nonCompliant": 15
+    },
+    {
+      "date": "2025-11-13",
+      "compliant": 0,
+      "nonCompliant": 4
+    },
+    {
+      "date": "2025-11-14",
+      "compliant": 3,
+      "nonCompliant": 12
+    }
+  ],
+  "recentAssessments": [
+    {
+      "timestamp": "2025-11-14T09:57:18.082055",
+      "date": "2025-11-14",
+      "score": 0,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Assessment criteria are gender-specific (female only)",
+        "Male crew member does not comply with female standards"
+      ]
+    },
+    {
+      "timestamp": "2025-11-14T09:56:53.050487",
+      "date": "2025-11-14",
+      "score": 0,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Assessment criteria are gender-specific (female only)",
+        "Male crew member does not comply with female standards"
+      ]
+    },
+    {
+      "timestamp": "2025-11-14T09:54:08.297126",
+      "date": "2025-11-14",
+      "score": 0,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Assessment criteria are gender-specific (female only)",
+        "Male crew member does not comply with female standards"
+      ]
+    },
+    {
+      "timestamp": "2025-11-14T09:25:49.356005",
+      "date": "2025-11-14",
+      "score": 0,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Assessment criteria are gender-specific (female only)",
+        "Male crew member does not comply with female standards"
+      ]
+    },
+    {
+      "timestamp": "2025-11-14T09:23:56.618990",
+      "date": "2025-11-14",
+      "score": 5,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Not in uniform; wearing casual attire.",
+        "Lip color does not comply with approved shades.",
+        "Wearing an unapproved necklace.",
+        "Nails, watch, rings, and bangles were not visible for assessment."
+      ]
+    },
+    {
+      "timestamp": "2025-11-14T09:22:35.499435",
+      "date": "2025-11-14",
+      "score": 3,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Uniform: Not worn. Casual attire is a violation.",
+        "Hairstyle: Hair worn down is a non-compliant style.",
+        "Makeup: Non-compliant lip color.",
+        "Accessories: A non-standard necklace is worn.",
+        "Nails: Not visible for assessment."
+      ]
+    },
+    {
+      "timestamp": "2025-11-14T09:2t visible for assessment."
+      ]
+    }
+  ]
+} now te problem in this is that many categoris are coming on screen many o them are almos same see we have to keep the categories only in 5 categories uniform makeup accessories hairstlye and nails also dont want percentage written like in this screen 
