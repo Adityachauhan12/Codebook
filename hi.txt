@@ -72,49 +72,21 @@ Not 100%
 
 
 
-{
-  "person": {
-    "name": "f",
-    "iga_code": "IGA567002"
-  },
-  "assessment": "NON-COMPLIANT",
-  "score": 6.3,
-  "scores": {
-    "uniform": 3,
-    "hairstyle": 0,
-    "makeup": 1,
-    "nails": 0,
-    "accessories": 0
-  },
-  "details": {
-    "uniform": "Not visible as the crew member appears to be in casual attire. (NOT VISIBLE)",
-    "hairstyle": "Hair is worn down and loose, which is not an approved or neat style for duty.",
-    "makeup": "Eyeliner appears compliant. Lip color is not one of the approved shades (burgundy, wine, or cranberry).",
-    "nails": "Nail color is a pink/mauve shade, which is not the approved Pearl White or French Manicure.",
-    "accessories": "A prohibited nose pin is worn. Two rings are on one hand (violates one-per-hand rule) with one on a non-approved finger (thumb). Watch is gold-toned and lacks a visible seconds hand (violates color and type rules). More than one bangle/bracelet is worn."
-  },
-  "issues": [
-    "Hairstyle: Non-compliant style (hair down) and neatness violation.",
-    "Makeup: Non-compliant lip color.",
-    "Nails: Non-compliant nail polish color.",
-    "Accessories: Prohibited nose pin. Non-compliant rings (quantity and placement). Non-compliant watch (color and lack of seconds hand). Exceeds bangle limit.",
-    "Uniform: (NOT VISIBLE)",
-    "Earrings: (NOT VISIBLE)"
-  ],
-  "recommendations": [
-    "Hairstyle: Ensure hair is always tied neatly in an approved style (e.g., chignon, bun) while on duty.",
-    "Makeup: Use only the specified shades of burgundy, wine, or cranberry for lipstick.",
-    "Nails: Adhere strictly to Pearl White polish or a French Manicure.",
-    "Accessories: Remove the nose pin before duty. Wear a maximum of one ring per hand, only on the ring or middle finger. Replace the watch with a compliant model (approved color with a seconds hand). Wear only a single, plain bangle if desired.",
-    "Uniform & Earrings: Ensure full uniform compliance and approved earrings are worn for future checks."
-  ],
-  "_metadata": {
-    "not_visible": {
-      "uniform": true,
-      "hairstyle": false,
-      "makeup": false,
-      "nails": false,
-      "accessories": false
-    }
-  }
-}
+ACCESSORIES (2.0 max):
+- Earrings: white/rose-gold pearl or diamond studs only [0.4 each if wrong]
+- Rings: max one per hand, silver/rose-gold, ring or middle finger only [0.5 if violation]
+- Watch: MUST have visible seconds hand (black/silver/rose-gold/dark blue) [0.5 if wrong/missing]
+- Bangles: max one plain silver/rose-gold [0.4 if excess]
+- Prohibitions: NO religious threads, nose pins, extra piercings [0.4 each if present]
+- If all compliant and visible: Score 2/2
+- If violations visible: Deduct per breakdown above (total max deduction = 2.0)
+- If NOT VISIBLE (truly cannot assess any accessories): Score 2/2 → output "Accessories: 2/2 (NOT VISIBLE)"
+- IMPORTANT: If ANY accessory is visible, do NOT mark entire category as NOT VISIBLE
+
+
+NAILS (1.0 max):
+- Colors: Pearl white or French manicure ONLY
+- If nails are shown/visible (hands visible): ALWAYS evaluate - do NOT mark as NOT VISIBLE
+- If VISIBLE + compliant: Score 1/1
+- If VISIBLE + non-compliant color/length: Score 0/1 (deduct full marks)
+- If truly hands completely out of frame: Score 1/1 → output "Nails: 1/1 (NOT VISIBLE)"
