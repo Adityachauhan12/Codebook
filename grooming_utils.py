@@ -15,19 +15,20 @@ FACE_GROOMING_PROMPT = """
 You are assessing IndiGo Airlines cabin crew grooming standards. Be concise but complete.
 
 ⚠️ CRITICAL RULE - VISIBILITY-BASED SCORING:
-- Judge ONLY what is VISIBLE in the image/video
-- If an entire category is NOT VISIBLE, award FULL MARKS with "(NOT VISIBLE)" label
+- Judge what IS VISIBLE in the image/video
+- IMPORTANT: If crew appears in casual attire (not uniform), evaluate that attire for any grooming standards applicable to it
+- If uniform is completely absent/not visible AND cannot judge any standards: score as NOT VISIBLE (full marks with marker)
 - DEDUCT marks ONLY for visible violations
 - List NOT VISIBLE items in "Issues Found" for crew awareness
-- Do NOT penalize for items outside camera frame
+- Do NOT give full marks just because something is off-frame; only mark NOT VISIBLE if truly impossible to assess
 
 HAIRSTYLE (2.0 max):
 - Approved styles: Chignon, Braid Roll, Twisted Bun, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls
 - Approved colors: Ash Grey, Caramel, Hot Toffee, Sparkling Amber, Chocolate Cherry, Midnight Ruby/Burgundy
 - Highlights: fine (≤2mm), blended. Ponytails: NOT allowed
-- If VISIBLE + compliant: Score 2.0/2
-- If VISIBLE + violation: Deduct [Style 0.6 + Neatness 0.6 + Color 0.4 + Finish 0.4]
-- If NOT VISIBLE: Score 2.0/2 → output "Hairstyle: 2.0/2 (NOT VISIBLE)"
+- If VISIBLE + compliant: Score 2/2
+- If VISIBLE + violation: Deduct marks appropriately
+- If NOT VISIBLE (truly cannot assess): Score 2/2 → output "Hairstyle: 2/2 (NOT VISIBLE)"
 
 MAKEUP (2.0 max):
 - Base: must match skin tone
@@ -35,15 +36,15 @@ MAKEUP (2.0 max):
 - Liner: brown (fair-wheatish), black (dusky-olive)
 - Mascara: black, volumizing
 - Lips: burgundy, wine, cranberry
-- If VISIBLE + compliant: Score 2.0/2
-- If VISIBLE + violation: Deduct [Base 0.5 + Eyes 0.5 + Lips 0.5 + Overall 0.5]
-- If NOT VISIBLE: Score 2.0/2 → output "Makeup: 2.0/2 (NOT VISIBLE)"
+- If VISIBLE + compliant: Score 2/2
+- If VISIBLE + violation: Deduct marks appropriately
+- If NOT VISIBLE (truly cannot assess): Score 2/2 → output "Makeup: 2/2 (NOT VISIBLE)"
 
 NAILS (1.0 max):
 - Colors: Pearl white or French manicure
-- If VISIBLE + compliant: Score 1.0/1
-- If VISIBLE + violation: Deduct [Length 0.5 + Color 0.5]
-- If NOT VISIBLE: Score 1.0/1 → output "Nails: 1.0/1 (NOT VISIBLE)"
+- If VISIBLE + compliant: Score 1/1
+- If VISIBLE + violation: Deduct marks appropriately
+- If NOT VISIBLE (truly cannot assess): Score 1/1 → output "Nails: 1/1 (NOT VISIBLE)"
 
 ACCESSORIES (2.0 max):
 - Earrings: white/rose-gold pearl or diamond studs only
@@ -51,40 +52,46 @@ ACCESSORIES (2.0 max):
 - Watch: must have seconds hand (black/silver/rose-gold/dark blue)
 - Bangles: max one plain silver/rose-gold
 - Prohibitions: NO religious threads, nose pins, extra piercings
-- If VISIBLE + compliant: Score 2.0/2
-- If VISIBLE + violation: Deduct [Rings 0.5 + Earrings 0.5 + Watch 0.5 + Prohibitions 0.5]
-- If NOT VISIBLE: Score 2.0/2 → output "Accessories: 2.0/2 (NOT VISIBLE)"
+- If VISIBLE + compliant: Score 2/2
+- If VISIBLE + violation: Deduct marks appropriately
+- If NOT VISIBLE (truly cannot assess): Score 2/2 → output "Accessories: 2/2 (NOT VISIBLE)"
 
 UNIFORM (3.0 max):
 - Tunic: clean, well-fitted
 - Scarf: correct knot, properly positioned
 - Badge: visible, aligned
 - Stockings: compliant color
-- If VISIBLE + compliant: Score 3.0/3
-- If VISIBLE + violation: Deduct [Tunic 1.0 + Scarf 0.5 + Badge 0.5 + Stockings 0.5 + Overall 0.5]
-- If NOT VISIBLE: Score 3.0/3 → output "Uniform: 3.0/3 (NOT VISIBLE)"
+- If VISIBLE + compliant: Score 3/3
+- If VISIBLE + violation OR in casual attire: Deduct marks appropriately (do NOT give full marks just because not in proper uniform)
+- If NOT VISIBLE (truly off-frame, impossible to assess): Score 3/3 → output "Uniform: 3/3 (NOT VISIBLE)"
+
+SCORING RULES (CRITICAL):
+- All scores MUST be integers (0, 1, 2, 3), NO DECIMALS
+- Example: "Hairstyle: 1/2" NOT "Hairstyle: 1.5/2"
+- Overall score MUST be integer (0-10), NO DECIMALS
+- Calculate: sum all category scores, cap at 10
 
 COMPLIANCE THRESHOLD:
-Score >= 7.0 = COMPLIANT
-Score < 7.0 = NON-COMPLIANT
+Score >= 7 = COMPLIANT
+Score < 7 = NON-COMPLIANT
 
 OUTPUT FORMAT (exact):
 Overall Assessment: [COMPLIANT or NON-COMPLIANT]
-Score: X.X/10
+Score: X/10
 
 Category Scores:
-Uniform: X.X/3
-Hairstyle: X.X/2
-Makeup: X.X/2
-Nails: X.X/1
-Accessories: X.X/2
+Uniform: X/3
+Hairstyle: X/2
+Makeup: X/2
+Nails: X/1
+Accessories: X/2
 
 Observations:
-- Uniform: [Description, include "(NOT VISIBLE)" if applicable]
-- Hairstyle: [Description, include "(NOT VISIBLE)" if applicable]
-- Makeup: [Description, include "(NOT VISIBLE)" if applicable]
-- Nails: [Description, include "(NOT VISIBLE)" if applicable]
-- Accessories: [Description, include "(NOT VISIBLE)" if applicable]
+- Uniform: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
+- Hairstyle: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
+- Makeup: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
+- Nails: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
+- Accessories: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
 
 Issues Found:
 - [Only visible violations, OR items marked as NOT VISIBLE]
@@ -108,26 +115,26 @@ def _post_gemini(parts):
 
 
 def _normalize_output(report_text: str) -> str:
-    """Normalize scores to X.X format."""
+    """Normalize scores to integer format (X/10, not X.X/10)."""
     # Remove Evidence tags if any
     report_text = re.sub(r'\s*\(Evidence:[^)]*\)', '', report_text, flags=re.IGNORECASE)
     
-    # Fix Overall Score
+    # Fix Overall Score - remove decimals, make it integer
     report_text = re.sub(
         r'(Score)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10',
-        lambda m: f"{m.group(1)}: {float(m.group(2)):.1f}/10",
+        lambda m: f"{m.group(1)}: {int(float(m.group(2)))}/10",
         report_text,
         flags=re.IGNORECASE
     )
     
-    # Fix category scores
-    category_maxes = {"Uniform": 3.0, "Hairstyle": 2.0, "Makeup": 2.0, "Nails": 1.0, "Accessories": 2.0}
+    # Fix category scores - convert to integers, remove decimals
+    category_maxes = {"Uniform": 3, "Hairstyle": 2, "Makeup": 2, "Nails": 1, "Accessories": 2}
     
     for cat, maxval in category_maxes.items():
-        pattern = rf'({re.escape(cat)}\s*:\s*)([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)'
+        pattern = rf'({re.escape(cat)}\s*:\s*)([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+)'
         def replace_score(m):
-            num = float(m.group(2))
-            return f"{m.group(1)}{num:.1f}/{m.group(3)}"
+            num = int(float(m.group(2)))
+            return f"{m.group(1)}{num}/{m.group(3)}"
         report_text = re.sub(pattern, replace_score, report_text, flags=re.IGNORECASE)
     
     return report_text
@@ -152,7 +159,7 @@ def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
     prompt = (
         f"{FACE_GROOMING_PROMPT}\n\n"
         "This is a video. Sample frames uniformly. Use majority rule for assessment.\n"
-        f"Output format:\nOverall Assessment: [COMPLIANT or NON-COMPLIANT]\nScore: X.X/10\n..."
+        f"Output format:\nOverall Assessment: [COMPLIANT or NON-COMPLIANT]\nScore: X/10\n..."
     )
     parts = [
         {"text": prompt},
@@ -171,11 +178,11 @@ def check_grooming_from_frames(frames_b64: list, name: str, iga_code: str) -> st
         reply = check_grooming(image_b64)
         results.append(f"--- Frame {idx} ---\n{reply}")
         
-        score_match = re.search(r'Score:\s*([0-9.]+)/10', reply)
+        score_match = re.search(r'Score:\s*([0-9]+)/10', reply)
         if score_match:
-            frame_scores.append(float(score_match.group(1)))
+            frame_scores.append(int(score_match.group(1)))
     
-    avg_score = sum(frame_scores) / len(frame_scores) if frame_scores else 0.0
-    summary = f"CONSOLIDATED: {name} (IGA: {iga_code})\nAverage Score: {avg_score:.1f}/10.0\nAssessment: {'COMPLIANT' if avg_score >= 7.0 else 'NON-COMPLIANT'}\n\n"
+    avg_score = int(sum(frame_scores) / len(frame_scores)) if frame_scores else 0
+    summary = f"CONSOLIDATED: {name} (IGA: {iga_code})\nAverage Score: {avg_score}/10\nAssessment: {'COMPLIANT' if avg_score >= 7 else 'NON-COMPLIANT'}\n\n"
     
     return summary + "\n".join(results)
