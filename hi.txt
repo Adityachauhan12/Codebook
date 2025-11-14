@@ -90,3 +90,52 @@ NAILS (1.0 max):
 - If VISIBLE + compliant: Score 1/1
 - If VISIBLE + non-compliant color/length: Score 0/1 (deduct full marks)
 - If truly hands completely out of frame: Score 1/1 → output "Nails: 1/1 (NOT VISIBLE)"
+
+
+
+{
+  "person": {
+    "name": "s",
+    "iga_code": "s"
+  },
+  "assessment": "NON-COMPLIANT",
+  "score": 3,
+  "scores": {
+    "uniform": 0,
+    "hairstyle": 0,
+    "makeup": 0,
+    "nails": 1,
+    "accessories": 2
+  },
+  "details": {
+    "uniform": "Crew is in casual attire (black jacket over a striped shirt), not the approved IndiGo uniform. Tunic, scarf, and badge are absent.",
+    "hairstyle": "Hair is short and does not conform to any of the approved (female) styles or colors listed in the standards.",
+    "makeup": "No makeup is visible. The standard requires a full application of approved makeup.",
+    "nails": "Nails are not visible as hands are out of frame.",
+    "accessories": "No prohibited piercings are visible. Other accessories like watch and rings cannot be assessed."
+  },
+  "issues": [
+    "**Violation:** Crew member is not wearing the uniform.",
+    "**Violation:** Hairstyle is non-compliant with the provided standards.",
+    "**Violation:** Makeup is completely absent, failing to meet requirements.",
+    "**NOT VISIBLE:** Nails.",
+    "**NOT VISIBLE:** Watch.",
+    "**NOT VISIBLE:** Rings."
+  ],
+  "recommendations": [
+    "The crew member must wear the complete and correct IndiGo uniform while on duty.",
+    "Hair must adhere to the styles and colors specified in the grooming guidelines.",
+    "Regulation makeup must be worn as per the standards.",
+    "Ensure hands are visible for nail checks; nails must be either pearl white or a French manicure.",
+    "A compliant watch with a seconds hand is mandatory and must be visible. Any other accessories must adhere to guidelines."
+  ],
+  "_metadata": {
+    "not_visible": {
+      "uniform": false,
+      "hairstyle": false,
+      "makeup": false,
+      "nails": false,
+      "accessories": false
+    }
+  }
+}
