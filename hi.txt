@@ -200,3 +200,9 @@ async def individual_analysis(
             },
             status_code=500
         )
+
+
+Add this import at the top of main.py
+from dashboard_service import _load_records, Filters as DashboardFilters, _issue_heading
+from collections import defaultdict
+from datetime import datetime, date as _date, timedelta
