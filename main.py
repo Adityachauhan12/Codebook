@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any, Tuple, List
 from gcs_utils import _list_by_prefix, _download_json
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, UploadFile, Query
+from fastapi import FastAPI, File, Form, UploadFile, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -31,7 +31,6 @@ from grooming_utils import (  # noqa: E402
 # ---------------- Regex helpers to parse Gemini text ----------------
 _rx = {
     "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
-    # Broaden label tolerance: Overall or Total
     "overall_score": re.compile(
         r"(?:Overall|Total)\s*Score\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10", re.I
     ),
@@ -122,8 +121,11 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
         if score > 10:
             score = 10
 
-    if assessment is None and score is not None:
+    # Hardcode compliance threshold: score >= 7 is COMPLIANT
+    if score is not None:
         assessment = "COMPLIANT" if score >= 7 else "NON-COMPLIANT"
+    elif assessment is None:
+        assessment = "NON-COMPLIANT"
 
     ok_i, block_i = _extract(_rx["issues_block"], text)
     ok_r, block_r = _extract(_rx["reco_block"], text)
@@ -163,8 +165,8 @@ class GroomingRequest(BaseModel):
     imageBase64: str
     crewName: Optional[str] = None
     igaCode: Optional[str] = None
-    base: Optional[str] = None  # currently unused; kept for forward compatibility
-    department: Optional[str] = None  # currently unused
+    base: Optional[str] = None
+    department: Optional[str] = None
 
 
 @app.get("/healthz")
@@ -188,7 +190,7 @@ async def check_grooming_endpoint(payload: GroomingRequest):
 
         # Persist artifacts/results in GCS
         img_path = upload_image_bytes(img_bytes, payload.igaCode, "image", payload.crewName)
-        upload_grooming_result_text(report, payload.crewName, payload.igaCode, img_path,parsed=parsed)
+        upload_grooming_result_text(report, payload.crewName, payload.igaCode, img_path, parsed=parsed)
         append_event_to_crew_log(
             {"type": "image", "parsed": parsed, "image_path": img_path},
             payload.crewName,
@@ -213,24 +215,48 @@ async def check_grooming_video(
     name: str = Form(...),
     iga_code: str = Form(...),
 ):
+    # Accept only .mp4 files
+    if not video.filename.lower().endswith(".mp4"):
+        return JSONResponse({"error": "Only .mp4 files are allowed"}, status_code=400)
+
+    # Check file size BEFORE saving (limit: 20 MB)
+    # Read in chunks to avoid loading entire file into memory
+    MAX_SIZE = 20 * 1024 * 1024  # 20 MB
+    size = 0
+    chunk_size = 1024 * 1024  # 1 MB chunks
+    
+    # Reset to beginning
+    await video.seek(0)
+    
+    # Check size by reading chunks
+    while True:
+        chunk = await video.read(chunk_size)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_SIZE:
+            return JSONResponse({"error": "Video size must be <= 20 MB"}, status_code=400)
+    
+    # Reset file pointer after size check
+    await video.seek(0)
+
     try:
-        video_dir = "uploads/videos"
-        os.makedirs(video_dir, exist_ok=True)
-        video_path = os.path.join(video_dir, video.filename)
+        videos_dir = os.path.join("uploads", "videos")
+        os.makedirs(videos_dir, exist_ok=True)
+        video_path = os.path.join(videos_dir, video.filename)
+        
         with open(video_path, "wb") as f:
             shutil.copyfileobj(video.file, f)
 
         full_text = check_grooming_from_video(video_path, name, iga_code)
         parsed = _parse_text_to_ui(full_text, name, iga_code)
 
-        upload_grooming_result_text(full_text, name, iga_code, None,parsed=parsed)
-        append_event_to_crew_log({"type": "video", "parsed": parsed}, name, iga_code)
-        create_ticket({"type": "video", "iga_code": iga_code, "crew_name": name})
-
         return {"status": "ok", "result": parsed}
     except Exception as e:
-        print(f"Error in /check-grooming-video: {str(e)}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        import traceback
+
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ---------------- The 3 requested APIs ----------------
@@ -238,11 +264,6 @@ from dashboard_service import get_insights, get_info, search_people  # noqa: E40
 
 
 def _resolve_range(dateFrom: Optional[_date], dateTo: Optional[_date], days: Optional[int]):
-    """
-    Resolve final date range.
-    If days is supplied (e.g., 7), returns last N days including today.
-    Else uses dateFrom/dateTo. Defaults to last 7 days.
-    """
     today = datetime.utcnow().date()
     if days and int(days) > 0:
         d = int(days)
@@ -254,7 +275,6 @@ def _resolve_range(dateFrom: Optional[_date], dateTo: Optional[_date], days: Opt
     return _from, _to
 
 
-# 1) MAIN insights — grooming vs non-grooming, categories, daily hover graph, top 5 groomed/non-groomed, recent tests
 @app.get("/v1/insights")
 async def insights(
     dateFrom: Optional[_date] = Query(None),
@@ -267,7 +287,6 @@ async def insights(
     return get_insights(_from, _to, page, pageSize)
 
 
-# 2) General info box — cards-like KPIs with base=null
 @app.get("/v1/info")
 async def info_box(
     dateFrom: Optional[_date] = Query(None),
@@ -278,7 +297,6 @@ async def info_box(
     return get_info(_from, _to)
 
 
-# 3) Search — by IGA code or crew name (case-insensitive), paginated
 @app.get("/v1/search")
 async def search_endpoint(
     q: str = Query("", description="search by IGA code or crew name (case-insensitive)"),
@@ -291,65 +309,73 @@ async def search_endpoint(
     _from, _to = _resolve_range(dateFrom, dateTo, days)
     return search_people(_from, _to, q, page, pageSize)
 
-# 4) Individual crew analysis — by IGA code or crew name, last 7 days by default
 
+# Fixed individual analysis endpoint
 @app.get("/v1/individual-analysis")
 async def individual_analysis(
     igaCode: str = Query(..., description="IGA code"),
     crewName: str = Query(..., description="Crew name"),
     dateFrom: str = Query(..., description="Start date in YYYY-MM-DD"),
-    dateTo: str = Query(..., description="End date in YYYY-MM-DD")
+    dateTo: str = Query(..., description="End date in YYYY-MM-DD"),
 ):
     try:
         # Parse dates
         start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
         end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
+
         if start_date > end_date:
             return {"error": "dateFrom cannot be after dateTo"}
 
-        base_folder = os.getenv("GCS_BASE_FOLDER", "Grooming-Results")
-        iga_slug = igaCode.strip().replace(" ", "_")
+        # Import the internal function directly
+        from dashboard_service import _load_records, Filters
+        
+        # Load all records in date range (same as insights API)
+        filters = Filters(date_from=start_date, date_to=end_date)
+        all_records = _load_records(filters)
 
-        # Collect assessments within date range
-        all_assessments = []
-        current_date = start_date
-        while current_date <= end_date:
-            date_str = current_date.strftime("%Y%m%d")
-            prefix = f"{base_folder}/{date_str}/crew_{iga_slug}_"
-            names = _list_by_prefix(prefix)
-            for blob_name in names:
-                doc = _download_json(blob_name)
-                if doc.get("iga_code") == igaCode and doc.get("crew_name") == crewName:
-                    all_assessments.extend(doc.get("assessments", []))
-            current_date += timedelta(days=1)
+        # Filter for this specific crew (case-insensitive)
+        iga_normalized = igaCode.strip().upper()
+        crew_normalized = crewName.strip().upper()
+        
+        crew_records = [
+            r for r in all_records 
+            if (r.get("iga_code") or "").strip().upper() == iga_normalized 
+            and (r.get("crew_name") or "").strip().upper() == crew_normalized
+        ]
 
-        if not all_assessments:
+        if not crew_records:
             return {"error": "No assessments found for this crew in given date range"}
 
-        # Summary
-        total = len(all_assessments)
-        compliant = sum(1 for a in all_assessments if a.get("parsed", {}).get("assessment") == "COMPLIANT")
-        non_compliant = total - compliant
-        pass_rate = f"{round((compliant / total) * 100, 2)}%"
+        # Summary statistics
+        total = len(crew_records)
+        compliant = sum(1 for r in crew_records if r.get("assessment") == "COMPLIANT")
+        noncompliant = total - compliant
+        passrate = f"{round(compliant / total * 100, 2)}%" if total > 0 else "0%"
 
-        # Category-wise non-compliance
+        # Category-wise non-compliance counts
         categories = ["uniform", "hairstyle", "makeup", "nails", "accessories"]
         category_counts = {c.capitalize(): 0 for c in categories}
-        for a in all_assessments:
-            details = a.get("parsed", {}).get("details", {})
-            for c in categories:
-                if details.get(c) and "NON" in details.get(c).upper():
-                    category_counts[c.capitalize()] += 1
+        for r in crew_records:
+            issues = r.get("issues") or []
+            for issue in issues:
+                issue_lower = (issue or "").lower()
+                for c in categories:
+                    if c in issue_lower:
+                        category_counts[c.capitalize()] += 1
+                        break
 
         # Trend for date range
         trend_map = {}
-        for a in all_assessments:
-            ts = a.get("timestamp") or datetime.utcnow().isoformat()
-            dt = datetime.fromisoformat(ts).date()
-            key = dt.strftime("%b %d")
+        for r in crew_records:
+            date_obj = r.get("date")
+            if not date_obj:
+                continue
+            
+            key = date_obj.strftime("%Y-%m-%d")
             if key not in trend_map:
                 trend_map[key] = {"compliant": 0, "nonCompliant": 0}
-            if a.get("parsed", {}).get("assessment") == "COMPLIANT":
+            
+            if r.get("assessment") == "COMPLIANT":
                 trend_map[key]["compliant"] += 1
             else:
                 trend_map[key]["nonCompliant"] += 1
@@ -358,7 +384,7 @@ async def individual_analysis(
         trend_list = []
         current_date = start_date
         while current_date <= end_date:
-            key = current_date.strftime("%b %d")
+            key = current_date.strftime("%Y-%m-%d")
             trend_list.append({
                 "date": key,
                 "compliant": trend_map.get(key, {}).get("compliant", 0),
@@ -367,15 +393,18 @@ async def individual_analysis(
             current_date += timedelta(days=1)
 
         return {
-            "crew": {"igaCode": igaCode, "name": crewName},
+            "crew": {
+                "igaCode": igaCode,
+                "name": crewName,
+            },
             "summary": {
                 "totalAssessments": total,
                 "compliant": compliant,
-                "nonCompliant": non_compliant,
-                "passRate": pass_rate
+                "nonCompliant": noncompliant,
+                "passRate": passrate,
             },
             "nonComplianceByCategory": category_counts,
-            "trend": trend_list
+            "trend": trend_list,
         }
 
     except Exception as e:
