@@ -71,81 +71,49 @@ Not 100%
 
 
 
-
-You are assessing IndiGo Airlines cabin crew grooming standards. Be concise but complete.
-
-RULES:
-- Judge only what is visible; mark other items as "NOT VISIBLE"
-- Decimal scores always (X.X format)
-- If whole category compliant, score full marks
-- If violation exists, show: [Category Score breakdown only for that category]
-- Concise explanations per category
-- If part of uniform is NOT VISIBLE, state in Issues & Recommendations but do NOT deduct marks
-- If nails are NOT VISIBLE, mark NON-COMPLIANT and deduct full marks
-- Deduct marks only for visible violations
-- Every category must have a descriptive observation in 'details', even if compliant or NOT VISIBLE.
-SCORING:
-
-HAIRSTYLE (2.0):
-- Approved: Chignon, Braid Roll, Twisted Bun, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls
-- Colors: Ash Grey, Caramel, Hot Toffee, Sparkling Amber, Chocolate Cherry, Midnight Ruby/Burgundy
-- Highlights: fine (≤2mm), blended
-- Ponytails: NOT allowed
-- If approved style, neat, proper color: Score 2.0
-- If violation: deduct [Style 0.6 + Neatness 0.6 + Color 0.4 + Finish 0.4]
-
-MAKEUP (2.0):
-- Base: must match skin tone
-- Eyes: approved palettes only (Swiss Beauty 05, Makeup Revolution Achieve, Nykaa Eyes On Me Night Out, Lakme Smokey Glam, Nykaa Tinsel Twilight, Sugar Blend 02)
-- Liner: brown (fair-wheatish), black (dusky-olive)
-- Mascara: black, volumizing
-- Lips: burgundy, wine, cranberry
-- If all compliant: 2.0
-- If violation: deduct [Base 0.5 + Eyes 0.5 + Lips 0.5 + Overall 0.5]
-
-NAILS (1.0):
-- Colors: Pearl white or French manicure
-- If visible and compliant: 1.0
-- If NOT VISIBLE: NON-COMPLIANT, deduct full marks (0.0)
-- If violation: deduct [Length 0.5 + Color 0.5]
-
-ACCESSORIES (2.0):
-- Earrings: white/rose-gold pearl or diamond studs only
-- Rings: max one per hand, silver/rose-gold, ring or middle finger only
-- Watch: must have seconds hand (black/silver/rose-gold/dark blue)
-- Bangles: max one plain silver/rose-gold
-- Prohibitions: NO religious threads, nose pins, extra piercings
-- If all compliant: 2.0 (state: "All accessories compliant.")
-- If NOT VISIBLE: 2.0 (state: "Accessories not visible (watch, earrings, rings, bangles).")
-- If violation: deduct [Rings 0.5 + Earrings 0.5 + Watch 0.5 + Prohibitions 0.5]
-
-UNIFORM (3.0):
-- Tunic: clean, well-fitted
-- Scarf: correct knot, properly positioned
-- Badge: visible, aligned
-- Stockings: compliant color
-- If all compliant: 3.0
-- If NOT VISIBLE: do NOT deduct marks, but list in Issues
-- If violation: deduct [Tunic 1.0 + Scarf 0.5 + Badge 0.5 + Stockings 0.5 + Overall 0.5]
-
-COMPLIANCE:
-Score >= 7.0 = COMPLIANT, else NON-COMPLIANT
-
-OUTPUT FORMAT:
-Grooming Result (Video)
-IGA: [code]
-
-Overall Assessment: [COMPLIANT or NON-COMPLIANT]
-Score: X.X/10
-
-Category Scores:
-[Category Name]: X.X/Max
-[One sentence observation. If violated, add breakdown in brackets]
-
-Issues Found:
-- [Specific issue or NOT VISIBLE items]
-
-Recommendations:
-- [Actionable fix]
-"""
-
+{
+  "person": {
+    "name": "f",
+    "iga_code": "IGA567002"
+  },
+  "assessment": "NON-COMPLIANT",
+  "score": 6.3,
+  "scores": {
+    "uniform": 3,
+    "hairstyle": 0,
+    "makeup": 1,
+    "nails": 0,
+    "accessories": 0
+  },
+  "details": {
+    "uniform": "Not visible as the crew member appears to be in casual attire. (NOT VISIBLE)",
+    "hairstyle": "Hair is worn down and loose, which is not an approved or neat style for duty.",
+    "makeup": "Eyeliner appears compliant. Lip color is not one of the approved shades (burgundy, wine, or cranberry).",
+    "nails": "Nail color is a pink/mauve shade, which is not the approved Pearl White or French Manicure.",
+    "accessories": "A prohibited nose pin is worn. Two rings are on one hand (violates one-per-hand rule) with one on a non-approved finger (thumb). Watch is gold-toned and lacks a visible seconds hand (violates color and type rules). More than one bangle/bracelet is worn."
+  },
+  "issues": [
+    "Hairstyle: Non-compliant style (hair down) and neatness violation.",
+    "Makeup: Non-compliant lip color.",
+    "Nails: Non-compliant nail polish color.",
+    "Accessories: Prohibited nose pin. Non-compliant rings (quantity and placement). Non-compliant watch (color and lack of seconds hand). Exceeds bangle limit.",
+    "Uniform: (NOT VISIBLE)",
+    "Earrings: (NOT VISIBLE)"
+  ],
+  "recommendations": [
+    "Hairstyle: Ensure hair is always tied neatly in an approved style (e.g., chignon, bun) while on duty.",
+    "Makeup: Use only the specified shades of burgundy, wine, or cranberry for lipstick.",
+    "Nails: Adhere strictly to Pearl White polish or a French Manicure.",
+    "Accessories: Remove the nose pin before duty. Wear a maximum of one ring per hand, only on the ring or middle finger. Replace the watch with a compliant model (approved color with a seconds hand). Wear only a single, plain bangle if desired.",
+    "Uniform & Earrings: Ensure full uniform compliance and approved earrings are worn for future checks."
+  ],
+  "_metadata": {
+    "not_visible": {
+      "uniform": true,
+      "hairstyle": false,
+      "makeup": false,
+      "nails": false,
+      "accessories": false
+    }
+  }
+}
