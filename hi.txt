@@ -1,437 +1,695 @@
-{
-  "meta": {
-    "generatedAt": "2025-11-14T09:03:13.748702Z",
-    "filters": {
-      "dateFrom": "2025-11-08",
-      "dateTo": "2025-11-14"
-    }
-  },
-  "overview": {
-    "total": 136,
-    "compliant": 53,
-    "nonCompliant": 83,
-    "passRate": 0.3897058823529412,
-    "failRate": 0.6102941176470589,
-    "base": null
-  },
-  "trends": {
-    "daily": [
-      {
-        "date": "2025-11-10",
-        "compliant": 3,
-        "nonCompliant": 9,
-        "base": null
-      },
-      {
-        "date": "2025-11-11",
-        "compliant": 30,
-        "nonCompliant": 42,
-        "base": null
-      },
-      {
-        "date": "2025-11-12",
-        "compliant": 17,
-        "nonCompliant": 24,
-        "base": null
-      },
-      {
-        "date": "2025-11-13",
-        "compliant": 0,
-        "nonCompliant": 4,
-        "base": null
-      },
-      {
-        "date": "2025-11-14",
-        "compliant": 3,
-        "nonCompliant": 4,
-        "base": null
-      }
-    ]
-  },
-  "categories": [
-    {
-      "category": "hairstyle",
-      "nonCompliantCount": 75,
-      "share": 0.904,
-      "base": null
-    },
-    {
-      "category": "uniform",
-      "nonCompliantCount": 68,
-      "share": 0.819,
-      "base": null
-    },
-    {
-      "category": "makeup",
-      "nonCompliantCount": 34,
-      "share": 0.41,
-      "base": null
-    },
-    {
-      "category": "accessories",
-      "nonCompliantCount": 20,
-      "share": 0.241,
-      "base": null
-    },
-    {
-      "category": "nails",
-      "nonCompliantCount": 19,
-      "share": 0.229,
-      "base": null
-    },
-    {
-      "category": "facial hair",
-      "nonCompliantCount": 7,
-      "share": 0.084,
-      "base": null
-    },
-    {
-      "category": "prohibited accessories are worn",
-      "nonCompliantCount": 2,
-      "share": 0.024,
-      "base": null
-    },
-    {
-      "category": "subject-standard mismatch",
-      "nonCompliantCount": 1,
-      "share": 0.012,
-      "base": null
-    },
-    {
-      "category": "uniform violation",
-      "nonCompliantCount": 1,
-      "share": 0.012,
-      "base": null
-    },
-    {
-      "category": "grooming non-compliance",
-      "nonCompliantCount": 1,
-      "share": 0.012,
-      "base": null
-    }
-  ],
-  "top": {
-    "groomed": [
-      {
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "compliant": 49,
-        "totalTests": 108,
-        "compliantRate": 0.454,
-        "avgScore": 4.89,
-        "lastSeen": "2025-11-14T08:50:38.616353",
-        "base": null
-      }
-    ],
-    "nonGroomed": [
-      {
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "nonCompliant": 59,
-        "totalTests": 108,
-        "nonCompliantRate": 0.546,
-        "avgScore": 4.89,
-        "lastSeen": "2025-11-14T08:50:38.616353",
-        "base": null
-      }
-    ]
-  },
-  "recentTests": {
-    "items": [
-      {
-        "testId": "T-1763110238",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-14T08:50:38.616353"
-      },
-      {
-        "testId": "T-1763106058",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 7,
-        "assessment": "COMPLIANT",
-        "status": "COMPLIANT",
-        "passFail": "PASS",
-        "takenAt": "2025-11-14T07:40:58.277382"
-      },
-      {
-        "testId": "T-1763105936",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 10,
-        "assessment": "COMPLIANT",
-        "status": "COMPLIANT",
-        "passFail": "PASS",
-        "takenAt": "2025-11-14T07:38:56.924831"
-      },
-      {
-        "testId": "T-1763105897",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 3,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-14T07:38:17.190281"
-      },
-      {
-        "testId": "T-1763105817",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 10,
-        "assessment": "COMPLIANT",
-        "status": "COMPLIANT",
-        "passFail": "PASS",
-        "takenAt": "2025-11-14T07:36:57.812683"
-      },
-      {
-        "testId": "T-1763105028",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-14T07:23:48.907218"
-      },
-      {
-        "testId": "T-1763104940",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 3,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-14T07:22:20.338401"
-      },
-      {
-        "testId": "T-1763013528",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-13T05:58:48.639551"
-      },
-      {
-        "testId": "T-1763008333",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-13T04:32:13.113717"
-      },
-      {
-        "testId": "T-1763007937",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-13T04:25:37.215086"
-      },
-      {
-        "testId": "T-1763007847",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-13T04:24:07.202373"
-      },
-      {
-        "testId": "T-1762943276",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T10:27:56.417576"
-      },
-      {
-        "testId": "T-1762942900",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 7,
-        "assessment": "COMPLIANT",
-        "status": "COMPLIANT",
-        "passFail": "PASS",
-        "takenAt": "2025-11-12T10:21:40.545323"
-      },
-      {
-        "testId": "T-1762942825",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T10:20:25.137382"
-      },
-      {
-        "testId": "T-1762942323",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 1,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T10:12:03.565328"
-      },
-      {
-        "testId": "T-1762934790",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 9,
-        "assessment": "COMPLIANT",
-        "status": "COMPLIANT",
-        "passFail": "PASS",
-        "takenAt": "2025-11-12T08:06:30.338991"
-      },
-      {
-        "testId": "T-1762931133",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T07:05:33.353026"
-      },
-      {
-        "testId": "T-1762930634",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 1,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T06:57:14.948358"
-      },
-      {
-        "testId": "T-1762929985",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T06:46:25.590528"
-      },
-      {
-        "testId": "T-1762929941",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 9,
-        "assessment": "COMPLIANT",
-        "status": "COMPLIANT",
-        "passFail": "PASS",
-        "takenAt": "2025-11-12T06:45:41.540127"
-      },
-      {
-        "testId": "T-1762929868",
-        "crewId": "IGA6781",
-        "crewName": "Lavanya Singh",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T06:44:28.470275"
-      },
-      {
-        "testId": "T-1762927997",
-        "crewId": "6E-CC-2019-0154",
-        "crewName": "Priya Sharma",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T06:13:17.331569"
-      },
-      {
-        "testId": "T-1762927955",
-        "crewId": "6E-CC-2019-0154",
-        "crewName": "Priya Sharma",
-        "base": null,
-        "score": 2,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T06:12:35.334737"
-      },
-      {
-        "testId": "T-1762927897",
-        "crewId": "6E-CC-2019-0154",
-        "crewName": "Priya Sharma",
-        "base": null,
-        "score": 0,
-        "assessment": "NON-COMPLIANT",
-        "status": "NON-COMPLIANT",
-        "passFail": "FAIL",
-        "takenAt": "2025-11-12T06:11:37.589834"
-      },
-      {
-        "testId": "T-1762927844",
-        "crewId": "6E-CC-2019-0154",
-        "crewName": "Priya Sharma",
-        "base": null,
-        "score": 9,
-        "assessment": "COMPLIANT",
-        "status": "COMPLIANT",
-        "passFail": "PASS",
-        "takenAt": "2025-11-12T06:10:44.543348"
-      }
-    ],
-    "page": 1,
-    "pageSize": 25,
-    "total": 136
-  }
+"""
+A toolkit for communicating with the Google Gemini API for grooming checks.
+This module provides standalone functions to assess grooming standards by sending
+image or video data to the Gemini API along with a detailed prompt.
+"""
+
+import base64
+import re
+import google.auth
+import google.generativeai as genai
+
+# Setup Gemini with ADC
+SCOPES = ["https://www.googleapis.com/auth/generative-language"]
+creds, _ = google.auth.default(scopes=SCOPES)
+genai.configure(credentials=creds)
+
+model = genai.GenerativeModel("models/gemini-2.5-pro", generation_config={"temperature": 0.0})
+
+# Core prompt: policy + rubric - UPDATED WITH GENDER CHECK
+FACE_GROOMING_PROMPT = """
+You are assessing IndiGo Airlines cabin crew grooming standards. Be concise but complete.
+
+⚠️ CRITICAL: GENDER CHECK FIRST
+- Determine if the crew member is MALE or FEMALE
+- If MALE: State "ASSESSMENT CANNOT BE COMPLETED: These standards are for FEMALE cabin crew only. Male crew requires different grooming standards."
+- If FEMALE: Continue with full assessment below
+- If UNCLEAR/AMBIGUOUS: Request clarification
+
+If you determine the crew is MALE, STOP assessment and output:
+Overall Assessment: NON-COMPLIANT
+Score: 0/10
+Reason: These grooming standards apply to FEMALE cabin crew only. Male crew member cannot be assessed using these standards.
+
+Issues Found:
+- Assessment criteria are gender-specific (female only)
+- Male crew member does not comply with female standards
+
+Recommendations:
+- Please use appropriate male cabin crew grooming standards for assessment
+- These standards are exclusively for female IndiGo cabin crew
+
+---
+
+⚠️ CRITICAL RULE - VISIBILITY-BASED SCORING (FOR FEMALE CREW ONLY):
+- Judge what IS VISIBLE in the image/video
+- IMPORTANT: If crew appears in casual attire (not uniform), evaluate that attire for any grooming standards applicable to it
+- If uniform is completely absent/not visible AND cannot judge any standards: score as NOT VISIBLE (full marks with marker)
+- DEDUCT marks ONLY for visible violations
+- List NOT VISIBLE items in "Issues Found" for crew awareness
+- Do NOT give full marks just because something is off-frame; only mark NOT VISIBLE if truly impossible to assess
+
+HAIRSTYLE (2.0 max):
+- Approved styles: Chignon, Braid Roll, Twisted Bun, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls
+- Approved colors: Ash Grey, Caramel, Hot Toffee, Sparkling Amber, Chocolate Cherry, Midnight Ruby/Burgundy
+- Highlights: fine (≤2mm), blended. Ponytails: NOT allowed
+- If VISIBLE + compliant: Score 2/2
+- If VISIBLE + violation: Deduct marks appropriately
+- If NOT VISIBLE (truly cannot assess): Score 2/2 → output "Hairstyle: 2/2 (NOT VISIBLE)"
+
+MAKEUP (2.0 max):
+- Base: must match skin tone
+- Eyes: approved palettes only (Swiss Beauty 05, Makeup Revolution Achieve, Nykaa Eyes On Me Night Out, Lakme Smokey Glam, Nykaa Tinsel Twilight, Sugar Blend 02)
+- Liner: brown (fair-wheatish), black (dusky-olive)
+- Mascara: black, volumizing
+- Lips: burgundy, wine, cranberry
+- If VISIBLE + compliant: Score 2/2
+- If VISIBLE + violation: Deduct marks appropriately
+- If NOT VISIBLE (truly cannot assess): Score 2/2 → output "Makeup: 2/2 (NOT VISIBLE)"
+
+NAILS (1.0 max):
+- Colors: Pearl white or French manicure ONLY
+- If nails are shown/visible (hands visible): ALWAYS evaluate - do NOT mark as NOT VISIBLE
+- If VISIBLE + compliant: Score 1/1
+- If VISIBLE + non-compliant color/length: Score 0/1 (deduct full marks)
+- If truly hands completely out of frame: Score 1/1 → output "Nails: 1/1 (NOT VISIBLE)"
+
+ACCESSORIES (2.0 max):
+- Earrings: white/rose-gold pearl or diamond studs only [0.4 each if wrong]
+- Rings: max one per hand, silver/rose-gold, ring or middle finger only [0.5 if violation]
+- Watch: MUST have visible seconds hand (black/silver/rose-gold/dark blue) [0.5 if wrong/missing]
+- Bangles: max one plain silver/rose-gold [0.4 if excess]
+- Prohibitions: NO religious threads, nose pins, extra piercings [0.4 each if present]
+- If all compliant and visible: Score 2/2
+- If violations visible: Deduct per breakdown above (total max deduction = 2.0)
+- If NOT VISIBLE (truly cannot assess any accessories): Score 2/2 → output "Accessories: 2/2 (NOT VISIBLE)"
+- IMPORTANT: If ANY accessory is visible, do NOT mark entire category as NOT VISIBLE
+
+UNIFORM (3.0 max):
+- Tunic: clean, well-fitted
+- Scarf: correct knot, properly positioned
+- Badge: visible, aligned
+- Stockings: compliant color
+- If VISIBLE + compliant: Score 3/3
+- If VISIBLE + violation OR in casual attire: Deduct marks appropriately (do NOT give full marks just because not in proper uniform)
+- If NOT VISIBLE (truly off-frame, impossible to assess): Score 3/3 → output "Uniform: 3/3 (NOT VISIBLE)"
+
+SCORING RULES (CRITICAL):
+- All scores MUST be integers (0, 1, 2, 3), NO DECIMALS
+- Example: "Hairstyle: 1/2" NOT "Hairstyle: 1.5/2"
+- Overall score MUST be integer (0-10), NO DECIMALS
+- Calculate: sum all category scores, cap at 10
+
+COMPLIANCE THRESHOLD:
+Score >= 7 = COMPLIANT
+Score < 7 = NON-COMPLIANT
+
+OUTPUT FORMAT (exact):
+Overall Assessment: [COMPLIANT or NON-COMPLIANT]
+Score: X/10
+
+Category Scores:
+Uniform: X/3
+Hairstyle: X/2
+Makeup: X/2
+Nails: X/1
+Accessories: X/2
+
+Observations:
+- Uniform: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
+- Hairstyle: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
+- Makeup: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
+- Nails: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
+- Accessories: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
+
+Issues Found:
+- [Only visible violations, OR items marked as NOT VISIBLE]
+
+Recommendations:
+- [Actionable fixes for violations and guidance on non-visible items]
+"""
+
+
+def _normalize_output(report_text: str) -> str:
+    """Normalize scores to integer format (X/10, not X.X/10)."""
+    # Remove Evidence tags if any
+    report_text = re.sub(r'\s*\(Evidence:[^)]*\)', '', report_text, flags=re.IGNORECASE)
+    
+    # Fix Overall Score - remove decimals, make it integer
+    report_text = re.sub(
+        r'(Score)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10',
+        lambda m: f"{m.group(1)}: {int(float(m.group(2)))}/10",
+        report_text,
+        flags=re.IGNORECASE
+    )
+    
+    # Fix category scores - convert to integers, remove decimals
+    category_maxes = {"Uniform": 3, "Hairstyle": 2, "Makeup": 2, "Nails": 1, "Accessories": 2}
+    
+    for cat, maxval in category_maxes.items():
+        pattern = rf'({re.escape(cat)}\s*:\s*)([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+)'
+        def replace_score(m):
+            num = int(float(m.group(2)))
+            return f"{m.group(1)}{num}/{m.group(3)}"
+        report_text = re.sub(pattern, replace_score, report_text, flags=re.IGNORECASE)
+    
+    return report_text
+
+
+def check_grooming(image_b64: str) -> str:
+    """Single image assessment - concise format."""
+    try:
+        image_data = base64.b64decode(image_b64)
+        response = model.generate_content(
+            [
+                FACE_GROOMING_PROMPT,
+                {
+                    "mime_type": "image/jpeg",
+                    "data": image_data
+                }
+            ]
+        )
+        return _normalize_output(response.text)
+    except Exception as e:
+        return f"Error processing image: {str(e)}"
+
+
+def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
+    """Video assessment - concise format with crew info."""
+    try:
+        with open(video_path, "rb") as f:
+            video_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+        video_data = base64.b64decode(video_b64)
+        
+        prompt = (
+            f"{FACE_GROOMING_PROMPT}\n\n"
+            "This is a video. Sample frames uniformly. Use majority rule for assessment.\n"
+            f"Output format:\nOverall Assessment: [COMPLIANT or NON-COMPLIANT]\nScore: X/10\n..."
+        )
+        
+        response = model.generate_content(
+            [
+                prompt,
+                {
+                    "mime_type": "video/mp4",
+                    "data": video_data
+                }
+            ]
+        )
+        
+        return _normalize_output(response.text)
+    except Exception as e:
+        return f"Error processing video: {str(e)}"
+
+
+def check_grooming_from_frames(frames_b64: list, name: str, iga_code: str) -> str:
+    """Multiple frames assessment - UPDATED for integer scores."""
+    results = []
+    frame_scores = []
+    
+    for idx, image_b64 in enumerate(frames_b64, start=1):
+        reply = check_grooming(image_b64)
+        results.append(f"--- Frame {idx} ---\n{reply}")
+        
+        score_match = re.search(r'Score:\s*([0-9]+)/10', reply)
+        if score_match:
+            frame_scores.append(int(score_match.group(1)))
+    
+    avg_score = int(sum(frame_scores) / len(frame_scores)) if frame_scores else 0
+    summary = f"CONSOLIDATED: {name} (IGA: {iga_code})\nAverage Score: {avg_score}/10\nAssessment: {'COMPLIANT' if avg_score >= 7 else 'NON-COMPLIANT'}\n\n"
+    
+    return summary + "\n".join(results)
+
+
+
+
+
+
+
+from __future__ import annotations
+
+import os
+import re
+import base64
+import shutil
+
+from datetime import datetime, timedelta, date as _date
+from typing import Optional, Dict, Any, Tuple, List
+from gcs_utils import _list_by_prefix, _download_json
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, UploadFile, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+# Load environment variables
+load_dotenv()
+
+import config  # noqa: E402
+
+# ---------------- Grooming analysis (Gemini) ----------------
+from grooming_utils import (  # noqa: E402
+    check_grooming as run_grooming_analysis,
+    check_grooming_from_video,
+)
+
+# ---------------- Regex helpers to parse Gemini text ----------------
+_rx = {
+    "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
+    "overall_score": re.compile(
+        r"(?:Overall|Total|Score)\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*10", re.I
+    ),
+    "uniform_score": re.compile(r"Uniform\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*3", re.I),
+    "nails_score": re.compile(r"Nails\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*1", re.I),
+    "hairstyle_score": re.compile(r"Hairstyle\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I),
+    "makeup_score": re.compile(r"Makeup\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I),
+    "accessories_score": re.compile(
+        r"Accessories\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I
+    ),
+    # UPDATED: Detect (NOT VISIBLE) markers - catches both (NOT VISIBLE) and **NOT VISIBLE** formats
+    "uniform_not_visible": re.compile(r"(?:Uniform|Tunic|Scarf|Badge|Stockings).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "hairstyle_not_visible": re.compile(r"(?:Hairstyle|Hair).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "makeup_not_visible": re.compile(r"Makeup.*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "nails_not_visible": re.compile(r"(?:Nails|Nail).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "accessories_not_visible": re.compile(r"(?:Accessories|Watch|Rings|Earrings|Bangles).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    # Detail observations
+    "uniform_detail": re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
+    "hairstyle_detail": re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
+    "makeup_detail": re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
+    "nails_detail": re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
+    "acc_detail": re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
+    "issues_block": re.compile(r"Issues\s*Found\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
+    "reco_block": re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
 }
 
 
+def _extract(pat: re.Pattern, text: str) -> Tuple[bool, str]:
+    m = pat.search(text or "")
+    return (m is not None, m.group(1).strip() if m else "")
 
-curl -X 'GET' \
-  'https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-10-01&dateTo=2025-11-14' \
-  -H 'accept: application/json'
-Request URL
-https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-10-01&dateTo=2025-11-14
-Server response
-Code	Details
-200	
-Response body
-Download
-{
-  "error": "No assessments found for this crew in given date range"
-}
+
+def _num(s: str) -> Optional[int]:
+    """Convert to integer only, no decimals."""
+    try:
+        return int(float(s))
+    except Exception:
+        return None
+
+
+def _lines_to_list(block: str) -> List[str]:
+    out: List[str] = []
+    for ln in (block or "").splitlines():
+        t = ln.strip()
+        if not t:
+            continue
+        if t.startswith("-"):
+            out.append(t.lstrip("- ").strip())
+        elif t[0:2].isdigit() or t.startswith(("1.", "2.", "3.", "4.", "5.")):
+            out.append(t.split(".", 1)[-1].strip() if "." in t else t)
+    return out
+
+
+def _normalize_assessment(a: Optional[str]) -> Optional[str]:
+    if a is None:
+        return None
+    a = a.strip().upper()
+    a = a.replace("NONCOMPLIANT", "NON-COMPLIANT")
+    return a if a in ("COMPLIANT", "NON-COMPLIANT") else None
+
+
+def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
+    """
+    Parse Gemini text to UI dict, handling NOT VISIBLE items with full marks.
+    All scores are INTEGER, no decimals.
+    
+    Logic:
+    - If item is marked (NOT VISIBLE): award full marks, list in issues
+    - If item is visible but violates: deduct marks per Gemini
+    - If item is visible and compliant: award full marks
+    """
+    ok_assess, a_text = _extract(_rx["overall_assessment"], text)
+    ok_score, s_text = _extract(_rx["overall_score"], text)
+
+    score = _num(s_text) if ok_score else None
+    assessment = _normalize_assessment(a_text if ok_assess else None)
+
+    # Extract category scores and check for NOT VISIBLE markers
+    cats: Dict[str, int] = {}
+    not_visible_flags: Dict[str, bool] = {}
+    
+    category_configs = [
+        ("uniform", "uniform_score", "uniform_not_visible", 3),
+        ("hairstyle", "hairstyle_score", "hairstyle_not_visible", 2),
+        ("makeup", "makeup_score", "makeup_not_visible", 2),
+        ("nails", "nails_score", "nails_not_visible", 1),
+        ("accessories", "accessories_score", "accessories_not_visible", 2),
+    ]
+    
+    for cat_name, score_key, visible_key, max_val in category_configs:
+        # Check if item is marked as NOT VISIBLE
+        is_not_visible = _rx[visible_key].search(text or "") is not None
+        not_visible_flags[cat_name] = is_not_visible
+        
+        # Extract score from Gemini response
+        ok, val = _extract(_rx[score_key], text)
+        extracted_score = _num(val) if ok else None
+        
+        # Scoring logic:
+        # - If NOT VISIBLE: use full marks (no penalty)
+        # - If visible and score found: use extracted score
+        # - If visible but no score: default to 0 (violation detected)
+        if is_not_visible:
+            cats[cat_name] = max_val
+        else:
+            cats[cat_name] = extracted_score if extracted_score is not None else 0
+
+    # Extract details/observations
+    details: Dict[str, str] = {}
+    for key, rx_key in [
+        ("uniform", "uniform_detail"),
+        ("hairstyle", "hairstyle_detail"),
+        ("makeup", "makeup_detail"),
+        ("nails", "nails_detail"),
+        ("accessories", "acc_detail"),
+    ]:
+        _, v = _extract(_rx[rx_key], text)
+        details[key] = v
+
+    # Calculate overall score if not provided by Gemini
+    if score is None:
+        score = int(sum(v or 0 for v in cats.values()))
+        if score > 10:
+            score = 10
+
+    # Determine compliance based on score
+    if score is not None:
+        assessment = "COMPLIANT" if score >= 7 else "NON-COMPLIANT"
+    elif assessment is None:
+        assessment = "NON-COMPLIANT"
+
+    # Extract issues and recommendations
+    ok_i, block_i = _extract(_rx["issues_block"], text)
+    ok_r, block_r = _extract(_rx["reco_block"], text)
+
+    return {
+        "person": {"name": name or "", "iga_code": iga or ""},
+        "assessment": assessment,
+        "score": int(score),  # Ensure integer
+        "scores": cats,
+        "details": details,
+        "issues": _lines_to_list(block_i) if ok_i else [],
+        "recommendations": _lines_to_list(block_r) if ok_r else [],
+        "_metadata": {"not_visible": not_visible_flags},  # Audit trail for debugging
+    }
+
+
+# ---------------- GCS utils used by grooming routes ----------------
+from gcs_utils import (  # noqa: E402
+    upload_image_bytes,
+    upload_grooming_result_text,
+    append_event_to_crew_log,
+    create_ticket,
+)
+
+# ---------------- App setup ----------------
+app = FastAPI(title="Grooming Checks + Insights API", version="2.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class GroomingRequest(BaseModel):
+    imageBase64: str
+    crewName: Optional[str] = None
+    igaCode: Optional[str] = None
+    base: Optional[str] = None
+    department: Optional[str] = None
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok", "time": datetime.now().isoformat()}
+
+
+# ---------------- Grooming (image) ----------------
+@app.post("/check-grooming")
+async def check_grooming_endpoint(payload: GroomingRequest):
+    if not payload.imageBase64 or len(payload.imageBase64) < 10:
+        return JSONResponse({"error": "Invalid image"}, status_code=400)
+
+    try:
+        b64 = payload.imageBase64.split(",")[-1]
+        img_bytes = base64.b64decode(b64)
+
+        # Run Gemini grooming analysis
+        report = run_grooming_analysis(b64)
+        parsed = _parse_text_to_ui(report, payload.crewName, payload.igaCode)
+
+        # Persist artifacts/results in GCS
+        img_path = upload_image_bytes(img_bytes, payload.igaCode, "image", payload.crewName)
+        upload_grooming_result_text(report, payload.crewName, payload.igaCode, img_path, parsed=parsed)
+        append_event_to_crew_log(
+            {"type": "image", "parsed": parsed, "image_path": img_path},
+            payload.crewName,
+            payload.igaCode,
+        )
+        create_ticket(
+            {"type": "image", "igaCode": payload.igaCode, "crewName": payload.crewName, "image_path": img_path}
+        )
+
+        return {"status": "ok", "result": parsed}
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------- Grooming (video) ----------------
+@app.post("/check-grooming-video")
+async def check_grooming_video(
+    video: UploadFile = File(...),
+    name: str = Form(...),
+    iga_code: str = Form(...),
+):
+    # UPDATED: Accept any video format (removed .mp4 restriction)
+    # Common video formats: .mp4, .mov, .avi, .mkv, .flv, .webm, .m4v, etc.
+    
+    # Check file size BEFORE saving (limit: 20 MB)
+    # Read in chunks to avoid loading entire file into memory
+    MAX_SIZE = 20 * 1024 * 1024  # 20 MB
+    size = 0
+    chunk_size = 1024 * 1024  # 1 MB chunks
+    
+    # Reset to beginning
+    await video.seek(0)
+    
+    # Check size by reading chunks
+    while True:
+        chunk = await video.read(chunk_size)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_SIZE:
+            return JSONResponse({"error": "Video size must be <= 20 MB"}, status_code=400)
+    
+    # Reset file pointer after size check
+    await video.seek(0)
+
+    try:
+        videos_dir = os.path.join("uploads", "videos")
+        os.makedirs(videos_dir, exist_ok=True)
+        video_path = os.path.join(videos_dir, video.filename)
+        
+        with open(video_path, "wb") as f:
+            shutil.copyfileobj(video.file, f)
+
+        full_text = check_grooming_from_video(video_path, name, iga_code)
+        parsed = _parse_text_to_ui(full_text, name, iga_code)
+
+        return {"status": "ok", "result": parsed}
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------- The 3 requested APIs ----------------
+from dashboard_service import get_insights, get_info, search_people  # noqa: E402
+
+
+def _resolve_range(dateFrom: Optional[_date], dateTo: Optional[_date], days: Optional[int]):
+    today = datetime.utcnow().date()
+    if days and int(days) > 0:
+        d = int(days)
+        _from = today - timedelta(days=d - 1)
+        _to = today
+        return _from, _to
+    _from = dateFrom or (today - timedelta(days=6))
+    _to = dateTo or today
+    return _from, _to
+
+
+@app.get("/v1/insights")
+async def insights(
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None, description="custom duration in days; e.g., 7 for last 7 days"),
+    page: int = 1,
+    pageSize: int = 25,
+):
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    return get_insights(_from, _to, page, pageSize)
+
+
+@app.get("/v1/info")
+async def info_box(
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None),
+):
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    return get_info(_from, _to)
+
+
+@app.get("/v1/search")
+async def search_endpoint(
+    q: str = Query("", description="search by IGA code or crew name (case-insensitive)"),
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None),
+    page: int = 1,
+    pageSize: int = 25,
+):
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    return search_people(_from, _to, q, page, pageSize)
+
+
+# Fixed individual analysis endpoint
+@app.get("/v1/individual-analysis")
+async def individual_analysis(
+    igaCode: str = Query(..., description="IGA code"),
+    crewName: str = Query(..., description="Crew name"),
+    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD"),
+    dateTo: str = Query(..., description="End date in YYYY-MM-DD"),
+):
+    try:
+        start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
+        end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
+
+        if start_date > end_date:
+            return {"error": "dateFrom cannot be after dateTo"}
+
+        base_folder = os.getenv("GCS_BASE_FOLDER", "Grooming-Results")
+
+        # Load all records from results/ folder (matching dashboard_service pattern)
+        all_assessments = []
+        current_date = start_date
+        while current_date <= end_date:
+            date_str = current_date.strftime("%Y%m%d")
+            # Match the actual storage pattern: {base_folder}/{date}/results/
+            prefix = f"{base_folder}/{date_str}/results/"
+            names = _list_by_prefix(prefix)
+
+            for blob_name in names:
+                if not blob_name.endswith(".json"):
+                    continue
+                try:
+                    doc = _download_json(blob_name)
+                    # Match both igaCode and crewId (as insights uses crewId)
+                    doc_iga = doc.get("igaCode") or doc.get("crewId") or ""
+                    doc_crew = doc.get("crewName") or ""
+                    
+                    if doc_iga.strip() == igaCode.strip() and doc_crew.strip() == crewName.strip():
+                        # Treat each doc as one assessment
+                        all_assessments.append(doc)
+                except Exception:
+                    continue
+
+            current_date += timedelta(days=1)
+
+        if not all_assessments:
+            return {"error": "No assessments found for this crew in given date range"}
+
+        # Summary statistics
+        total = len(all_assessments)
+        compliant = sum(1 for a in all_assessments if a.get("assessment") == "COMPLIANT")
+        noncompliant = total - compliant
+        passrate = f"{round(compliant / total * 100, 2)}%" if total > 0 else "0%"
+
+        # Category-wise non-compliance counts
+        categories = ["uniform", "hairstyle", "makeup", "nails", "accessories"]
+        category_counts = {c.capitalize(): 0 for c in categories}
+        for a in all_assessments:
+            parsed = a.get("parsed", {})
+            details = parsed.get("details", {})
+            for c in categories:
+                if details.get(c) and "NON" in details.get(c).upper():
+                    category_counts[c.capitalize()] += 1
+
+        # Trend for date range
+        trend_map = {}
+        for a in all_assessments:
+            ts = a.get("timestamp")
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00")).date()
+            except Exception:
+                continue
+
+            key = dt.strftime("%Y-%m-%d")
+            if key not in trend_map:
+                trend_map[key] = {"compliant": 0, "nonCompliant": 0}
+
+            if a.get("assessment") == "COMPLIANT":
+                trend_map[key]["compliant"] += 1
+            else:
+                trend_map[key]["nonCompliant"] += 1
+
+        # Pad trend for all dates in range
+        trend_list = []
+        current_date = start_date
+        while current_date <= end_date:
+            key = current_date.strftime("%Y-%m-%d")
+            trend_list.append({
+                "date": key,
+                "compliant": trend_map.get(key, {}).get("compliant", 0),
+                "nonCompliant": trend_map.get(key, {}).get("nonCompliant", 0)
+            })
+            current_date += timedelta(days=1)
+
+        return {
+            "crew": {
+                "igaCode": igaCode,
+                "name": crewName,
+            },
+            "summary": {
+                "totalAssessments": total,
+                "compliant": compliant,
+                "nonCompliant": noncompliant,
+                "passRate": passrate,
+            },
+            "nonComplianceByCategory": category_counts,
+            "trend": trend_list,
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+
+
+# ---------------- Entrypoint ----------------
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=True)
