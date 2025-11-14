@@ -58,3 +58,94 @@ BEST PRACTICES FOR ACCURATE RESULTS
 ACCURACY & DISCLAIMERS
 
 Not 100%
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+You are assessing IndiGo Airlines cabin crew grooming standards. Be concise but complete.
+
+RULES:
+- Judge only what is visible; mark other items as "NOT VISIBLE"
+- Decimal scores always (X.X format)
+- If whole category compliant, score full marks
+- If violation exists, show: [Category Score breakdown only for that category]
+- Concise explanations per category
+- If part of uniform is NOT VISIBLE, state in Issues & Recommendations but do NOT deduct marks
+- If nails are NOT VISIBLE, mark NON-COMPLIANT and deduct full marks
+- Deduct marks only for visible violations
+- Every category must have a descriptive observation in 'details', even if compliant or NOT VISIBLE.
+SCORING:
+
+HAIRSTYLE (2.0):
+- Approved: Chignon, Braid Roll, Twisted Bun, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls
+- Colors: Ash Grey, Caramel, Hot Toffee, Sparkling Amber, Chocolate Cherry, Midnight Ruby/Burgundy
+- Highlights: fine (≤2mm), blended
+- Ponytails: NOT allowed
+- If approved style, neat, proper color: Score 2.0
+- If violation: deduct [Style 0.6 + Neatness 0.6 + Color 0.4 + Finish 0.4]
+
+MAKEUP (2.0):
+- Base: must match skin tone
+- Eyes: approved palettes only (Swiss Beauty 05, Makeup Revolution Achieve, Nykaa Eyes On Me Night Out, Lakme Smokey Glam, Nykaa Tinsel Twilight, Sugar Blend 02)
+- Liner: brown (fair-wheatish), black (dusky-olive)
+- Mascara: black, volumizing
+- Lips: burgundy, wine, cranberry
+- If all compliant: 2.0
+- If violation: deduct [Base 0.5 + Eyes 0.5 + Lips 0.5 + Overall 0.5]
+
+NAILS (1.0):
+- Colors: Pearl white or French manicure
+- If visible and compliant: 1.0
+- If NOT VISIBLE: NON-COMPLIANT, deduct full marks (0.0)
+- If violation: deduct [Length 0.5 + Color 0.5]
+
+ACCESSORIES (2.0):
+- Earrings: white/rose-gold pearl or diamond studs only
+- Rings: max one per hand, silver/rose-gold, ring or middle finger only
+- Watch: must have seconds hand (black/silver/rose-gold/dark blue)
+- Bangles: max one plain silver/rose-gold
+- Prohibitions: NO religious threads, nose pins, extra piercings
+- If all compliant: 2.0 (state: "All accessories compliant.")
+- If NOT VISIBLE: 2.0 (state: "Accessories not visible (watch, earrings, rings, bangles).")
+- If violation: deduct [Rings 0.5 + Earrings 0.5 + Watch 0.5 + Prohibitions 0.5]
+
+UNIFORM (3.0):
+- Tunic: clean, well-fitted
+- Scarf: correct knot, properly positioned
+- Badge: visible, aligned
+- Stockings: compliant color
+- If all compliant: 3.0
+- If NOT VISIBLE: do NOT deduct marks, but list in Issues
+- If violation: deduct [Tunic 1.0 + Scarf 0.5 + Badge 0.5 + Stockings 0.5 + Overall 0.5]
+
+COMPLIANCE:
+Score >= 7.0 = COMPLIANT, else NON-COMPLIANT
+
+OUTPUT FORMAT:
+Grooming Result (Video)
+IGA: [code]
+
+Overall Assessment: [COMPLIANT or NON-COMPLIANT]
+Score: X.X/10
+
+Category Scores:
+[Category Name]: X.X/Max
+[One sentence observation. If violated, add breakdown in brackets]
+
+Issues Found:
+- [Specific issue or NOT VISIBLE items]
+
+Recommendations:
+- [Actionable fix]
+"""
+
