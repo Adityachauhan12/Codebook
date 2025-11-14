@@ -30,14 +30,14 @@ from grooming_utils import (  # noqa: E402
 _rx = {
     "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
     "overall_score": re.compile(
-        r"(?:Overall|Total|Score)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10", re.I
+        r"(?:Overall|Total|Score)\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*10", re.I
     ),
-    "uniform_score": re.compile(r"Uniform\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*3", re.I),
-    "nails_score": re.compile(r"Nails\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*1", re.I),
-    "hairstyle_score": re.compile(r"Hairstyle\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
-    "makeup_score": re.compile(r"Makeup\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I),
+    "uniform_score": re.compile(r"Uniform\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*3", re.I),
+    "nails_score": re.compile(r"Nails\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*1", re.I),
+    "hairstyle_score": re.compile(r"Hairstyle\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I),
+    "makeup_score": re.compile(r"Makeup\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I),
     "accessories_score": re.compile(
-        r"Accessories\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I
+        r"Accessories\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I
     ),
     # NEW: Detect (NOT VISIBLE) markers for visibility-based scoring
     "uniform_not_visible": re.compile(r"Uniform.*\(NOT\s+VISIBLE\)", re.I),
@@ -61,9 +61,10 @@ def _extract(pat: re.Pattern, text: str) -> Tuple[bool, str]:
     return (m is not None, m.group(1).strip() if m else "")
 
 
-def _num(s: str) -> Optional[float]:
+def _num(s: str) -> Optional[int]:
+    """Convert to integer only, no decimals."""
     try:
-        return float(s)
+        return int(float(s))
     except Exception:
         return None
 
@@ -92,6 +93,7 @@ def _normalize_assessment(a: Optional[str]) -> Optional[str]:
 def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
     """
     Parse Gemini text to UI dict, handling NOT VISIBLE items with full marks.
+    All scores are INTEGER, no decimals.
     
     Logic:
     - If item is marked (NOT VISIBLE): award full marks, list in issues
@@ -105,15 +107,15 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
     assessment = _normalize_assessment(a_text if ok_assess else None)
 
     # Extract category scores and check for NOT VISIBLE markers
-    cats: Dict[str, Optional[float]] = {}
+    cats: Dict[str, int] = {}
     not_visible_flags: Dict[str, bool] = {}
     
     category_configs = [
-        ("uniform", "uniform_score", "uniform_not_visible", 3.0),
-        ("hairstyle", "hairstyle_score", "hairstyle_not_visible", 2.0),
-        ("makeup", "makeup_score", "makeup_not_visible", 2.0),
-        ("nails", "nails_score", "nails_not_visible", 1.0),
-        ("accessories", "accessories_score", "accessories_not_visible", 2.0),
+        ("uniform", "uniform_score", "uniform_not_visible", 3),
+        ("hairstyle", "hairstyle_score", "hairstyle_not_visible", 2),
+        ("makeup", "makeup_score", "makeup_not_visible", 2),
+        ("nails", "nails_score", "nails_not_visible", 1),
+        ("accessories", "accessories_score", "accessories_not_visible", 2),
     ]
     
     for cat_name, score_key, visible_key, max_val in category_configs:
@@ -130,9 +132,9 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
         # - If visible and score found: use extracted score
         # - If visible but no score: default to 0 (violation detected)
         if is_not_visible:
-            cats[cat_name] = int(max_val)
+            cats[cat_name] = max_val
         else:
-            cats[cat_name] = int(extracted_score) if extracted_score is not None else 0
+            cats[cat_name] = extracted_score if extracted_score is not None else 0
 
     # Extract details/observations
     details: Dict[str, str] = {}
@@ -165,7 +167,7 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
     return {
         "person": {"name": name or "", "iga_code": iga or ""},
         "assessment": assessment,
-        "score": score,
+        "score": int(score),  # Ensure integer
         "scores": cats,
         "details": details,
         "issues": _lines_to_list(block_i) if ok_i else [],
