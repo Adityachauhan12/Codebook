@@ -1,5 +1,3 @@
-# main.py — Grooming checks + Insights/Search APIs (FastAPI)
-
 from __future__ import annotations
 
 import os
@@ -32,7 +30,7 @@ from grooming_utils import (  # noqa: E402
 _rx = {
     "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
     "overall_score": re.compile(
-        r"(?:Overall|Total)\s*Score\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10", re.I
+        r"(?:Overall|Total|Score)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10", re.I
     ),
     "uniform_score": re.compile(r"Uniform\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*3", re.I),
     "nails_score": re.compile(r"Nails\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*1", re.I),
@@ -41,11 +39,18 @@ _rx = {
     "accessories_score": re.compile(
         r"Accessories\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*2", re.I
     ),
-    "hair_detail": re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
+    # NEW: Detect (NOT VISIBLE) markers for visibility-based scoring
+    "uniform_not_visible": re.compile(r"Uniform.*\(NOT\s+VISIBLE\)", re.I),
+    "hairstyle_not_visible": re.compile(r"Hairstyle.*\(NOT\s+VISIBLE\)", re.I),
+    "makeup_not_visible": re.compile(r"Makeup.*\(NOT\s+VISIBLE\)", re.I),
+    "nails_not_visible": re.compile(r"Nails.*\(NOT\s+VISIBLE\)", re.I),
+    "accessories_not_visible": re.compile(r"Accessories.*\(NOT\s+VISIBLE\)", re.I),
+    # Detail observations
+    "uniform_detail": re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
+    "hairstyle_detail": re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
     "makeup_detail": re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
     "nails_detail": re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
     "acc_detail": re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
-    "uniform_detail": re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
     "issues_block": re.compile(r"Issues\s*Found\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
     "reco_block": re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
 }
@@ -85,16 +90,55 @@ def _normalize_assessment(a: Optional[str]) -> Optional[str]:
 
 
 def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
+    """
+    Parse Gemini text to UI dict, handling NOT VISIBLE items with full marks.
+    
+    Logic:
+    - If item is marked (NOT VISIBLE): award full marks, list in issues
+    - If item is visible but violates: deduct marks per Gemini
+    - If item is visible and compliant: award full marks
+    """
     ok_assess, a_text = _extract(_rx["overall_assessment"], text)
     ok_score, s_text = _extract(_rx["overall_score"], text)
 
     score = _num(s_text) if ok_score else None
     assessment = _normalize_assessment(a_text if ok_assess else None)
 
+    # Extract category scores and check for NOT VISIBLE markers
+    cats: Dict[str, Optional[float]] = {}
+    not_visible_flags: Dict[str, bool] = {}
+    
+    category_configs = [
+        ("uniform", "uniform_score", "uniform_not_visible", 3.0),
+        ("hairstyle", "hairstyle_score", "hairstyle_not_visible", 2.0),
+        ("makeup", "makeup_score", "makeup_not_visible", 2.0),
+        ("nails", "nails_score", "nails_not_visible", 1.0),
+        ("accessories", "accessories_score", "accessories_not_visible", 2.0),
+    ]
+    
+    for cat_name, score_key, visible_key, max_val in category_configs:
+        # Check if item is marked as NOT VISIBLE
+        is_not_visible = _rx[visible_key].search(text or "") is not None
+        not_visible_flags[cat_name] = is_not_visible
+        
+        # Extract score from Gemini response
+        ok, val = _extract(_rx[score_key], text)
+        extracted_score = _num(val) if ok else None
+        
+        # Scoring logic:
+        # - If NOT VISIBLE: use full marks (no penalty)
+        # - If visible and score found: use extracted score
+        # - If visible but no score: default to 0 (violation detected)
+        if is_not_visible:
+            cats[cat_name] = int(max_val)
+        else:
+            cats[cat_name] = int(extracted_score) if extracted_score is not None else 0
+
+    # Extract details/observations
     details: Dict[str, str] = {}
     for key, rx_key in [
         ("uniform", "uniform_detail"),
-        ("hairstyle", "hair_detail"),
+        ("hairstyle", "hairstyle_detail"),
         ("makeup", "makeup_detail"),
         ("nails", "nails_detail"),
         ("accessories", "acc_detail"),
@@ -102,31 +146,19 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
         _, v = _extract(_rx[rx_key], text)
         details[key] = v
 
-    cats: Dict[str, Optional[float]] = {}
-    for c, rx_c in [
-        ("uniform", "uniform_score"),
-        ("nails", "nails_score"),
-        ("hairstyle", "hairstyle_score"),
-        ("makeup", "makeup_score"),
-        ("accessories", "accessories_score"),
-    ]:
-        ok, val = _extract(_rx[rx_c], text)
-        cats[c] = _num(val) if ok else None
-
-    # Normalization + fallbacks to guarantee stable UI
-    cats = {k: (int(v) if v is not None else None) for k, v in cats.items()}
-
+    # Calculate overall score if not provided by Gemini
     if score is None:
         score = int(sum(v or 0 for v in cats.values()))
         if score > 10:
             score = 10
 
-    # Hardcode compliance threshold: score >= 7 is COMPLIANT
+    # Determine compliance based on score
     if score is not None:
         assessment = "COMPLIANT" if score >= 7 else "NON-COMPLIANT"
     elif assessment is None:
         assessment = "NON-COMPLIANT"
 
+    # Extract issues and recommendations
     ok_i, block_i = _extract(_rx["issues_block"], text)
     ok_r, block_r = _extract(_rx["reco_block"], text)
 
@@ -138,6 +170,7 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
         "details": details,
         "issues": _lines_to_list(block_i) if ok_i else [],
         "recommendations": _lines_to_list(block_r) if ok_r else [],
+        "_metadata": {"not_visible": not_visible_flags},  # Audit trail for debugging
     }
 
 
@@ -411,6 +444,8 @@ async def individual_analysis(
         import traceback
         traceback.print_exc()
         return {"error": str(e)}
+
+
 # ---------------- Entrypoint ----------------
 if __name__ == "__main__":
     import uvicorn
