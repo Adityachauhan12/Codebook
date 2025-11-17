@@ -1,10 +1,12 @@
 """
-MAIN.PY - FINAL FIXED VERSION
+FastAPI backend for grooming checks + insights API
 
-Critical Fix: Individual Analysis now correctly updates categories
-- COMPLIANT assessments decrease non-compliance percentages
-- Categories show actual violation counts, not just issue counts
-- Pass rate affects category display
+FINAL COMPLETE VERSION - ALL FIXES INCLUDED:
+1. Video results persisted to GCS
+2. Issues extracted and saved correctly
+3. Category breakdown shows only 5 categories
+4. Individual analysis recalculates fresh from GCS with proper percentages
+5. Debug logging on all critical operations
 """
 
 from __future__ import annotations
@@ -62,7 +64,7 @@ _rx = {
     "makeup_detail": re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
     "nails_detail": re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
     "acc_detail": re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
-    "issues_block": re.compile(r"Issues\s+Found\s*:\s*(.+?)(?:\n\s*(?:Recommendations|$))", re.I | re.S),
+    "issues_block": re.compile(r"Issues\s+Found\s*:\s*(.+?)(?:\n\s*(?:Recommendations|Observations|$))", re.I | re.S),
     "reco_block": re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
     "observations_block": re.compile(r"Observations\s*:\s*(.+?)(?:\n\s*(?:Issues|$))", re.I | re.S),
 }
@@ -122,7 +124,7 @@ def _normalize_assessment(a: Optional[str]) -> Optional[str]:
 
 def _extract_issues_from_text(text: str) -> List[str]:
     """
-    SUPER ROBUST: Extract issues using MULTIPLE fallback methods.
+    ROBUST: Extract issues using MULTIPLE fallback methods.
     Guaranteed to find violations one way or another.
     """
     all_issues = []
@@ -134,12 +136,9 @@ def _extract_issues_from_text(text: str) -> List[str]:
     print(f"[DEBUG] ============ ISSUE EXTRACTION START ============")
     print(f"[DEBUG] Text length: {len(text)} characters")
     
-    # ============================================================
     # METHOD 1: Look for explicit "Issues Found:" block
-    # ============================================================
     print(f"[DEBUG] METHOD 1: Trying 'Issues Found:' pattern...")
     
-    # Try multiple variations of "Issues Found"
     issues_patterns = [
         r"Issues\s+Found\s*:\s*(.+?)(?:\n\s*(?:Recommendations|Observations|$))",
         r"Issues\s*:\s*(.+?)(?:\n\s*(?:Recommendations|Observations|$))",
@@ -152,7 +151,7 @@ def _extract_issues_from_text(text: str) -> List[str]:
         
         if m:
             block = m.group(1).strip()
-            print(f"[DEBUG] Found matching pattern: {pattern_str}")
+            print(f"[DEBUG] Found matching pattern")
             print(f"[DEBUG] Block content (first 200 chars): {block[:200]}")
             
             issues = _lines_to_list(block)
@@ -163,9 +162,7 @@ def _extract_issues_from_text(text: str) -> List[str]:
                     print(f"[DEBUG]   {i}. {issue}")
                 break
     
-    # ============================================================
     # METHOD 2: Try "Observations:" section
-    # ============================================================
     if not all_issues:
         print(f"[DEBUG] METHOD 2: No issues from 'Issues Found', trying 'Observations:'...")
         
@@ -183,7 +180,6 @@ def _extract_issues_from_text(text: str) -> List[str]:
                 print(f"[DEBUG] Found Observations block")
                 print(f"[DEBUG] Block content (first 200 chars): {block[:200]}")
                 
-                # Parse observations - each line with dash is an observation
                 obs_list = _lines_to_list(block)
                 
                 if obs_list:
@@ -193,9 +189,7 @@ def _extract_issues_from_text(text: str) -> List[str]:
                         print(f"[DEBUG]   {i}. {obs}")
                     break
     
-    # ============================================================
     # METHOD 3: Infer violations from category scores
-    # ============================================================
     if not all_issues:
         print(f"[DEBUG] METHOD 3: No explicit issues found, inferring from category scores...")
         
@@ -218,13 +212,10 @@ def _extract_issues_from_text(text: str) -> List[str]:
                     all_issues.append(violation)
                     print(f"[DEBUG] ✓ Inferred violation: {violation}")
     
-    # ============================================================
     # METHOD 4: Look for any category with score < max (last resort)
-    # ============================================================
     if not all_issues:
         print(f"[DEBUG] METHOD 4: Last resort - scanning for any score < max...")
         
-        # Look for patterns like "Hairstyle: 1/2"
         score_pattern = re.compile(r"(\w+)\s*:\s*([0-9]+)\s*/\s*([0-9]+)", re.I)
         matches = score_pattern.findall(text)
         
@@ -249,13 +240,12 @@ def _extract_issues_from_text(text: str) -> List[str]:
         for i, issue in enumerate(all_issues, 1):
             print(f"[DEBUG] ISSUE {i}: {issue}")
     else:
-        print(f"[DEBUG] ⚠️  WARNING: NO ISSUES FOUND")
-        print(f"[DEBUG] Full text for debugging:")
-        print(text)
+        print(f"[DEBUG] ⚠️  No issues found (may be COMPLIANT test)")
     
     print(f"[DEBUG] ============ EXTRACTION COMPLETE ============\n")
     
     return all_issues if all_issues else []
+
 
 def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
     """
@@ -516,7 +506,7 @@ async def search_endpoint(
     return search_people(_from, _to, q, page, pageSize)
 
 
-# ============= Individual Analysis - CRITICAL FINAL FIX =============
+# ============= Individual Analysis - FINAL COMPLETE FIX =============
 @app.get("/v1/individual-analysis")
 async def individual_analysis(
     igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
@@ -525,16 +515,17 @@ async def individual_analysis(
     dateTo: str = Query(..., description="End date in YYYY-MM-DD format"),
 ):
     """
-    FINAL FIX: Category counts now correctly decrease when COMPLIANT tests are added.
+    FINAL COMPLETE FIX: Freshly recalculate from ALL GCS records.
     
-    Logic:
-    - Load ALL records (compliant + non-compliant) for the crew
+    KEY PRINCIPLES:
+    - Load ALL records from GCS for date range
+    - Filter by crew
     - Count violations ONLY from NON-COMPLIANT records
-    - But show violations as percentage of TOTAL tests (not just non-compliant)
-    - This way, new COMPLIANT tests reduce the percentage
+    - Show violations as count and percentage
+    - Percentage decreases as COMPLIANT tests are added
     """
     try:
-        # Parse dates
+        # ============= PARSE & VALIDATE DATES =============
         try:
             start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
             end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
@@ -547,7 +538,6 @@ async def individual_analysis(
                 status_code=400
             )
         
-        # Validate date range
         if start_date > end_date:
             return JSONResponse(
                 {
@@ -557,11 +547,17 @@ async def individual_analysis(
                 status_code=400
             )
         
-        # Load records
+        # ============= LOAD FRESH RECORDS FROM GCS =============
+        print(f"\n[INDIVIDUAL-ANALYSIS] Starting fresh load from GCS")
+        print(f"[INDIVIDUAL-ANALYSIS] Date range: {start_date} to {end_date}")
+        print(f"[INDIVIDUAL-ANALYSIS] Crew: {igaCode} / {crewName}")
+        
         filters = DashboardFilters(date_from=start_date, date_to=end_date)
         all_records = _load_records(filters)
         
-        # Filter by crew
+        print(f"[INDIVIDUAL-ANALYSIS] Loaded {len(all_records)} total records from GCS")
+        
+        # ============= FILTER BY CREW =============
         iga_search = igaCode.strip().upper()
         crew_search = crewName.strip().upper()
         
@@ -573,8 +569,10 @@ async def individual_analysis(
             if record_iga == iga_search and record_crew == crew_search:
                 crew_records.append(record)
         
-        # Check if data found
+        print(f"[INDIVIDUAL-ANALYSIS] Filtered to {len(crew_records)} crew records")
+        
         if not crew_records:
+            print(f"[INDIVIDUAL-ANALYSIS] No records found for {iga_search} / {crew_search}")
             return JSONResponse(
                 {
                     "error": "No assessments found for this crew in given date range",
@@ -591,42 +589,55 @@ async def individual_analysis(
                 status_code=404
             )
         
-        # Calculate summary
+        # ============= CALCULATE SUMMARY STATISTICS =============
         total = len(crew_records)
         compliant_count = sum(1 for r in crew_records if r["assessment"] == "COMPLIANT")
         noncompliant_count = total - compliant_count
         pass_rate = (compliant_count / total * 100) if total > 0 else 0
         
-        # ========= CRITICAL FIX: Category breakdown ==========
-        # Count total violations by category from ALL non-compliant records
-        # Then calculate percentage as: violations / total assessments (not just non-compliant)
+        print(f"[INDIVIDUAL-ANALYSIS] Summary: Total={total}, Compliant={compliant_count}, NC={noncompliant_count}, PassRate={pass_rate:.2f}%")
         
+        # ============= CRITICAL: CATEGORY BREAKDOWN =============
+        print(f"\n[INDIVIDUAL-ANALYSIS] === CATEGORY BREAKDOWN CALCULATION ===")
+        
+        # Count violations by category from ONLY NON-COMPLIANT records
         category_violation_count = defaultdict(int)
         
-        # Only extract issues from NON-COMPLIANT records
         for record in crew_records:
             if record["assessment"] == "NON-COMPLIANT":
                 issues = record.get("issues") or []
+                
+                print(f"[INDIVIDUAL-ANALYSIS] Processing NON-COMPLIANT record: {record.get('timestamp')}")
+                print(f"[INDIVIDUAL-ANALYSIS]   Issues: {issues}")
+                
                 for issue in issues:
                     heading = _issue_heading(issue)
-                    if heading and heading != "other":
+                    
+                    # CRITICAL: Only count valid 5 categories
+                    if heading in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
                         category_violation_count[heading] += 1
+                        print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Category '{heading}' (count: {category_violation_count[heading]})")
+                    else:
+                        print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Skipped (category: '{heading}')")
         
-        # Convert to final format: show count and percentage
-        # Percentage = violations / total tests (this decreases when compliant tests are added)
+        # Convert to final format: violations + percentage
+        # KEY: Percentage = violations / TOTAL TESTS (allows COMPLIANT tests to decrease it)
         category_breakdown = {}
+        
         for cat in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
             violation_count = category_violation_count.get(cat, 0)
             percentage = (violation_count / total * 100) if total > 0 else 0
+            
             category_breakdown[cat] = {
                 "violations": violation_count,
                 "percentage": round(percentage, 2)
             }
+            
+            print(f"[INDIVIDUAL-ANALYSIS] {cat.upper()}: violations={violation_count}, total={total}, percentage={percentage:.2f}%")
         
-        print(f"[DEBUG] Category breakdown: {category_breakdown}")
-        print(f"[DEBUG] Total assessments: {total}, Compliant: {compliant_count}, Non-compliant: {noncompliant_count}")
+        print(f"[INDIVIDUAL-ANALYSIS] === END CATEGORY BREAKDOWN ===\n")
         
-        # Build daily trends
+        # ============= BUILD DAILY TRENDS =============
         daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
         
         for record in crew_records:
@@ -652,7 +663,7 @@ async def individual_analysis(
             
             current_date += timedelta(days=1)
         
-        # Build response
+        # ============= BUILD RESPONSE =============
         response = {
             "crew": {
                 "igaCode": igaCode,
@@ -683,6 +694,8 @@ async def individual_analysis(
                 for r in crew_records[:10]
             ]
         }
+        
+        print(f"[INDIVIDUAL-ANALYSIS] Returning response with {len(crew_records)} records\n")
         
         return response
         
