@@ -1,1 +1,665 @@
-"passRate": f"{pass_rate:.2f}",  # ← Add f-string to make it a string
+"""
+FastAPI backend for grooming checks + insights API
+
+CRITICAL FIXES:
+1. Video results are NOW persisted to GCS (same as image results)
+2. Individual analysis endpoint correctly loads all record types (image & video)
+3. Category breakdown only shows 5 main categories (uniform, hairstyle, makeup, nails, accessories)
+4. FIXED: Issues extraction now correctly parses Gemini output and updates categories
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import base64
+import shutil
+
+from datetime import datetime, timedelta, date as _date
+from typing import Optional, Dict, Any, Tuple, List
+from gcs_utils import _list_by_prefix, _download_json
+from dashboard_service import _load_records, Filters as DashboardFilters, _issue_heading
+from collections import defaultdict
+from datetime import datetime, date as _date, timedelta
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, UploadFile, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+# Load environment variables
+load_dotenv()
+
+import config  # noqa: E402
+
+# ============= Grooming analysis (Gemini) =============
+from grooming_utils import (  # noqa: E402
+    check_grooming as run_grooming_analysis,
+    check_grooming_from_video,
+)
+
+
+# ============= Regex helpers to parse Gemini text =============
+_rx = {
+    "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
+    "overall_score": re.compile(
+        r"(?:Overall|Total|Score)\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*10", re.I
+    ),
+    "uniform_score": re.compile(r"Uniform\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*3", re.I),
+    "nails_score": re.compile(r"Nails\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*1", re.I),
+    "hairstyle_score": re.compile(r"Hairstyle\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I),
+    "makeup_score": re.compile(r"Makeup\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I),
+    "accessories_score": re.compile(
+        r"Accessories\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I
+    ),
+    # UPDATED: Detect (NOT VISIBLE) markers - catches both (NOT VISIBLE) and **NOT VISIBLE** formats
+    "uniform_not_visible": re.compile(r"(?:Uniform|Tunic|Scarf|Badge|Stockings).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "hairstyle_not_visible": re.compile(r"(?:Hairstyle|Hair).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "makeup_not_visible": re.compile(r"Makeup.*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "nails_not_visible": re.compile(r"(?:Nails|Nail).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "accessories_not_visible": re.compile(r"(?:Accessories|Watch|Rings|Earrings|Bangles).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    # Detail observations
+    "uniform_detail": re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
+    "hairstyle_detail": re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
+    "makeup_detail": re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
+    "nails_detail": re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
+    "acc_detail": re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
+    # CRITICAL FIX: Issues block - more flexible regex
+    "issues_block": re.compile(r"Issues\s+Found\s*:\s*(.+?)(?:\n\s*(?:Recommendations|$))", re.I | re.S),
+    "reco_block": re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
+    # CRITICAL: Extract bullet points from observations section
+    "observations_block": re.compile(r"Observations\s*:\s*(.+?)(?:\n\s*(?:Issues|$))", re.I | re.S),
+}
+
+
+def _extract(pat: re.Pattern, text: str) -> Tuple[bool, str]:
+    m = pat.search(text or "")
+    return (m is not None, m.group(1).strip() if m else "")
+
+
+def _num(s: str) -> Optional[int]:
+    """Convert to integer only, no decimals."""
+    try:
+        return int(float(s))
+    except Exception:
+        return None
+
+
+def _lines_to_list(block: str) -> List[str]:
+    """
+    CRITICAL FIX: Extract bullet points from text block.
+    Handles various formats: dash (-), asterisk (*), numbers (1., 2., etc.)
+    """
+    out: List[str] = []
+    if not block:
+        return out
+    
+    for ln in block.splitlines():
+        t = ln.strip()
+        if not t:
+            continue
+        
+        # Remove leading bullets/numbers
+        if t.startswith("-"):
+            t = t.lstrip("- ").strip()
+        elif t.startswith("*"):
+            t = t.lstrip("* ").strip()
+        elif t.startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")):
+            parts = t.split(".", 1)
+            t = parts[-1].strip() if len(parts) > 1 else t
+        elif re.match(r"^\d+\)", t):  # Handle "1) format"
+            t = re.sub(r"^\d+\)\s*", "", t)
+        
+        # Skip empty lines
+        if t and len(t) > 2:
+            out.append(t)
+    
+    return out
+
+
+def _normalize_assessment(a: Optional[str]) -> Optional[str]:
+    if a is None:
+        return None
+    a = a.strip().upper()
+    a = a.replace("NONCOMPLIANT", "NON-COMPLIANT")
+    return a if a in ("COMPLIANT", "NON-COMPLIANT") else None
+
+
+def _extract_issues_from_text(text: str) -> List[str]:
+    """
+    CRITICAL FIX: Extract issues from multiple possible sections.
+    Looks in:
+    1. "Issues Found:" section (explicit issues)
+    2. "Observations:" section (detailed findings)
+    3. Any violations mentioned
+    """
+    all_issues = []
+    
+    # Try "Issues Found:" section first
+    ok_i, block_i = _extract(_rx["issues_block"], text)
+    if ok_i and block_i:
+        issues = _lines_to_list(block_i)
+        all_issues.extend(issues)
+    
+    # If no issues in Issues Found, try Observations section
+    if not all_issues:
+        ok_obs, block_obs = _extract(_rx["observations_block"], text)
+        if ok_obs and block_obs:
+            observations = _lines_to_list(block_obs)
+            all_issues.extend(observations)
+    
+    # Parse category scores to find violations
+    # If score < max for category, there's a violation
+    category_scores = {
+        "uniform": (_extract(_rx["uniform_score"], text), 3),
+        "hairstyle": (_extract(_rx["hairstyle_score"], text), 2),
+        "makeup": (_extract(_rx["makeup_score"], text), 2),
+        "nails": (_extract(_rx["nails_score"], text), 1),
+        "accessories": (_extract(_rx["accessories_score"], text), 2),
+    }
+    
+    for cat_name, (score_match, max_score) in category_scores.items():
+        ok, val = score_match
+        if ok:
+            score = _num(val)
+            # If score < max, there's a violation
+            if score is not None and score < max_score:
+                all_issues.append(f"{cat_name.capitalize()} violation (Score: {score}/{max_score})")
+    
+    return all_issues if all_issues else []
+
+
+def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
+    """
+    Parse Gemini text to UI dict, handling NOT VISIBLE items with full marks.
+    All scores are INTEGER, no decimals.
+    
+    CRITICAL FIX: Ensures issues are properly extracted and will be saved to GCS.
+    """
+    ok_assess, a_text = _extract(_rx["overall_assessment"], text)
+    ok_score, s_text = _extract(_rx["overall_score"], text)
+
+    score = _num(s_text) if ok_score else None
+    assessment = _normalize_assessment(a_text if ok_assess else None)
+
+    # Extract category scores and check for NOT VISIBLE markers
+    cats: Dict[str, int] = {}
+    not_visible_flags: Dict[str, bool] = {}
+    
+    category_configs = [
+        ("uniform", "uniform_score", "uniform_not_visible", 3),
+        ("hairstyle", "hairstyle_score", "hairstyle_not_visible", 2),
+        ("makeup", "makeup_score", "makeup_not_visible", 2),
+        ("nails", "nails_score", "nails_not_visible", 1),
+        ("accessories", "accessories_score", "accessories_not_visible", 2),
+    ]
+    
+    for cat_name, score_key, visible_key, max_val in category_configs:
+        # Check if item is marked as NOT VISIBLE
+        is_not_visible = _rx[visible_key].search(text or "") is not None
+        not_visible_flags[cat_name] = is_not_visible
+        
+        # Extract score from Gemini response
+        ok, val = _extract(_rx[score_key], text)
+        extracted_score = _num(val) if ok else None
+        
+        # Scoring logic:
+        # - If NOT VISIBLE: use full marks (no penalty)
+        # - If visible and score found: use extracted score
+        # - If visible but no score: default to 0 (violation detected)
+        if is_not_visible:
+            cats[cat_name] = max_val
+        else:
+            cats[cat_name] = extracted_score if extracted_score is not None else 0
+
+    # Extract details/observations
+    details: Dict[str, str] = {}
+    for key, rx_key in [
+        ("uniform", "uniform_detail"),
+        ("hairstyle", "hairstyle_detail"),
+        ("makeup", "makeup_detail"),
+        ("nails", "nails_detail"),
+        ("accessories", "acc_detail"),
+    ]:
+        _, v = _extract(_rx[rx_key], text)
+        details[key] = v
+
+    # Calculate overall score if not provided by Gemini
+    if score is None:
+        score = int(sum(v or 0 for v in cats.values()))
+        if score > 10:
+            score = 10
+
+    # Determine compliance based on score
+    if score is not None:
+        assessment = "COMPLIANT" if score >= 7 else "NON-COMPLIANT"
+    elif assessment is None:
+        assessment = "NON-COMPLIANT"
+
+    # CRITICAL FIX: Extract issues using the new robust function
+    issues = _extract_issues_from_text(text)
+    
+    # Extract recommendations
+    ok_r, block_r = _extract(_rx["reco_block"], text)
+
+    return {
+        "person": {"name": name or "", "iga_code": iga or ""},
+        "assessment": assessment,
+        "score": int(score),  # Ensure integer
+        "scores": cats,
+        "details": details,
+        "issues": issues,  # CRITICAL: Now populated correctly
+        "recommendations": _lines_to_list(block_r) if ok_r else [],
+        "_metadata": {"not_visible": not_visible_flags},  # Audit trail for debugging
+    }
+
+
+# ============= GCS utils used by grooming routes =============
+from gcs_utils import (  # noqa: E402
+    upload_image_bytes,
+    upload_grooming_result_text,
+    append_event_to_crew_log,
+    create_ticket,
+)
+
+# ============= App setup =============
+app = FastAPI(title="Grooming Checks + Insights API", version="2.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class GroomingRequest(BaseModel):
+    imageBase64: str
+    crewName: Optional[str] = None
+    igaCode: Optional[str] = None
+    base: Optional[str] = None
+    department: Optional[str] = None
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok", "time": datetime.now().isoformat()}
+
+
+# ============= Grooming (image) =============
+@app.post("/check-grooming")
+async def check_grooming_endpoint(payload: GroomingRequest):
+    if not payload.imageBase64 or len(payload.imageBase64) < 10:
+        return JSONResponse({"error": "Invalid image"}, status_code=400)
+
+    try:
+        b64 = payload.imageBase64.split(",")[-1]
+        img_bytes = base64.b64decode(b64)
+
+        # Run Gemini grooming analysis
+        report = run_grooming_analysis(b64)
+        parsed = _parse_text_to_ui(report, payload.crewName, payload.igaCode)
+
+        # Persist artifacts/results in GCS
+        img_path = upload_image_bytes(img_bytes, payload.igaCode, "image", payload.crewName)
+        upload_grooming_result_text(report, payload.crewName, payload.igaCode, img_path, parsed=parsed)
+        append_event_to_crew_log(
+            {"type": "image", "parsed": parsed, "image_path": img_path},
+            payload.crewName,
+            payload.igaCode,
+        )
+        create_ticket(
+            {"type": "image", "igaCode": payload.igaCode, "crewName": payload.crewName, "image_path": img_path}
+        )
+
+        return {"status": "ok", "result": parsed}
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ============= Grooming (video) - CRITICAL FIX: Now persists results =============
+@app.post("/check-grooming-video")
+async def check_grooming_video(
+    video: UploadFile = File(...),
+    name: str = Form(...),
+    iga_code: str = Form(...),
+):
+    """
+    CRITICAL FIX: Video results are now PERSISTED to GCS and updated in logs.
+    This ensures /v1/individual-analysis correctly shows video assessment categories.
+    """
+    # Accept any video format (removed .mp4 restriction)
+    MAX_SIZE = 20 * 1024 * 1024  # 20 MB
+    size = 0
+    chunk_size = 1024 * 1024  # 1 MB chunks
+    
+    # Reset to beginning
+    await video.seek(0)
+    
+    # Check size by reading chunks
+    while True:
+        chunk = await video.read(chunk_size)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_SIZE:
+            return JSONResponse({"error": "Video size must be <= 20 MB"}, status_code=400)
+    
+    # Reset file pointer after size check
+    await video.seek(0)
+
+    try:
+        videos_dir = os.path.join("uploads", "videos")
+        os.makedirs(videos_dir, exist_ok=True)
+        video_path = os.path.join(videos_dir, video.filename)
+        
+        with open(video_path, "wb") as f:
+            shutil.copyfileobj(video.file, f)
+
+        full_text = check_grooming_from_video(video_path, name, iga_code)
+        parsed = _parse_text_to_ui(full_text, name, iga_code)
+
+        # ========= CRITICAL FIX: Persist video results to GCS (same as image) =========
+        video_bytes = open(video_path, 'rb').read()
+        video_gcs_path = upload_image_bytes(video_bytes, iga_code, "video", name)
+        
+        # Persist to GCS results folder (same pattern as image endpoint)
+        upload_grooming_result_text(
+            full_text, 
+            name, 
+            iga_code, 
+            video_gcs_path,
+            parsed=parsed
+        )
+        
+        # Add to crew log
+        append_event_to_crew_log(
+            {"type": "video", "parsed": parsed, "video_path": video_gcs_path},
+            name,
+            iga_code,
+        )
+        
+        # Create ticket for any non-compliance
+        create_ticket(
+            {"type": "video", "igaCode": iga_code, "crewName": name, "video_path": video_gcs_path}
+        )
+
+        return {"status": "ok", "result": parsed}
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ============= The 3 requested APIs =============
+from dashboard_service import get_insights, get_info, search_people  # noqa: E402
+
+
+def _resolve_range(dateFrom: Optional[_date], dateTo: Optional[_date], days: Optional[int]):
+    today = datetime.utcnow().date()
+    if days and int(days) > 0:
+        d = int(days)
+        _from = today - timedelta(days=d - 1)
+        _to = today
+        return _from, _to
+    _from = dateFrom or (today - timedelta(days=6))
+    _to = dateTo or today
+    return _from, _to
+
+
+@app.get("/v1/insights")
+async def insights(
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None, description="custom duration in days; e.g., 7 for last 7 days"),
+    page: int = 1,
+    pageSize: int = 25,
+):
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    return get_insights(_from, _to, page, pageSize)
+
+
+@app.get("/v1/info")
+async def info_box(
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None),
+):
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    return get_info(_from, _to)
+
+
+@app.get("/v1/search")
+async def search_endpoint(
+    q: str = Query("", description="search by IGA code or crew name (case-insensitive)"),
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None),
+    page: int = 1,
+    pageSize: int = 25,
+):
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    return search_people(_from, _to, q, page, pageSize)
+
+
+# ============= Individual Analysis (FIXED) =============
+@app.get("/v1/individual-analysis")
+async def individual_analysis(
+    igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
+    crewName: str = Query(..., description="Crew name (e.g., Lavanya Singh)"),
+    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD format"),
+    dateTo: str = Query(..., description="End date in YYYY-MM-DD format"),
+):
+    """
+    Get detailed individual analysis for a specific crew member.
+    
+    CRITICAL FIX: Uses _load_records() which correctly loads both image AND video results.
+    All data normalization is handled by dashboard_service.
+    
+    Args:
+        igaCode: IGA code (e.g., "IGA6781")
+        crewName: Full crew name (e.g., "Lavanya Singh")
+        dateFrom: Start date in YYYY-MM-DD format
+        dateTo: End date in YYYY-MM-DD format
+    
+    Returns:
+        Detailed analysis with summary, category breakdown, and trends
+    """
+    try:
+        # ============= INPUT VALIDATION =============
+        
+        # Parse dates
+        try:
+            start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
+            end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
+        except ValueError as e:
+            return JSONResponse(
+                {
+                    "error": "Invalid date format",
+                    "details": f"Dates must be in YYYY-MM-DD format: {str(e)}"
+                },
+                status_code=400
+            )
+        
+        # Validate date range
+        if start_date > end_date:
+            return JSONResponse(
+                {
+                    "error": "Invalid date range",
+                    "details": "dateFrom cannot be after dateTo"
+                },
+                status_code=400
+            )
+        
+        # ============= LOAD RECORDS (includes both image & video) =============
+        
+        filters = DashboardFilters(date_from=start_date, date_to=end_date)
+        all_records = _load_records(filters)
+        
+        # ============= FILTER BY CREW =============
+        
+        # Normalize search parameters
+        iga_search = igaCode.strip().upper()
+        crew_search = crewName.strip().upper()
+        
+        # Filter records - using CORRECT snake_case field names
+        crew_records = []
+        for record in all_records:
+            record_iga = (record.get("iga_code") or "").strip().upper()
+            record_crew = (record.get("crew_name") or "").strip().upper()
+            
+            if record_iga == iga_search and record_crew == crew_search:
+                crew_records.append(record)
+        
+        # ============= CHECK IF DATA FOUND =============
+        
+        if not crew_records:
+            return JSONResponse(
+                {
+                    "error": "No assessments found for this crew in given date range",
+                    "debug": {
+                        "searchedFor": {
+                            "igaCode": igaCode,
+                            "crewName": crewName,
+                            "dateRange": f"{dateFrom} to {dateTo}"
+                        },
+                        "normalizedQuery": {
+                            "igaCode": iga_search,
+                            "crewName": crew_search
+                        },
+                        "totalRecordsInRange": len(all_records),
+                        "matchingRecords": 0,
+                        "tip": "Verify IGA code and crew name match exactly as stored in GCS"
+                    }
+                },
+                status_code=404
+            )
+        
+        # ============= CALCULATE SUMMARY STATISTICS =============
+        
+        total = len(crew_records)
+        compliant_count = sum(1 for r in crew_records if r["assessment"] == "COMPLIANT")
+        noncompliant_count = total - compliant_count
+        pass_rate = (compliant_count / total * 100) if total > 0 else 0
+        
+        # ============= CATEGORY-WISE BREAKDOWN (FIXED: Only 5 categories) =============
+        
+        # Count violations by category (only from NON-COMPLIANT assessments)
+        category_counts = defaultdict(int)
+        
+        for record in crew_records:
+            if record["assessment"] == "NON-COMPLIANT":
+                # Extract issues from the record
+                issues = record.get("issues") or []
+                
+                # CRITICAL FIX: Debug logging
+                print(f"[DEBUG] Record timestamp: {record.get('timestamp')}, Issues: {issues}")
+                
+                for issue in issues:
+                    # Use the same issue heading extraction as dashboard_service
+                    heading = _issue_heading(issue)
+                    if heading and heading != "other":
+                        category_counts[heading] += 1
+                        print(f"[DEBUG] Issue '{issue}' → Category '{heading}'")
+        
+        # Convert to list and sort by count (most violations first)
+        category_breakdown = {
+            category: count
+            for category, count in sorted(
+                category_counts.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )
+        }
+        
+        print(f"[DEBUG] Final category breakdown: {category_breakdown}")
+        
+        # ============= BUILD DAILY TRENDS =============
+        
+        # Group records by date
+        daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
+        
+        for record in crew_records:
+            record_date = record["date"]  # Already a date object from _load_records
+            
+            if record["assessment"] == "COMPLIANT":
+                daily_stats[record_date]["compliant"] += 1
+            else:
+                daily_stats[record_date]["nonCompliant"] += 1
+        
+        # Build trend array with date padding
+        trend_list = []
+        current_date = start_date
+        while current_date <= end_date:
+            date_key = current_date.isoformat()
+            stats = daily_stats.get(current_date, {"compliant": 0, "nonCompliant": 0})
+            
+            trend_list.append({
+                "date": date_key,
+                "compliant": stats["compliant"],
+                "nonCompliant": stats["nonCompliant"]
+            })
+            
+            current_date += timedelta(days=1)
+        
+        # ============= BUILD RESPONSE =============
+        
+        response = {
+            "crew": {
+                "igaCode": igaCode,
+                "name": crewName
+            },
+            "dateRange": {
+                "from": dateFrom,
+                "to": dateTo,
+                "daysAnalyzed": (end_date - start_date).days + 1
+            },
+            "summary": {
+                "totalAssessments": total,
+                "compliant": compliant_count,
+                "nonCompliant": noncompliant_count,
+                "passRate": round(pass_rate, 2),
+                "passRatePercentage": f"{pass_rate:.2f}%"
+            },
+            "nonComplianceByCategory": category_breakdown,
+            "trend": trend_list,
+            "recentAssessments": [
+                {
+                    "timestamp": r["timestamp"].isoformat() if r["timestamp"] else None,
+                    "date": r["date"].isoformat(),
+                    "score": r["score"],
+                    "assessment": r["assessment"],
+                    "issues": r["issues"]
+                }
+                for r in crew_records[:10]  # Most recent 10
+            ]
+        }
+        
+        return response
+        
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] individual_analysis: {str(e)}")
+        print(traceback.format_exc())
+        
+        return JSONResponse(
+            {
+                "error": "Internal server error",
+                "details": str(e),
+                "type": type(e).__name__
+            },
+            status_code=500
+        )
+
+
+# ============= Entrypoint =============
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=True)
