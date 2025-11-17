@@ -1,3 +1,1 @@
-GroomingPage.tsx:92 
- Failed to load grooming data: TypeError: n.summary.passRate.replace is not a function
-    at
+"passRate": f"{pass_rate:.2f}",  # ← Add f-string to make it a string
