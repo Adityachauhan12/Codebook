@@ -1,12 +1,24 @@
-# dashboard_service.py
+"""
+Dashboard service for grooming analytics and insights.
+
+CRITICAL FIX: _issue_heading() now maps ALL categories to 5 main categories:
+- Uniform
+- Hairstyle  
+- Makeup
+- Nails
+- Accessories
+
+This ensures consistency between what's shown on dashboard and what's in the database.
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
 import re
 from collections import Counter, defaultdict
-# ... existing imports ...
 import os
+
 # threshold for score-based compliance fallback (default 7.0)
 PASS_THRESHOLD = float(os.getenv("GROOMING_PASS_THRESHOLD", "7.0"))
 
@@ -93,34 +105,97 @@ def _parse_result_text(text: str) -> Dict[str, Any]:
     issues: List[str] = _lines_to_list(m_issues.group(1)) if m_issues else []
 
     return {"assessment": assessment, "score": score, "issues": issues}
-# --------- Extract only the issue heading/category (no detail) ----------
+
+
+# =========================================================================
+# CRITICAL FIX: Enhanced _issue_heading() - Maps ALL categories to 5 main ones
+# =========================================================================
 def _issue_heading(s: str) -> str:
     """
-    Examples:
-      "**Makeup:** Complete absence..."  -> "makeup"
-      "Uniform: not wearing..."          -> "uniform"
-      "Accessories: wearing..."          -> "accessories"
-      "Hairstyle: ..."                   -> "hairstyle"
-      "Facial hair: ..."                 -> "facial hair"
+    Map ANY grooming issue to ONE of the 5 MAIN categories:
+    - Uniform
+    - Hairstyle
+    - Makeup
+    - Nails
+    - Accessories
+    
+    This is the KEY FIX for the dashboard category mismatch.
+    All granular categories from Gemini are consolidated into these 5.
     """
-    s = (s or "").strip().replace("**", "")
-    if ":" in s:
-        head = s.split(":", 1)[0].strip().lower()
-        head = head.replace("hair style", "hairstyle")
-        return head
-    low = s.lower()
-    if "makeup" in low: return "makeup"
-    if "uniform" in low or "scarf" in low: return "uniform"
-    if "nail" in low: return "nails"
-    if "accessor" in low or "watch" in low or "earbud" in low: return "accessories"
-    if "hair" in low: return "hairstyle"
-    if "beard" in low or "mustache" in low or "moustache" in low: return "facial hair"
+    s = (s or "").strip().lower()
+    
+    # Remove common prefixes/noise
+    s = s.replace(",", "").replace(":", "")
+    
+    # ===== UNIFORM =====
+    # Includes: tunic, scarf, badge, stockings, overall uniform issues
+    uniform_keywords = [
+        "uniform", "tunic", "scarf", "badge", "name badge", 
+        "stockings", "attire", "dress", "clothing",
+        "subject-standard mismatch",  # Often refers to uniform policy
+        "items not visible",  # Usually uniform elements
+        "incomplete view",  # Often related to uniform assessment
+        "image quality"  # Technical issues preventing uniform assessment
+    ]
+    for kw in uniform_keywords:
+        if kw in s:
+            return "uniform"
+    
+    # ===== HAIRSTYLE =====
+    hairstyle_keywords = [
+        "hair", "hairstyle", "hair style", "bun", "braid", 
+        "ponytail", "chignon", "curl", "hair color", "highlights",
+        "beard", "mustache", "moustache", "facial hair"  # Include facial hair in hairstyle
+    ]
+    for kw in hairstyle_keywords:
+        if kw in s:
+            return "hairstyle"
+    
+    # ===== ACCESSORIES =====
+    # Includes: earrings, rings, watch, bangles, religious items, nose pins
+    accessories_keywords = [
+        "accessor", "earring", "ring", "watch", "bangle", 
+        "bracelet", "jewelry", "jewellery", "stud",
+        "nose pin", "piercing", "religious thread", 
+        "prohibited accessor",  # Catch prohibited items
+        "earbud"  # Sometimes classified as accessory
+    ]
+    for kw in accessories_keywords:
+        if kw in s:
+            return "accessories"
+    
+    # ===== MAKEUP =====
+    makeup_keywords = [
+        "makeup", "make-up", "make up", "foundation", "base",
+        "eyeshadow", "eye shadow", "liner", "eyeliner", 
+        "mascara", "lipstick", "lip", "cosmetic"
+    ]
+    for kw in makeup_keywords:
+        if kw in s:
+            return "makeup"
+    
+    # ===== NAILS =====
+    nails_keywords = [
+        "nail", "manicure", "nail polish", "nail color"
+    ]
+    for kw in nails_keywords:
+        if kw in s:
+            return "nails"
+    
+    # ===== CATCH-ALL FOR COMPLIANCE ISSUES =====
+    # "Grooming Non-Compliance" without specific category → default to uniform
+    if "grooming" in s or "compliance" in s or "violation" in s:
+        return "uniform"
+    
+    # Default fallback
     return "other"
+
 
 @dataclass
 class Filters:
     date_from: date
     date_to: date
+
 
 # ---------- Read records from GCS ----------
 def _load_records(filters: Filters) -> List[Dict[str, Any]]:
@@ -205,6 +280,7 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
     records.sort(key=lambda r: (r["timestamp"] or datetime.min), reverse=True)
     return records
 
+
 # ---------- Core aggregations ----------
 def _looks_like_iga(iga: str) -> bool:
     if not iga:
@@ -212,6 +288,7 @@ def _looks_like_iga(iga: str) -> bool:
     iga = iga.strip().upper()
     # adjust if your real pattern differs:
     return bool(re.fullmatch(r"IGA\d{4,6}", iga))
+
 
 def _overview(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     total = len(records)
@@ -225,6 +302,7 @@ def _overview(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "failRate": (nonc / total if total else 0.0),
         "base": None  # explicitly include base
     }
+
 
 def _daily_graph(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     daily_compliant: Dict[date, int] = defaultdict(int)
@@ -244,25 +322,40 @@ def _daily_graph(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         "base": None
     } for d in all_days]
 
+
 def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
-    """Non-compliant categories (headings only), with counts and share of all NON-COMPLIANT tests."""
+    """
+    FIX: Non-compliant categories - ONLY RETURNS 5 MAIN CATEGORIES.
+    Maps all granular issues to: uniform, hairstyle, makeup, nails, accessories.
+    """
+    VALID_CATEGORIES = {"uniform", "hairstyle", "makeup", "nails", "accessories"}
+    
     headings: List[str] = []
     for r in records:
         if r["assessment"] == "NON-COMPLIANT":
             for raw in r.get("issues", []):
                 s = raw  # No canonicalization function defined; use raw directly
                 head = _issue_heading(s)
-                if head and head != "other":
+                
+                # Only count valid categories
+                if head in VALID_CATEGORIES:
                     headings.append(head)
+    
     total_nc = sum(1 for r in records if r["assessment"] == "NON-COMPLIANT")
     counts = Counter(headings)
-    items = counts.most_common(top_n)
-    return [{
-        "category": head,
-        "nonCompliantCount": cnt,
-        "share": round((cnt / total_nc), 3) if total_nc else 0.0,
-        "base": None
-    } for head, cnt in items]
+    
+    # Return ALL 5 categories sorted by count
+    result = []
+    for cat in sorted(counts.keys(), key=lambda c: counts[c], reverse=True):
+        result.append({
+            "category": cat,
+            "nonCompliantCount": counts[cat],
+            "share": round((counts[cat] / total_nc), 3) if total_nc else 0.0,
+            "base": None
+        })
+    
+    return result[:top_n]
+
 
 def _top_non_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int = 5):
     per: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
@@ -299,6 +392,7 @@ def _top_non_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: i
     rows.sort(key=lambda r: (r["nonCompliant"], r["nonCompliantRate"], r["totalTests"], r["lastSeen"] or datetime.min), reverse=True)
     return rows[:top_n]
 
+
 def _top_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int = 5):
     per: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
         "crewName": "", "total": 0, "compliant": 0, "sumScore": 0.0, "scored": 0, "lastSeen": None
@@ -334,7 +428,51 @@ def _top_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int =
     rows.sort(key=lambda r: (r["compliant"], r["compliantRate"], r["totalTests"], r["lastSeen"] or datetime.min), reverse=True)
     return rows[:top_n]
 
-# ---------------- Public functions (APIs) ----------------
+
+# ========== shared helpers ==========
+def _safe_page_size(ps: int, default: int = 25, maximum: int = 200) -> int:
+    try:
+        n = int(ps)
+        if n <= 0: return default
+        return min(n, maximum)
+    except Exception:
+        return default
+
+
+def _compute_recent_tests(records: List[Dict[str, Any]], page: int, page_size: int):
+    start = max(0, (page - 1) * page_size)
+    end = start + page_size
+    items = []
+    for r in records[start:end]:
+        ts = r.get("timestamp")
+        score = r.get("score")
+        assessment = (r.get("assessment") or "").strip().upper()
+
+        # Ensure assessment present (fallback by score)
+        if assessment not in ("COMPLIANT", "NON-COMPLIANT"):
+            if isinstance(score, (int, float)):
+                assessment = "COMPLIANT" if score >= PASS_THRESHOLD else "NON-COMPLIANT"
+            else:
+                assessment = "NON-COMPLIANT"
+
+        pass_fail = "PASS" if assessment == "COMPLIANT" else "FAIL"
+
+        items.append({
+            "testId": f"T-{int(ts.timestamp()) if ts else 0}",
+            "crewId": r.get("iga_code"),
+            "crewName": r.get("crew_name"),
+            "base": r.get("base"),              # remains null until you start saving it
+            "score": score if isinstance(score, (int, float)) else 0,
+            "assessment": assessment,           # always COMPLIANT / NON-COMPLIANT
+            "status": assessment,               # same as assessment for clarity
+            "passFail": pass_fail,              # optional compatibility field
+            "takenAt": ts.isoformat() if ts else None,
+        })
+    return {"items": items, "page": page, "pageSize": page_size, "total": len(records)}
+
+
+# ============= PUBLIC FUNCTIONS (APIs) =============
+
 def get_insights(date_from: date, date_to: date, page: int, page_size: int) -> Dict[str, Any]:
     """
     MAIN API: grooming vs non-grooming, categories, daily graph (compliant/nonCompliant),
@@ -356,6 +494,7 @@ def get_insights(date_from: date, date_to: date, page: int, page_size: int) -> D
         },
         "recentTests": _compute_recent_tests(records, page, page_size=_safe_page_size(page_size)),
     }
+
 
 def get_info(date_from: date, date_to: date) -> Dict[str, Any]:
     """
@@ -379,6 +518,7 @@ def get_info(date_from: date, date_to: date) -> Dict[str, Any]:
             "base": None
         }
     }
+
 
 def search_people(date_from: date, date_to: date, query: str, page: int, page_size: int) -> Dict[str, Any]:
     """
@@ -433,43 +573,3 @@ def search_people(date_from: date, date_to: date, query: str, page: int, page_si
         "total": total,
         "results": rows[start:end]
     }
-
-# ---------- shared helpers ----------
-def _safe_page_size(ps: int, default: int = 25, maximum: int = 200) -> int:
-    try:
-        n = int(ps)
-        if n <= 0: return default
-        return min(n, maximum)
-    except Exception:
-        return default
-
-def _compute_recent_tests(records: List[Dict[str, Any]], page: int, page_size: int):
-    start = max(0, (page - 1) * page_size)
-    end = start + page_size
-    items = []
-    for r in records[start:end]:
-        ts = r.get("timestamp")
-        score = r.get("score")
-        assessment = (r.get("assessment") or "").strip().upper()
-
-        # Ensure assessment present (fallback by score)
-        if assessment not in ("COMPLIANT", "NON-COMPLIANT"):
-            if isinstance(score, (int, float)):
-                assessment = "COMPLIANT" if score >= PASS_THRESHOLD else "NON-COMPLIANT"
-            else:
-                assessment = "NON-COMPLIANT"
-
-        pass_fail = "PASS" if assessment == "COMPLIANT" else "FAIL"
-
-        items.append({
-            "testId": f"T-{int(ts.timestamp()) if ts else 0}",
-            "crewId": r.get("iga_code"),
-            "crewName": r.get("crew_name"),
-            "base": r.get("base"),              # remains null until you start saving it
-            "score": score if isinstance(score, (int, float)) else 0,
-            "assessment": assessment,           # always COMPLIANT / NON-COMPLIANT
-            "status": assessment,               # same as assessment for clarity
-            "passFail": pass_fail,              # optional compatibility field
-            "takenAt": ts.isoformat() if ts else None,
-        })
-    return {"items": items, "page": page, "pageSize": page_size, "total": len(records)}
