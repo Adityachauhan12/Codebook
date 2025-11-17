@@ -1,20 +1,47 @@
+"""
+A toolkit for communicating with the Google Gemini API for grooming checks.
+This module provides standalone functions to assess grooming standards by sending
+image or video data to the Gemini API along with a detailed prompt.
+"""
+
 import base64
-import os
 import re
-import requests
-from dotenv import load_dotenv
+import google.auth
+import google.generativeai as genai
 
-load_dotenv()
-API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_ENDPOINT = (
-    "https://generativelanguage.googleapis.com/v1/models/"
-    f"gemini-2.5-pro:generateContent?key={API_KEY}"
-)
+# Setup Gemini with ADC
+SCOPES = ["https://www.googleapis.com/auth/generative-language"]
+creds, _ = google.auth.default(scopes=SCOPES)
+genai.configure(credentials=creds)
 
+model = genai.GenerativeModel("models/gemini-2.5-pro", generation_config={"temperature": 0.0})
+
+# Core prompt: policy + rubric - UPDATED WITH GENDER CHECK
 FACE_GROOMING_PROMPT = """
 You are assessing IndiGo Airlines cabin crew grooming standards. Be concise but complete.
 
-⚠️ CRITICAL RULE - VISIBILITY-BASED SCORING:
+⚠️ CRITICAL: GENDER CHECK FIRST
+- Determine if the crew member is MALE or FEMALE
+- If MALE: State "ASSESSMENT CANNOT BE COMPLETED: These standards are for FEMALE cabin crew only. Male crew requires different grooming standards."
+- If FEMALE: Continue with full assessment below
+- If UNCLEAR/AMBIGUOUS: Request clarification
+
+If you determine the crew is MALE, STOP assessment and output:
+Overall Assessment: NON-COMPLIANT
+Score: 0/10
+Reason: These grooming standards apply to FEMALE cabin crew only. Male crew member cannot be assessed using these standards.
+
+Issues Found:
+- Assessment criteria are gender-specific (female only)
+- Male crew member does not comply with female standards
+
+Recommendations:
+- Please use appropriate male cabin crew grooming standards for assessment
+- These standards are exclusively for female IndiGo cabin crew
+
+---
+
+⚠️ CRITICAL RULE - VISIBILITY-BASED SCORING (FOR FEMALE CREW ONLY):
 - Judge what IS VISIBLE in the image/video
 - IMPORTANT: If crew appears in casual attire (not uniform), evaluate that attire for any grooming standards applicable to it
 - If uniform is completely absent/not visible AND cannot judge any standards: score as NOT VISIBLE (full marks with marker)
@@ -41,20 +68,22 @@ MAKEUP (2.0 max):
 - If NOT VISIBLE (truly cannot assess): Score 2/2 → output "Makeup: 2/2 (NOT VISIBLE)"
 
 NAILS (1.0 max):
-- Colors: Pearl white or French manicure
+- Colors: Pearl white or French manicure ONLY
+- If nails are shown/visible (hands visible): ALWAYS evaluate - do NOT mark as NOT VISIBLE
 - If VISIBLE + compliant: Score 1/1
-- If VISIBLE + violation: Deduct marks appropriately
-- If NOT VISIBLE (truly cannot assess): Score 1/1 → output "Nails: 1/1 (NOT VISIBLE)"
+- If VISIBLE + non-compliant color/length: Score 0/1 (deduct full marks)
+- If truly hands completely out of frame: Score 1/1 → output "Nails: 1/1 (NOT VISIBLE)"
 
 ACCESSORIES (2.0 max):
-- Earrings: white/rose-gold pearl or diamond studs only
-- Rings: max one per hand, silver/rose-gold, ring or middle finger only
-- Watch: must have seconds hand (black/silver/rose-gold/dark blue)
-- Bangles: max one plain silver/rose-gold
-- Prohibitions: NO religious threads, nose pins, extra piercings
-- If VISIBLE + compliant: Score 2/2
-- If VISIBLE + violation: Deduct marks appropriately
-- If NOT VISIBLE (truly cannot assess): Score 2/2 → output "Accessories: 2/2 (NOT VISIBLE)"
+- Earrings: white/rose-gold pearl or diamond studs only [0.4 each if wrong]
+- Rings: max one per hand, silver/rose-gold, ring or middle finger only [0.5 if violation]
+- Watch: MUST have visible seconds hand (black/silver/rose-gold/dark blue) [0.5 if wrong/missing]
+- Bangles: max one plain silver/rose-gold [0.4 if excess]
+- Prohibitions: NO religious threads, nose pins, extra piercings [0.4 each if present]
+- If all compliant and visible: Score 2/2
+- If violations visible: Deduct per breakdown above (total max deduction = 2.0)
+- If NOT VISIBLE (truly cannot assess any accessories): Score 2/2 → output "Accessories: 2/2 (NOT VISIBLE)"
+- IMPORTANT: If ANY accessory is visible, do NOT mark entire category as NOT VISIBLE
 
 UNIFORM (3.0 max):
 - Tunic: clean, well-fitted
@@ -101,19 +130,6 @@ Recommendations:
 """
 
 
-def _post_gemini(parts):
-    """Send request to Gemini API and return text response."""
-    headers = {"Content-Type": "application/json"}
-    payload = {"contents": [{"parts": parts}]}
-    r = requests.post(GEMINI_ENDPOINT, headers=headers, json=payload, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        return ""
-
-
 def _normalize_output(report_text: str) -> str:
     """Normalize scores to integer format (X/10, not X.X/10)."""
     # Remove Evidence tags if any
@@ -142,35 +158,53 @@ def _normalize_output(report_text: str) -> str:
 
 def check_grooming(image_b64: str) -> str:
     """Single image assessment - concise format."""
-    prompt = f"{FACE_GROOMING_PROMPT}"
-    parts = [
-        {"text": prompt},
-        {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
-    ]
-    raw = _post_gemini(parts)
-    return _normalize_output(raw)
+    try:
+        image_data = base64.b64decode(image_b64)
+        response = model.generate_content(
+            [
+                FACE_GROOMING_PROMPT,
+                {
+                    "mime_type": "image/jpeg",
+                    "data": image_data
+                }
+            ]
+        )
+        return _normalize_output(response.text)
+    except Exception as e:
+        return f"Error processing image: {str(e)}"
 
 
 def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
     """Video assessment - concise format with crew info."""
-    with open(video_path, "rb") as f:
-        video_b64 = base64.b64encode(f.read()).decode("utf-8")
+    try:
+        with open(video_path, "rb") as f:
+            video_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    prompt = (
-        f"{FACE_GROOMING_PROMPT}\n\n"
-        "This is a video. Sample frames uniformly. Use majority rule for assessment.\n"
-        f"Output format:\nOverall Assessment: [COMPLIANT or NON-COMPLIANT]\nScore: X/10\n..."
-    )
-    parts = [
-        {"text": prompt},
-        {"inline_data": {"mime_type": "video/mp4", "data": video_b64}},
-    ]
-    raw = _post_gemini(parts)
-    return _normalize_output(raw)
+        video_data = base64.b64decode(video_b64)
+        
+        prompt = (
+            f"{FACE_GROOMING_PROMPT}\n\n"
+            "This is a video. Sample frames uniformly. Use majority rule for assessment.\n"
+            f"Output format:\nOverall Assessment: [COMPLIANT or NON-COMPLIANT]\nScore: X/10\n..."
+        )
+        
+        response = model.generate_content(
+            [
+                prompt,
+                {
+                    "mime_type": "video/mp4",
+                    "data": video_data
+                }
+            ]
+        )
+        
+        return _normalize_output(response.text)
+    except Exception as e:
+        return f"Error processing video: {str(e)}"
 
 
 def check_grooming_from_frames(frames_b64: list, name: str, iga_code: str) -> str:
-    """Multiple frames assessment."""
+    """Multiple frames assessment - UPDATED for integer scores."""
     results = []
     frame_scores = []
     
