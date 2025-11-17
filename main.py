@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import os
@@ -8,6 +9,9 @@ import shutil
 from datetime import datetime, timedelta, date as _date
 from typing import Optional, Dict, Any, Tuple, List
 from gcs_utils import _list_by_prefix, _download_json
+from dashboard_service import _load_records, Filters as DashboardFilters, _issue_heading
+from collections import defaultdict
+from datetime import datetime, date as _date, timedelta
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, UploadFile, Query, HTTPException
@@ -39,12 +43,12 @@ _rx = {
     "accessories_score": re.compile(
         r"Accessories\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I
     ),
-    # NEW: Detect (NOT VISIBLE) markers for visibility-based scoring
-    "uniform_not_visible": re.compile(r"Uniform.*\(NOT\s+VISIBLE\)", re.I),
-    "hairstyle_not_visible": re.compile(r"Hairstyle.*\(NOT\s+VISIBLE\)", re.I),
-    "makeup_not_visible": re.compile(r"Makeup.*\(NOT\s+VISIBLE\)", re.I),
-    "nails_not_visible": re.compile(r"Nails.*\(NOT\s+VISIBLE\)", re.I),
-    "accessories_not_visible": re.compile(r"Accessories.*\(NOT\s+VISIBLE\)", re.I),
+    # UPDATED: Detect (NOT VISIBLE) markers - catches both (NOT VISIBLE) and **NOT VISIBLE** formats
+    "uniform_not_visible": re.compile(r"(?:Uniform|Tunic|Scarf|Badge|Stockings).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "hairstyle_not_visible": re.compile(r"(?:Hairstyle|Hair).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "makeup_not_visible": re.compile(r"Makeup.*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "nails_not_visible": re.compile(r"(?:Nails|Nail).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
+    "accessories_not_visible": re.compile(r"(?:Accessories|Watch|Rings|Earrings|Bangles).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
     # Detail observations
     "uniform_detail": re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
     "hairstyle_detail": re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
@@ -250,10 +254,9 @@ async def check_grooming_video(
     name: str = Form(...),
     iga_code: str = Form(...),
 ):
-    # Accept only .mp4 files
-    if not video.filename.lower().endswith(".mp4"):
-        return JSONResponse({"error": "Only .mp4 files are allowed"}, status_code=400)
-
+    # UPDATED: Accept any video format (removed .mp4 restriction)
+    # Common video formats: .mp4, .mov, .avi, .mkv, .flv, .webm, .m4v, etc.
+    
     # Check file size BEFORE saving (limit: 20 MB)
     # Read in chunks to avoid loading entire file into memory
     MAX_SIZE = 20 * 1024 * 1024  # 20 MB
@@ -348,105 +351,206 @@ async def search_endpoint(
 # Fixed individual analysis endpoint
 @app.get("/v1/individual-analysis")
 async def individual_analysis(
-    igaCode: str = Query(..., description="IGA code"),
-    crewName: str = Query(..., description="Crew name"),
-    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD"),
-    dateTo: str = Query(..., description="End date in YYYY-MM-DD"),
+    igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
+    crewName: str = Query(..., description="Crew name (e.g., Lavanya Singh)"),
+    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD format"),
+    dateTo: str = Query(..., description="End date in YYYY-MM-DD format"),
 ):
+    """
+    Get detailed individual analysis for a specific crew member.
+    
+    Uses the exact same data loading pattern as /v1/insights which works correctly.
+    All data normalization (field names, timestamps, assessment values) is handled
+    by dashboard_service._load_records().
+    
+    Args:
+        igaCode: IGA code (e.g., "IGA6781")
+        crewName: Full crew name (e.g., "Lavanya Singh")
+        dateFrom: Start date in YYYY-MM-DD format
+        dateTo: End date in YYYY-MM-DD format
+    
+    Returns:
+        Detailed analysis with summary, category breakdown, and trends
+    """
     try:
+        # ============= INPUT VALIDATION =============
+        
         # Parse dates
-        start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
-        end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
-
+        try:
+            start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
+            end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
+        except ValueError as e:
+            return JSONResponse(
+                {
+                    "error": "Invalid date format",
+                    "details": f"Dates must be in YYYY-MM-DD format: {str(e)}"
+                },
+                status_code=400
+            )
+        
+        # Validate date range
         if start_date > end_date:
-            return {"error": "dateFrom cannot be after dateTo"}
-
-        # Import the internal function directly
-        from dashboard_service import _load_records, Filters
+            return JSONResponse(
+                {
+                    "error": "Invalid date range",
+                    "details": "dateFrom cannot be after dateTo"
+                },
+                status_code=400
+            )
         
-        # Load all records in date range (same as insights API)
-        filters = Filters(date_from=start_date, date_to=end_date)
+        # ============= LOAD RECORDS USING dashboard_service PATTERN =============
+        
+        # This is the EXACT SAME pattern that works for /v1/insights
+        filters = DashboardFilters(date_from=start_date, date_to=end_date)
         all_records = _load_records(filters)
-
-        # Filter for this specific crew (case-insensitive)
-        iga_normalized = igaCode.strip().upper()
-        crew_normalized = crewName.strip().upper()
         
-        crew_records = [
-            r for r in all_records 
-            if (r.get("iga_code") or "").strip().upper() == iga_normalized 
-            and (r.get("crew_name") or "").strip().upper() == crew_normalized
-        ]
-
+        # ============= FILTER BY CREW (with normalized field names) =============
+        
+        # Normalize search parameters
+        iga_search = igaCode.strip().upper()
+        crew_search = crewName.strip().upper()
+        
+        # Filter records - using CORRECT snake_case field names
+        crew_records = []
+        for record in all_records:
+            record_iga = (record.get("iga_code") or "").strip().upper()
+            record_crew = (record.get("crew_name") or "").strip().upper()
+            
+            if record_iga == iga_search and record_crew == crew_search:
+                crew_records.append(record)
+        
+        # ============= CHECK IF DATA FOUND =============
+        
         if not crew_records:
-            return {"error": "No assessments found for this crew in given date range"}
-
-        # Summary statistics
+            return JSONResponse(
+                {
+                    "error": "No assessments found for this crew in given date range",
+                    "debug": {
+                        "searchedFor": {
+                            "igaCode": igaCode,
+                            "crewName": crewName,
+                            "dateRange": f"{dateFrom} to {dateTo}"
+                        },
+                        "normalizedQuery": {
+                            "igaCode": iga_search,
+                            "crewName": crew_search
+                        },
+                        "totalRecordsInRange": len(all_records),
+                        "matchingRecords": 0,
+                        "tip": "Verify IGA code and crew name match exactly as stored in GCS"
+                    }
+                },
+                status_code=404
+            )
+        
+        # ============= CALCULATE SUMMARY STATISTICS =============
+        
         total = len(crew_records)
-        compliant = sum(1 for r in crew_records if r.get("assessment") == "COMPLIANT")
-        noncompliant = total - compliant
-        passrate = f"{round(compliant / total * 100, 2)}%" if total > 0 else "0%"
-
-        # Category-wise non-compliance counts
-        categories = ["uniform", "hairstyle", "makeup", "nails", "accessories"]
-        category_counts = {c.capitalize(): 0 for c in categories}
-        for r in crew_records:
-            issues = r.get("issues") or []
-            for issue in issues:
-                issue_lower = (issue or "").lower()
-                for c in categories:
-                    if c in issue_lower:
-                        category_counts[c.capitalize()] += 1
-                        break
-
-        # Trend for date range
-        trend_map = {}
-        for r in crew_records:
-            date_obj = r.get("date")
-            if not date_obj:
-                continue
+        compliant_count = sum(1 for r in crew_records if r["assessment"] == "COMPLIANT")
+        noncompliant_count = total - compliant_count
+        pass_rate = (compliant_count / total * 100) if total > 0 else 0
+        
+        # ============= CATEGORY-WISE BREAKDOWN =============
+        
+        # Count violations by category (only from NON-COMPLIANT assessments)
+        category_counts = defaultdict(int)
+        
+        for record in crew_records:
+            if record["assessment"] == "NON-COMPLIANT":
+                # Extract issues from the record
+                issues = record.get("issues") or []
+                for issue in issues:
+                    # Use the same issue heading extraction as dashboard_service
+                    heading = _issue_heading(issue)
+                    if heading and heading != "other":
+                        category_counts[heading] += 1
+        
+        # Convert to list and sort by count (most violations first)
+        category_breakdown = {
+            category: count
+            for category, count in sorted(
+                category_counts.items(),
+                key=lambda x: x,
+                reverse=True
+            )
+        }
+        
+        # ============= BUILD DAILY TRENDS =============
+        
+        # Group records by date
+        daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
+        
+        for record in crew_records:
+            record_date = record["date"]  # Already a date object from _load_records
             
-            key = date_obj.strftime("%Y-%m-%d")
-            if key not in trend_map:
-                trend_map[key] = {"compliant": 0, "nonCompliant": 0}
-            
-            if r.get("assessment") == "COMPLIANT":
-                trend_map[key]["compliant"] += 1
+            if record["assessment"] == "COMPLIANT":
+                daily_stats[record_date]["compliant"] += 1
             else:
-                trend_map[key]["nonCompliant"] += 1
-
-        # Pad trend for all dates in range
+                daily_stats[record_date]["nonCompliant"] += 1
+        
+        # Build trend array with date padding
         trend_list = []
         current_date = start_date
         while current_date <= end_date:
-            key = current_date.strftime("%Y-%m-%d")
+            date_key = current_date.isoformat()
+            stats = daily_stats.get(current_date, {"compliant": 0, "nonCompliant": 0})
+            
             trend_list.append({
-                "date": key,
-                "compliant": trend_map.get(key, {}).get("compliant", 0),
-                "nonCompliant": trend_map.get(key, {}).get("nonCompliant", 0)
+                "date": date_key,
+                "compliant": stats["compliant"],
+                "nonCompliant": stats["nonCompliant"]
             })
+            
             current_date += timedelta(days=1)
-
-        return {
+        
+        # ============= BUILD RESPONSE =============
+        
+        response = {
             "crew": {
                 "igaCode": igaCode,
-                "name": crewName,
+                "name": crewName
+            },
+            "dateRange": {
+                "from": dateFrom,
+                "to": dateTo,
+                "daysAnalyzed": (end_date - start_date).days + 1
             },
             "summary": {
                 "totalAssessments": total,
-                "compliant": compliant,
-                "nonCompliant": noncompliant,
-                "passRate": passrate,
+                "compliant": compliant_count,
+                "nonCompliant": noncompliant_count,
+                "passRate": round(pass_rate, 2),
+                "passRatePercentage": f"{pass_rate:.2f}%"
             },
-            "nonComplianceByCategory": category_counts,
+            "nonComplianceByCategory": category_breakdown,
             "trend": trend_list,
+            "recentAssessments": [
+                {
+                    "timestamp": r["timestamp"].isoformat() if r["timestamp"] else None,
+                    "date": r["date"].isoformat(),
+                    "score": r["score"],
+                    "assessment": r["assessment"],
+                    "issues": r["issues"]
+                }
+                for r in crew_records[:10]  # Most recent 10
+            ]
         }
-
+        
+        return response
+        
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
-
+        print(f"[ERROR] individual_analysis: {str(e)}")
+        print(traceback.format_exc())
+        
+        return JSONResponse(
+            {
+                "error": "Internal server error",
+                "details": str(e),
+                "type": type(e).__name__
+            },
+            status_code=500
+        )
 
 # ---------------- Entrypoint ----------------
 if __name__ == "__main__":
