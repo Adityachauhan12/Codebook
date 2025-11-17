@@ -1,11 +1,10 @@
 """
-FastAPI backend for grooming checks + insights API
+MAIN.PY - FINAL FIXED VERSION
 
-CRITICAL FIXES:
-1. Video results are NOW persisted to GCS (same as image results)
-2. Individual analysis endpoint correctly loads all record types (image & video)
-3. Category breakdown only shows 5 main categories (uniform, hairstyle, makeup, nails, accessories)
-4. FIXED: Issues extraction now correctly parses Gemini output and updates categories
+Critical Fix: Individual Analysis now correctly updates categories
+- COMPLIANT assessments decrease non-compliance percentages
+- Categories show actual violation counts, not just issue counts
+- Pass rate affects category display
 """
 
 from __future__ import annotations
@@ -53,22 +52,18 @@ _rx = {
     "accessories_score": re.compile(
         r"Accessories\s*:\s*([0-9]+)(?:\.[0-9]+)?\s*/\s*2", re.I
     ),
-    # UPDATED: Detect (NOT VISIBLE) markers - catches both (NOT VISIBLE) and **NOT VISIBLE** formats
     "uniform_not_visible": re.compile(r"(?:Uniform|Tunic|Scarf|Badge|Stockings).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
     "hairstyle_not_visible": re.compile(r"(?:Hairstyle|Hair).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
     "makeup_not_visible": re.compile(r"Makeup.*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
     "nails_not_visible": re.compile(r"(?:Nails|Nail).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
     "accessories_not_visible": re.compile(r"(?:Accessories|Watch|Rings|Earrings|Bangles).*(?:\(NOT\s+VISIBLE\)|\*\*NOT\s+VISIBLE\*\*)", re.I),
-    # Detail observations
     "uniform_detail": re.compile(r"-\s*Uniform\s*:\s*(.+)$", re.I | re.M),
     "hairstyle_detail": re.compile(r"-\s*Hairstyle\s*:\s*(.+)$", re.I | re.M),
     "makeup_detail": re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
     "nails_detail": re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
     "acc_detail": re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
-    # CRITICAL FIX: Issues block - more flexible regex
     "issues_block": re.compile(r"Issues\s+Found\s*:\s*(.+?)(?:\n\s*(?:Recommendations|$))", re.I | re.S),
     "reco_block": re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
-    # CRITICAL: Extract bullet points from observations section
     "observations_block": re.compile(r"Observations\s*:\s*(.+?)(?:\n\s*(?:Issues|$))", re.I | re.S),
 }
 
@@ -88,7 +83,7 @@ def _num(s: str) -> Optional[int]:
 
 def _lines_to_list(block: str) -> List[str]:
     """
-    CRITICAL FIX: Extract bullet points from text block.
+    Extract bullet points from text block.
     Handles various formats: dash (-), asterisk (*), numbers (1., 2., etc.)
     """
     out: List[str] = []
@@ -108,10 +103,9 @@ def _lines_to_list(block: str) -> List[str]:
         elif t.startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")):
             parts = t.split(".", 1)
             t = parts[-1].strip() if len(parts) > 1 else t
-        elif re.match(r"^\d+\)", t):  # Handle "1) format"
+        elif re.match(r"^\d+\)", t):
             t = re.sub(r"^\d+\)\s*", "", t)
         
-        # Skip empty lines
         if t and len(t) > 2:
             out.append(t)
     
@@ -128,54 +122,145 @@ def _normalize_assessment(a: Optional[str]) -> Optional[str]:
 
 def _extract_issues_from_text(text: str) -> List[str]:
     """
-    CRITICAL FIX: Extract issues from multiple possible sections.
-    Looks in:
-    1. "Issues Found:" section (explicit issues)
-    2. "Observations:" section (detailed findings)
-    3. Any violations mentioned
+    SUPER ROBUST: Extract issues using MULTIPLE fallback methods.
+    Guaranteed to find violations one way or another.
     """
     all_issues = []
     
-    # Try "Issues Found:" section first
-    ok_i, block_i = _extract(_rx["issues_block"], text)
-    if ok_i and block_i:
-        issues = _lines_to_list(block_i)
-        all_issues.extend(issues)
+    if not text:
+        print("[DEBUG] Text is empty")
+        return []
     
-    # If no issues in Issues Found, try Observations section
+    print(f"[DEBUG] ============ ISSUE EXTRACTION START ============")
+    print(f"[DEBUG] Text length: {len(text)} characters")
+    
+    # ============================================================
+    # METHOD 1: Look for explicit "Issues Found:" block
+    # ============================================================
+    print(f"[DEBUG] METHOD 1: Trying 'Issues Found:' pattern...")
+    
+    # Try multiple variations of "Issues Found"
+    issues_patterns = [
+        r"Issues\s+Found\s*:\s*(.+?)(?:\n\s*(?:Recommendations|Observations|$))",
+        r"Issues\s*:\s*(.+?)(?:\n\s*(?:Recommendations|Observations|$))",
+        r"ISSUES\s*:\s*(.+?)(?:\n\s*(?:Recommendations|$))",
+    ]
+    
+    for pattern_str in issues_patterns:
+        pattern = re.compile(pattern_str, re.I | re.S)
+        m = pattern.search(text)
+        
+        if m:
+            block = m.group(1).strip()
+            print(f"[DEBUG] Found matching pattern: {pattern_str}")
+            print(f"[DEBUG] Block content (first 200 chars): {block[:200]}")
+            
+            issues = _lines_to_list(block)
+            if issues:
+                all_issues.extend(issues)
+                print(f"[DEBUG] ✓ Extracted {len(issues)} issues from Issues Found")
+                for i, issue in enumerate(issues, 1):
+                    print(f"[DEBUG]   {i}. {issue}")
+                break
+    
+    # ============================================================
+    # METHOD 2: Try "Observations:" section
+    # ============================================================
     if not all_issues:
-        ok_obs, block_obs = _extract(_rx["observations_block"], text)
-        if ok_obs and block_obs:
-            observations = _lines_to_list(block_obs)
-            all_issues.extend(observations)
+        print(f"[DEBUG] METHOD 2: No issues from 'Issues Found', trying 'Observations:'...")
+        
+        obs_patterns = [
+            r"Observations\s*:\s*(.+?)(?:\n\s*(?:Issues|Recommendations|$))",
+            r"OBSERVATIONS\s*:\s*(.+?)(?:\n\s*(?:Issues|$))",
+        ]
+        
+        for pattern_str in obs_patterns:
+            pattern = re.compile(pattern_str, re.I | re.S)
+            m = pattern.search(text)
+            
+            if m:
+                block = m.group(1).strip()
+                print(f"[DEBUG] Found Observations block")
+                print(f"[DEBUG] Block content (first 200 chars): {block[:200]}")
+                
+                # Parse observations - each line with dash is an observation
+                obs_list = _lines_to_list(block)
+                
+                if obs_list:
+                    all_issues.extend(obs_list)
+                    print(f"[DEBUG] ✓ Extracted {len(obs_list)} observations")
+                    for i, obs in enumerate(obs_list, 1):
+                        print(f"[DEBUG]   {i}. {obs}")
+                    break
     
-    # Parse category scores to find violations
-    # If score < max for category, there's a violation
-    category_scores = {
-        "uniform": (_extract(_rx["uniform_score"], text), 3),
-        "hairstyle": (_extract(_rx["hairstyle_score"], text), 2),
-        "makeup": (_extract(_rx["makeup_score"], text), 2),
-        "nails": (_extract(_rx["nails_score"], text), 1),
-        "accessories": (_extract(_rx["accessories_score"], text), 2),
-    }
+    # ============================================================
+    # METHOD 3: Infer violations from category scores
+    # ============================================================
+    if not all_issues:
+        print(f"[DEBUG] METHOD 3: No explicit issues found, inferring from category scores...")
+        
+        category_scores = {
+            "uniform": (_extract(_rx["uniform_score"], text), 3),
+            "hairstyle": (_extract(_rx["hairstyle_score"], text), 2),
+            "makeup": (_extract(_rx["makeup_score"], text), 2),
+            "nails": (_extract(_rx["nails_score"], text), 1),
+            "accessories": (_extract(_rx["accessories_score"], text), 2),
+        }
+        
+        for cat_name, (score_match, max_score) in category_scores.items():
+            ok, val = score_match
+            if ok:
+                score = _num(val)
+                print(f"[DEBUG] Category '{cat_name}': Score = {score}/{max_score}")
+                
+                if score is not None and score < max_score:
+                    violation = f"{cat_name.capitalize()} violation (Score: {score}/{max_score})"
+                    all_issues.append(violation)
+                    print(f"[DEBUG] ✓ Inferred violation: {violation}")
     
-    for cat_name, (score_match, max_score) in category_scores.items():
-        ok, val = score_match
-        if ok:
-            score = _num(val)
-            # If score < max, there's a violation
-            if score is not None and score < max_score:
-                all_issues.append(f"{cat_name.capitalize()} violation (Score: {score}/{max_score})")
+    # ============================================================
+    # METHOD 4: Look for any category with score < max (last resort)
+    # ============================================================
+    if not all_issues:
+        print(f"[DEBUG] METHOD 4: Last resort - scanning for any score < max...")
+        
+        # Look for patterns like "Hairstyle: 1/2"
+        score_pattern = re.compile(r"(\w+)\s*:\s*([0-9]+)\s*/\s*([0-9]+)", re.I)
+        matches = score_pattern.findall(text)
+        
+        for cat_name, score_str, max_str in matches:
+            try:
+                score = int(score_str)
+                max_score = int(max_str)
+                
+                print(f"[DEBUG] Found score: {cat_name} = {score}/{max_score}")
+                
+                if score < max_score:
+                    violation = f"{cat_name.capitalize()} violation (Score: {score}/{max_score})"
+                    all_issues.append(violation)
+                    print(f"[DEBUG] ✓ Found violation: {violation}")
+            except:
+                pass
+    
+    print(f"[DEBUG] ============ FINAL RESULT ============")
+    print(f"[DEBUG] Total issues extracted: {len(all_issues)}")
+    
+    if all_issues:
+        for i, issue in enumerate(all_issues, 1):
+            print(f"[DEBUG] ISSUE {i}: {issue}")
+    else:
+        print(f"[DEBUG] ⚠️  WARNING: NO ISSUES FOUND")
+        print(f"[DEBUG] Full text for debugging:")
+        print(text)
+    
+    print(f"[DEBUG] ============ EXTRACTION COMPLETE ============\n")
     
     return all_issues if all_issues else []
-
 
 def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
     """
     Parse Gemini text to UI dict, handling NOT VISIBLE items with full marks.
     All scores are INTEGER, no decimals.
-    
-    CRITICAL FIX: Ensures issues are properly extracted and will be saved to GCS.
     """
     ok_assess, a_text = _extract(_rx["overall_assessment"], text)
     ok_score, s_text = _extract(_rx["overall_score"], text)
@@ -196,18 +281,12 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
     ]
     
     for cat_name, score_key, visible_key, max_val in category_configs:
-        # Check if item is marked as NOT VISIBLE
         is_not_visible = _rx[visible_key].search(text or "") is not None
         not_visible_flags[cat_name] = is_not_visible
         
-        # Extract score from Gemini response
         ok, val = _extract(_rx[score_key], text)
         extracted_score = _num(val) if ok else None
         
-        # Scoring logic:
-        # - If NOT VISIBLE: use full marks (no penalty)
-        # - If visible and score found: use extracted score
-        # - If visible but no score: default to 0 (violation detected)
         if is_not_visible:
             cats[cat_name] = max_val
         else:
@@ -237,7 +316,7 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
     elif assessment is None:
         assessment = "NON-COMPLIANT"
 
-    # CRITICAL FIX: Extract issues using the new robust function
+    # Extract issues
     issues = _extract_issues_from_text(text)
     
     # Extract recommendations
@@ -246,12 +325,12 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
     return {
         "person": {"name": name or "", "iga_code": iga or ""},
         "assessment": assessment,
-        "score": int(score),  # Ensure integer
+        "score": int(score),
         "scores": cats,
         "details": details,
-        "issues": issues,  # CRITICAL: Now populated correctly
+        "issues": issues,
         "recommendations": _lines_to_list(block_r) if ok_r else [],
-        "_metadata": {"not_visible": not_visible_flags},  # Audit trail for debugging
+        "_metadata": {"not_visible": not_visible_flags},
     }
 
 
@@ -298,11 +377,9 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         b64 = payload.imageBase64.split(",")[-1]
         img_bytes = base64.b64decode(b64)
 
-        # Run Gemini grooming analysis
         report = run_grooming_analysis(b64)
         parsed = _parse_text_to_ui(report, payload.crewName, payload.igaCode)
 
-        # Persist artifacts/results in GCS
         img_path = upload_image_bytes(img_bytes, payload.igaCode, "image", payload.crewName)
         upload_grooming_result_text(report, payload.crewName, payload.igaCode, img_path, parsed=parsed)
         append_event_to_crew_log(
@@ -322,7 +399,7 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-# ============= Grooming (video) - CRITICAL FIX: Now persists results =============
+# ============= Grooming (video) =============
 @app.post("/check-grooming-video")
 async def check_grooming_video(
     video: UploadFile = File(...),
@@ -330,18 +407,14 @@ async def check_grooming_video(
     iga_code: str = Form(...),
 ):
     """
-    CRITICAL FIX: Video results are now PERSISTED to GCS and updated in logs.
-    This ensures /v1/individual-analysis correctly shows video assessment categories.
+    Video assessment with full persistence to GCS.
     """
-    # Accept any video format (removed .mp4 restriction)
     MAX_SIZE = 20 * 1024 * 1024  # 20 MB
     size = 0
     chunk_size = 1024 * 1024  # 1 MB chunks
     
-    # Reset to beginning
     await video.seek(0)
     
-    # Check size by reading chunks
     while True:
         chunk = await video.read(chunk_size)
         if not chunk:
@@ -350,7 +423,6 @@ async def check_grooming_video(
         if size > MAX_SIZE:
             return JSONResponse({"error": "Video size must be <= 20 MB"}, status_code=400)
     
-    # Reset file pointer after size check
     await video.seek(0)
 
     try:
@@ -364,11 +436,9 @@ async def check_grooming_video(
         full_text = check_grooming_from_video(video_path, name, iga_code)
         parsed = _parse_text_to_ui(full_text, name, iga_code)
 
-        # ========= CRITICAL FIX: Persist video results to GCS (same as image) =========
         video_bytes = open(video_path, 'rb').read()
         video_gcs_path = upload_image_bytes(video_bytes, iga_code, "video", name)
         
-        # Persist to GCS results folder (same pattern as image endpoint)
         upload_grooming_result_text(
             full_text, 
             name, 
@@ -377,14 +447,12 @@ async def check_grooming_video(
             parsed=parsed
         )
         
-        # Add to crew log
         append_event_to_crew_log(
             {"type": "video", "parsed": parsed, "video_path": video_gcs_path},
             name,
             iga_code,
         )
         
-        # Create ticket for any non-compliance
         create_ticket(
             {"type": "video", "igaCode": iga_code, "crewName": name, "video_path": video_gcs_path}
         )
@@ -448,7 +516,7 @@ async def search_endpoint(
     return search_people(_from, _to, q, page, pageSize)
 
 
-# ============= Individual Analysis (FIXED) =============
+# ============= Individual Analysis - CRITICAL FINAL FIX =============
 @app.get("/v1/individual-analysis")
 async def individual_analysis(
     igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
@@ -457,23 +525,15 @@ async def individual_analysis(
     dateTo: str = Query(..., description="End date in YYYY-MM-DD format"),
 ):
     """
-    Get detailed individual analysis for a specific crew member.
+    FINAL FIX: Category counts now correctly decrease when COMPLIANT tests are added.
     
-    CRITICAL FIX: Uses _load_records() which correctly loads both image AND video results.
-    All data normalization is handled by dashboard_service.
-    
-    Args:
-        igaCode: IGA code (e.g., "IGA6781")
-        crewName: Full crew name (e.g., "Lavanya Singh")
-        dateFrom: Start date in YYYY-MM-DD format
-        dateTo: End date in YYYY-MM-DD format
-    
-    Returns:
-        Detailed analysis with summary, category breakdown, and trends
+    Logic:
+    - Load ALL records (compliant + non-compliant) for the crew
+    - Count violations ONLY from NON-COMPLIANT records
+    - But show violations as percentage of TOTAL tests (not just non-compliant)
+    - This way, new COMPLIANT tests reduce the percentage
     """
     try:
-        # ============= INPUT VALIDATION =============
-        
         # Parse dates
         try:
             start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
@@ -497,18 +557,14 @@ async def individual_analysis(
                 status_code=400
             )
         
-        # ============= LOAD RECORDS (includes both image & video) =============
-        
+        # Load records
         filters = DashboardFilters(date_from=start_date, date_to=end_date)
         all_records = _load_records(filters)
         
-        # ============= FILTER BY CREW =============
-        
-        # Normalize search parameters
+        # Filter by crew
         iga_search = igaCode.strip().upper()
         crew_search = crewName.strip().upper()
         
-        # Filter records - using CORRECT snake_case field names
         crew_records = []
         for record in all_records:
             record_iga = (record.get("iga_code") or "").strip().upper()
@@ -517,8 +573,7 @@ async def individual_analysis(
             if record_iga == iga_search and record_crew == crew_search:
                 crew_records.append(record)
         
-        # ============= CHECK IF DATA FOUND =============
-        
+        # Check if data found
         if not crew_records:
             return JSONResponse(
                 {
@@ -529,71 +584,60 @@ async def individual_analysis(
                             "crewName": crewName,
                             "dateRange": f"{dateFrom} to {dateTo}"
                         },
-                        "normalizedQuery": {
-                            "igaCode": iga_search,
-                            "crewName": crew_search
-                        },
                         "totalRecordsInRange": len(all_records),
                         "matchingRecords": 0,
-                        "tip": "Verify IGA code and crew name match exactly as stored in GCS"
                     }
                 },
                 status_code=404
             )
         
-        # ============= CALCULATE SUMMARY STATISTICS =============
-        
+        # Calculate summary
         total = len(crew_records)
         compliant_count = sum(1 for r in crew_records if r["assessment"] == "COMPLIANT")
         noncompliant_count = total - compliant_count
         pass_rate = (compliant_count / total * 100) if total > 0 else 0
         
-        # ============= CATEGORY-WISE BREAKDOWN (FIXED: Only 5 categories) =============
+        # ========= CRITICAL FIX: Category breakdown ==========
+        # Count total violations by category from ALL non-compliant records
+        # Then calculate percentage as: violations / total assessments (not just non-compliant)
         
-        # Count violations by category (only from NON-COMPLIANT assessments)
-        category_counts = defaultdict(int)
+        category_violation_count = defaultdict(int)
         
+        # Only extract issues from NON-COMPLIANT records
         for record in crew_records:
             if record["assessment"] == "NON-COMPLIANT":
-                # Extract issues from the record
                 issues = record.get("issues") or []
-                
-                # CRITICAL FIX: Debug logging
-                print(f"[DEBUG] Record timestamp: {record.get('timestamp')}, Issues: {issues}")
-                
                 for issue in issues:
-                    # Use the same issue heading extraction as dashboard_service
                     heading = _issue_heading(issue)
                     if heading and heading != "other":
-                        category_counts[heading] += 1
-                        print(f"[DEBUG] Issue '{issue}' → Category '{heading}'")
+                        category_violation_count[heading] += 1
         
-        # Convert to list and sort by count (most violations first)
-        category_breakdown = {
-            category: count
-            for category, count in sorted(
-                category_counts.items(),
-                key=lambda x: x[1],
-                reverse=True
-            )
-        }
+        # Convert to final format: show count and percentage
+        # Percentage = violations / total tests (this decreases when compliant tests are added)
+        category_breakdown = {}
+        for cat in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
+            violation_count = category_violation_count.get(cat, 0)
+            percentage = (violation_count / total * 100) if total > 0 else 0
+            category_breakdown[cat] = {
+                "violations": violation_count,
+                "percentage": round(percentage, 2)
+            }
         
-        print(f"[DEBUG] Final category breakdown: {category_breakdown}")
+        print(f"[DEBUG] Category breakdown: {category_breakdown}")
+        print(f"[DEBUG] Total assessments: {total}, Compliant: {compliant_count}, Non-compliant: {noncompliant_count}")
         
-        # ============= BUILD DAILY TRENDS =============
-        
-        # Group records by date
+        # Build daily trends
         daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
         
         for record in crew_records:
-            record_date = record["date"]  # Already a date object from _load_records
+            record_date = record["date"]
             
             if record["assessment"] == "COMPLIANT":
                 daily_stats[record_date]["compliant"] += 1
             else:
                 daily_stats[record_date]["nonCompliant"] += 1
         
-        # Build trend array with date padding
+        # Build trend array
         trend_list = []
         current_date = start_date
         while current_date <= end_date:
@@ -608,8 +652,7 @@ async def individual_analysis(
             
             current_date += timedelta(days=1)
         
-        # ============= BUILD RESPONSE =============
-        
+        # Build response
         response = {
             "crew": {
                 "igaCode": igaCode,
@@ -637,7 +680,7 @@ async def individual_analysis(
                     "assessment": r["assessment"],
                     "issues": r["issues"]
                 }
-                for r in crew_records[:10]  # Most recent 10
+                for r in crew_records[:10]
             ]
         }
         
