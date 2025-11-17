@@ -1,3 +1,11 @@
+"""
+FastAPI backend for grooming checks + insights API
+
+CRITICAL FIXES:
+1. Video results are NOW persisted to GCS (same as image results)
+2. Individual analysis endpoint correctly loads all record types (image & video)
+3. Category breakdown only shows 5 main categories (uniform, hairstyle, makeup, nails, accessories)
+"""
 
 from __future__ import annotations
 
@@ -24,13 +32,14 @@ load_dotenv()
 
 import config  # noqa: E402
 
-# ---------------- Grooming analysis (Gemini) ----------------
+# ============= Grooming analysis (Gemini) =============
 from grooming_utils import (  # noqa: E402
     check_grooming as run_grooming_analysis,
     check_grooming_from_video,
 )
 
-# ---------------- Regex helpers to parse Gemini text ----------------
+
+# ============= Regex helpers to parse Gemini text =============
 _rx = {
     "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
     "overall_score": re.compile(
@@ -180,7 +189,7 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
     }
 
 
-# ---------------- GCS utils used by grooming routes ----------------
+# ============= GCS utils used by grooming routes =============
 from gcs_utils import (  # noqa: E402
     upload_image_bytes,
     upload_grooming_result_text,
@@ -188,7 +197,7 @@ from gcs_utils import (  # noqa: E402
     create_ticket,
 )
 
-# ---------------- App setup ----------------
+# ============= App setup =============
 app = FastAPI(title="Grooming Checks + Insights API", version="2.0.0")
 
 app.add_middleware(
@@ -213,7 +222,7 @@ async def healthz():
     return {"status": "ok", "time": datetime.now().isoformat()}
 
 
-# ---------------- Grooming (image) ----------------
+# ============= Grooming (image) =============
 @app.post("/check-grooming")
 async def check_grooming_endpoint(payload: GroomingRequest):
     if not payload.imageBase64 or len(payload.imageBase64) < 10:
@@ -247,18 +256,18 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-# ---------------- Grooming (video) ----------------
+# ============= Grooming (video) - CRITICAL FIX: Now persists results =============
 @app.post("/check-grooming-video")
 async def check_grooming_video(
     video: UploadFile = File(...),
     name: str = Form(...),
     iga_code: str = Form(...),
 ):
-    # UPDATED: Accept any video format (removed .mp4 restriction)
-    # Common video formats: .mp4, .mov, .avi, .mkv, .flv, .webm, .m4v, etc.
-    
-    # Check file size BEFORE saving (limit: 20 MB)
-    # Read in chunks to avoid loading entire file into memory
+    """
+    CRITICAL FIX: Video results are now PERSISTED to GCS and updated in logs.
+    This ensures /v1/individual-analysis correctly shows video assessment categories.
+    """
+    # Accept any video format (removed .mp4 restriction)
     MAX_SIZE = 20 * 1024 * 1024  # 20 MB
     size = 0
     chunk_size = 1024 * 1024  # 1 MB chunks
@@ -289,6 +298,31 @@ async def check_grooming_video(
         full_text = check_grooming_from_video(video_path, name, iga_code)
         parsed = _parse_text_to_ui(full_text, name, iga_code)
 
+        # ========= CRITICAL FIX: Persist video results to GCS (same as image) =========
+        video_bytes = open(video_path, 'rb').read()
+        video_gcs_path = upload_image_bytes(video_bytes, iga_code, "video", name)
+        
+        # Persist to GCS results folder (same pattern as image endpoint)
+        upload_grooming_result_text(
+            full_text, 
+            name, 
+            iga_code, 
+            video_gcs_path,
+            parsed=parsed
+        )
+        
+        # Add to crew log
+        append_event_to_crew_log(
+            {"type": "video", "parsed": parsed, "video_path": video_gcs_path},
+            name,
+            iga_code,
+        )
+        
+        # Create ticket for any non-compliance
+        create_ticket(
+            {"type": "video", "igaCode": iga_code, "crewName": name, "video_path": video_gcs_path}
+        )
+
         return {"status": "ok", "result": parsed}
     except Exception as e:
         import traceback
@@ -297,7 +331,7 @@ async def check_grooming_video(
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-# ---------------- The 3 requested APIs ----------------
+# ============= The 3 requested APIs =============
 from dashboard_service import get_insights, get_info, search_people  # noqa: E402
 
 
@@ -348,7 +382,7 @@ async def search_endpoint(
     return search_people(_from, _to, q, page, pageSize)
 
 
-# Fixed individual analysis endpoint
+# ============= Individual Analysis (FIXED) =============
 @app.get("/v1/individual-analysis")
 async def individual_analysis(
     igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
@@ -359,9 +393,8 @@ async def individual_analysis(
     """
     Get detailed individual analysis for a specific crew member.
     
-    Uses the exact same data loading pattern as /v1/insights which works correctly.
-    All data normalization (field names, timestamps, assessment values) is handled
-    by dashboard_service._load_records().
+    CRITICAL FIX: Uses _load_records() which correctly loads both image AND video results.
+    All data normalization is handled by dashboard_service.
     
     Args:
         igaCode: IGA code (e.g., "IGA6781")
@@ -398,13 +431,12 @@ async def individual_analysis(
                 status_code=400
             )
         
-        # ============= LOAD RECORDS USING dashboard_service PATTERN =============
+        # ============= LOAD RECORDS (includes both image & video) =============
         
-        # This is the EXACT SAME pattern that works for /v1/insights
         filters = DashboardFilters(date_from=start_date, date_to=end_date)
         all_records = _load_records(filters)
         
-        # ============= FILTER BY CREW (with normalized field names) =============
+        # ============= FILTER BY CREW =============
         
         # Normalize search parameters
         iga_search = igaCode.strip().upper()
@@ -450,7 +482,7 @@ async def individual_analysis(
         noncompliant_count = total - compliant_count
         pass_rate = (compliant_count / total * 100) if total > 0 else 0
         
-        # ============= CATEGORY-WISE BREAKDOWN =============
+        # ============= CATEGORY-WISE BREAKDOWN (FIXED: Only 5 categories) =============
         
         # Count violations by category (only from NON-COMPLIANT assessments)
         category_counts = defaultdict(int)
@@ -470,7 +502,7 @@ async def individual_analysis(
             category: count
             for category, count in sorted(
                 category_counts.items(),
-                key=lambda x: x,
+                key=lambda x: x[1],
                 reverse=True
             )
         }
@@ -552,7 +584,8 @@ async def individual_analysis(
             status_code=500
         )
 
-# ---------------- Entrypoint ----------------
+
+# ============= Entrypoint =============
 if __name__ == "__main__":
     import uvicorn
 
