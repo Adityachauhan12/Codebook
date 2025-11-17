@@ -5,6 +5,7 @@ CRITICAL FIXES:
 1. Video results are NOW persisted to GCS (same as image results)
 2. Individual analysis endpoint correctly loads all record types (image & video)
 3. Category breakdown only shows 5 main categories (uniform, hairstyle, makeup, nails, accessories)
+4. FIXED: Issues extraction now correctly parses Gemini output and updates categories
 """
 
 from __future__ import annotations
@@ -64,8 +65,11 @@ _rx = {
     "makeup_detail": re.compile(r"-\s*Makeup\s*:\s*(.+)$", re.I | re.M),
     "nails_detail": re.compile(r"-\s*Nails\s*:\s*(.+)$", re.I | re.M),
     "acc_detail": re.compile(r"-\s*Accessories\s*:\s*(.+)$", re.I | re.M),
-    "issues_block": re.compile(r"Issues\s*Found\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
+    # CRITICAL FIX: Issues block - more flexible regex
+    "issues_block": re.compile(r"Issues\s+Found\s*:\s*(.+?)(?:\n\s*(?:Recommendations|$))", re.I | re.S),
     "reco_block": re.compile(r"Recommendations\s*:\s*(.+?)(?:\n\n|$)", re.I | re.S),
+    # CRITICAL: Extract bullet points from observations section
+    "observations_block": re.compile(r"Observations\s*:\s*(.+?)(?:\n\s*(?:Issues|$))", re.I | re.S),
 }
 
 
@@ -83,15 +87,34 @@ def _num(s: str) -> Optional[int]:
 
 
 def _lines_to_list(block: str) -> List[str]:
+    """
+    CRITICAL FIX: Extract bullet points from text block.
+    Handles various formats: dash (-), asterisk (*), numbers (1., 2., etc.)
+    """
     out: List[str] = []
-    for ln in (block or "").splitlines():
+    if not block:
+        return out
+    
+    for ln in block.splitlines():
         t = ln.strip()
         if not t:
             continue
+        
+        # Remove leading bullets/numbers
         if t.startswith("-"):
-            out.append(t.lstrip("- ").strip())
-        elif t[0:2].isdigit() or t.startswith(("1.", "2.", "3.", "4.", "5.")):
-            out.append(t.split(".", 1)[-1].strip() if "." in t else t)
+            t = t.lstrip("- ").strip()
+        elif t.startswith("*"):
+            t = t.lstrip("* ").strip()
+        elif t.startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")):
+            parts = t.split(".", 1)
+            t = parts[-1].strip() if len(parts) > 1 else t
+        elif re.match(r"^\d+\)", t):  # Handle "1) format"
+            t = re.sub(r"^\d+\)\s*", "", t)
+        
+        # Skip empty lines
+        if t and len(t) > 2:
+            out.append(t)
+    
     return out
 
 
@@ -103,15 +126,56 @@ def _normalize_assessment(a: Optional[str]) -> Optional[str]:
     return a if a in ("COMPLIANT", "NON-COMPLIANT") else None
 
 
+def _extract_issues_from_text(text: str) -> List[str]:
+    """
+    CRITICAL FIX: Extract issues from multiple possible sections.
+    Looks in:
+    1. "Issues Found:" section (explicit issues)
+    2. "Observations:" section (detailed findings)
+    3. Any violations mentioned
+    """
+    all_issues = []
+    
+    # Try "Issues Found:" section first
+    ok_i, block_i = _extract(_rx["issues_block"], text)
+    if ok_i and block_i:
+        issues = _lines_to_list(block_i)
+        all_issues.extend(issues)
+    
+    # If no issues in Issues Found, try Observations section
+    if not all_issues:
+        ok_obs, block_obs = _extract(_rx["observations_block"], text)
+        if ok_obs and block_obs:
+            observations = _lines_to_list(block_obs)
+            all_issues.extend(observations)
+    
+    # Parse category scores to find violations
+    # If score < max for category, there's a violation
+    category_scores = {
+        "uniform": (_extract(_rx["uniform_score"], text), 3),
+        "hairstyle": (_extract(_rx["hairstyle_score"], text), 2),
+        "makeup": (_extract(_rx["makeup_score"], text), 2),
+        "nails": (_extract(_rx["nails_score"], text), 1),
+        "accessories": (_extract(_rx["accessories_score"], text), 2),
+    }
+    
+    for cat_name, (score_match, max_score) in category_scores.items():
+        ok, val = score_match
+        if ok:
+            score = _num(val)
+            # If score < max, there's a violation
+            if score is not None and score < max_score:
+                all_issues.append(f"{cat_name.capitalize()} violation (Score: {score}/{max_score})")
+    
+    return all_issues if all_issues else []
+
+
 def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
     """
     Parse Gemini text to UI dict, handling NOT VISIBLE items with full marks.
     All scores are INTEGER, no decimals.
     
-    Logic:
-    - If item is marked (NOT VISIBLE): award full marks, list in issues
-    - If item is visible but violates: deduct marks per Gemini
-    - If item is visible and compliant: award full marks
+    CRITICAL FIX: Ensures issues are properly extracted and will be saved to GCS.
     """
     ok_assess, a_text = _extract(_rx["overall_assessment"], text)
     ok_score, s_text = _extract(_rx["overall_score"], text)
@@ -173,8 +237,10 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
     elif assessment is None:
         assessment = "NON-COMPLIANT"
 
-    # Extract issues and recommendations
-    ok_i, block_i = _extract(_rx["issues_block"], text)
+    # CRITICAL FIX: Extract issues using the new robust function
+    issues = _extract_issues_from_text(text)
+    
+    # Extract recommendations
     ok_r, block_r = _extract(_rx["reco_block"], text)
 
     return {
@@ -183,7 +249,7 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
         "score": int(score),  # Ensure integer
         "scores": cats,
         "details": details,
-        "issues": _lines_to_list(block_i) if ok_i else [],
+        "issues": issues,  # CRITICAL: Now populated correctly
         "recommendations": _lines_to_list(block_r) if ok_r else [],
         "_metadata": {"not_visible": not_visible_flags},  # Audit trail for debugging
     }
@@ -491,11 +557,16 @@ async def individual_analysis(
             if record["assessment"] == "NON-COMPLIANT":
                 # Extract issues from the record
                 issues = record.get("issues") or []
+                
+                # CRITICAL FIX: Debug logging
+                print(f"[DEBUG] Record timestamp: {record.get('timestamp')}, Issues: {issues}")
+                
                 for issue in issues:
                     # Use the same issue heading extraction as dashboard_service
                     heading = _issue_heading(issue)
                     if heading and heading != "other":
                         category_counts[heading] += 1
+                        print(f"[DEBUG] Issue '{issue}' → Category '{heading}'")
         
         # Convert to list and sort by count (most violations first)
         category_breakdown = {
@@ -506,6 +577,8 @@ async def individual_analysis(
                 reverse=True
             )
         }
+        
+        print(f"[DEBUG] Final category breakdown: {category_breakdown}")
         
         # ============= BUILD DAILY TRENDS =============
         
