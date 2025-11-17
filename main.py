@@ -678,7 +678,7 @@ async def individual_analysis(
                 "totalAssessments": total,
                 "compliant": compliant_count,
                 "nonCompliant": noncompliant_count,
-                "passRate": round(pass_rate, 2),
+                "passRate": f"{pass_rate:.2f}",
                 "passRatePercentage": f"{pass_rate:.2f}%"
             },
             "nonComplianceByCategory": category_breakdown,
