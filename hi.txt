@@ -4,251 +4,25 @@
     "name": "Lavanya Singh"
   },
   "dateRange": {
-    "from": "2025-10-01",
-    "to": "2025-11-14",
-    "daysAnalyzed": 45
+    "from": "2025-11-13",
+    "to": "2025-11-17",
+    "daysAnalyzed": 5
   },
   "summary": {
-    "totalAssessments": 132,
-    "compliant": 54,
-    "nonCompliant": 78,
-    "passRate": 40.91,
-    "passRatePercentage": "40.91%"
+    "totalAssessments": 44,
+    "compliant": 9,
+    "nonCompliant": 35,
+    "passRate": 20.45,
+    "passRatePercentage": "20.45%"
   },
   "nonComplianceByCategory": {
-    "uniform violation": 1,
-    "uniform": 53,
-    "total non-compliance": 1,
-    "subject-standard mismatch": 1,
-    "scarf": 1,
-    "prohibited accessories are worn": 2,
-    "name badge": 1,
-    "nails": 20,
-    "makeup": 22,
-    "items not visible": 1,
-    "incomplete view": 1,
-    "image quality": 1,
-    "hairstyle": 51,
-    "grooming non-compliance": 1,
-    "facial hair": 4,
-    "accessories": 17
+    "uniform": 17,
+    "hairstyle": 15,
+    "accessories": 15,
+    "makeup": 12,
+    "nails": 8
   },
   "trend": [
-    {
-      "date": "2025-10-01",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-02",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-03",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-04",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-05",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-06",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-07",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-08",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-09",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-10",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-11",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-12",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-13",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-14",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-15",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-16",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-17",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-18",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-19",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-20",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-21",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-22",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-23",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-24",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-25",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-26",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-27",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-28",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-29",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-30",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-10-31",
-      "compliant": 1,
-      "nonCompliant": 2
-    },
-    {
-      "date": "2025-11-01",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-11-02",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-11-03",
-      "compliant": 3,
-      "nonCompliant": 3
-    },
-    {
-      "date": "2025-11-04",
-      "compliant": 0,
-      "nonCompliant": 1
-    },
-    {
-      "date": "2025-11-05",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-11-06",
-      "compliant": 0,
-      "nonCompliant": 1
-    },
-    {
-      "date": "2025-11-07",
-      "compliant": 1,
-      "nonCompliant": 4
-    },
-    {
-      "date": "2025-11-08",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-11-09",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-11-10",
-      "compliant": 2,
-      "nonCompliant": 5
-    },
-    {
-      "date": "2025-11-11",
-      "compliant": 30,
-      "nonCompliant": 31
-    },
-    {
-      "date": "2025-11-12",
-      "compliant": 14,
-      "nonCompliant": 15
-    },
     {
       "date": "2025-11-13",
       "compliant": 0,
@@ -257,13 +31,40 @@
     {
       "date": "2025-11-14",
       "compliant": 3,
-      "nonCompliant": 12
+      "nonCompliant": 14
+    },
+    {
+      "date": "2025-11-15",
+      "compliant": 0,
+      "nonCompliant": 1
+    },
+    {
+      "date": "2025-11-16",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-11-17",
+      "compliant": 6,
+      "nonCompliant": 16
     }
   ],
   "recentAssessments": [
     {
-      "timestamp": "2025-11-14T09:57:18.082055",
-      "date": "2025-11-14",
+      "timestamp": "2025-11-17T07:27:07.579450",
+      "date": "2025-11-17",
+      "score": 8,
+      "assessment": "COMPLIANT",
+      "issues": [
+        "Hairstyle is non-compliant; the short bob style is not listed as an approved option.",
+        "Nails were not visible for assessment.",
+        "Watch, rings, and bangles were not visible for assessment.",
+        "Hairstyle violation (Score: 0/2)"
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:26:09.756384",
+      "date": "2025-11-17",
       "score": 0,
       "assessment": "NON-COMPLIANT",
       "issues": [
@@ -272,8 +73,8 @@
       ]
     },
     {
-      "timestamp": "2025-11-14T09:56:53.050487",
-      "date": "2025-11-14",
+      "timestamp": "2025-11-17T07:07:27.143064",
+      "date": "2025-11-17",
       "score": 0,
       "assessment": "NON-COMPLIANT",
       "issues": [
@@ -282,8 +83,31 @@
       ]
     },
     {
-      "timestamp": "2025-11-14T09:54:08.297126",
-      "date": "2025-11-14",
+      "timestamp": "2025-11-17T07:04:21.044060",
+      "date": "2025-11-17",
+      "score": 8,
+      "assessment": "COMPLIANT",
+      "issues": [
+        "Hairstyle is non-compliant; the short bob is not an approved style.",
+        "Nails were not visible for assessment.",
+        "Watch, rings, and bangles were not visible for assessment."
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:03:02.472743",
+      "date": "2025-11-17",
+      "score": 9,
+      "assessment": "COMPLIANT",
+      "issues": [
+        "Uniform: Scarf knot is loose and improperly positioned.",
+        "Nails: Not visible for assessment.",
+        "Accessories: Watch, rings, and bangles were not visible for assessment.",
+        "Uniform: Stockings were not visible for assessment."
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:01:49.502603",
+      "date": "2025-11-17",
       "score": 0,
       "assessment": "NON-COMPLIANT",
       "issues": [
@@ -292,8 +116,8 @@
       ]
     },
     {
-      "timestamp": "2025-11-14T09:25:49.356005",
-      "date": "2025-11-14",
+      "timestamp": "2025-11-17T07:00:26.638546",
+      "date": "2025-11-17",
       "score": 0,
       "assessment": "NON-COMPLIANT",
       "issues": [
@@ -302,33 +126,368 @@
       ]
     },
     {
-      "timestamp": "2025-11-14T09:23:56.618990",
-      "date": "2025-11-14",
-      "score": 5,
-      "assessment": "NON-COMPLIANT",
+      "timestamp": "2025-11-17T06:59:20.620483",
+      "date": "2025-11-17",
+      "score": 8,
+      "assessment": "COMPLIANT",
       "issues": [
-        "Not in uniform; wearing casual attire.",
-        "Lip color does not comply with approved shades.",
-        "Wearing an unapproved necklace.",
-        "Nails, watch, rings, and bangles were not visible for assessment."
+        "Hairstyle is a non-compliant bob cut, which is not an approved style for female cabin crew.",
+        "Nails were not visible for assessment.",
+        "Watch, rings, and bangles were not visible for assessment."
       ]
     },
     {
-      "timestamp": "2025-11-14T09:22:35.499435",
-      "date": "2025-11-14",
-      "score": 3,
-      "assessment": "NON-COMPLIANT",
+      "timestamp": "2025-11-17T06:58:44.196564",
+      "date": "2025-11-17",
+      "score": 10,
+      "assessment": "COMPLIANT",
       "issues": [
-        "Uniform: Not worn. Casual attire is a violation.",
-        "Hairstyle: Hair worn down is a non-compliant style.",
-        "Makeup: Non-compliant lip color.",
-        "Accessories: A non-standard necklace is worn.",
-        "Nails: Not visible for assessment."
+        "Nails were not visible for assessment.",
+        "Watch, rings, and bangles were not visible for assessment."
       ]
     },
     {
-      "timestamp": "2025-11-14T09:2t visible for assessment."
+      "timestamp": "2025-11-17T06:31:33.481016",
+      "date": "2025-11-17",
+      "score": 10,
+      "assessment": "COMPLIANT",
+      "issues": [
+        "Nails were not visible for assessment.",
+        "Watch, rings, and bangles were not visible for assessment."
       ]
     }
   ]
-} now te problem in this is that many categoris are coming on screen many o them are almos same see we have to keep the categories only in 5 categories uniform makeup accessories hairstlye and nails also dont want percentage written like in this screen 
+}             {
+  "meta": {
+    "generatedAt": "2025-11-17T07:29:40.197614Z",
+    "filters": {
+      "dateFrom": "2025-11-17",
+      "dateTo": "2025-11-17"
+    }
+  },
+  "overview": {
+    "total": 22,
+    "compliant": 6,
+    "nonCompliant": 16,
+    "passRate": 0.2727272727272727,
+    "failRate": 0.7272727272727273,
+    "base": null
+  },
+  "trends": {
+    "daily": [
+      {
+        "date": "2025-11-17",
+        "compliant": 6,
+        "nonCompliant": 16,
+        "base": null
+      }
+    ]
+  },
+  "categories": [
+    {
+      "category": "accessories",
+      "nonCompliantCount": 9,
+      "share": 0.562,
+      "base": null
+    },
+    {
+      "category": "uniform",
+      "nonCompliantCount": 6,
+      "share": 0.375,
+      "base": null
+    },
+    {
+      "category": "hairstyle",
+      "nonCompliantCount": 6,
+      "share": 0.375,
+      "base": null
+    },
+    {
+      "category": "makeup",
+      "nonCompliantCount": 6,
+      "share": 0.375,
+      "base": null
+    },
+    {
+      "category": "nails",
+      "nonCompliantCount": 6,
+      "share": 0.375,
+      "base": null
+    }
+  ],
+  "top": {
+    "groomed": [
+      {
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "compliant": 6,
+        "totalTests": 22,
+        "compliantRate": 0.273,
+        "avgScore": 3.18,
+        "lastSeen": "2025-11-17T07:27:07.579450",
+        "base": null
+      }
+    ],
+    "nonGroomed": [
+      {
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "nonCompliant": 16,
+        "totalTests": 22,
+        "nonCompliantRate": 0.727,
+        "avgScore": 3.18,
+        "lastSeen": "2025-11-17T07:27:07.579450",
+        "base": null
+      }
+    ]
+  },
+  "recentTests": {
+    "items": [
+      {
+        "testId": "T-1763364427",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 8,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-17T07:27:07.579450"
+      },
+      {
+        "testId": "T-1763364369",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T07:26:09.756384"
+      },
+      {
+        "testId": "T-1763363247",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T07:07:27.143064"
+      },
+      {
+        "testId": "T-1763363061",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 8,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-17T07:04:21.044060"
+      },
+      {
+        "testId": "T-1763362982",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 9,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-17T07:03:02.472743"
+      },
+      {
+        "testId": "T-1763362909",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T07:01:49.502603"
+      },
+      {
+        "testId": "T-1763362826",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T07:00:26.638546"
+      },
+      {
+        "testId": "T-1763362760",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 8,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-17T06:59:20.620483"
+      },
+      {
+        "testId": "T-1763362724",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 10,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-17T06:58:44.196564"
+      },
+      {
+        "testId": "T-1763361093",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 10,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-17T06:31:33.481016"
+      },
+      {
+        "testId": "T-1763358498",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 2,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:48:18.049265"
+      },
+      {
+        "testId": "T-1763358171",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 3,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:42:51.072231"
+      },
+      {
+        "testId": "T-1763357480",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:31:20.142954"
+      },
+      {
+        "testId": "T-1763357439",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:30:39.831775"
+      },
+      {
+        "testId": "T-1763357410",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:30:10.015262"
+      },
+      {
+        "testId": "T-1763356480",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:14:40.615158"
+      },
+      {
+        "testId": "T-1763356327",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 3,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:12:07.065155"
+      },
+      {
+        "testId": "T-1763356218",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:10:18.540258"
+      },
+      {
+        "testId": "T-1763355699",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 3,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:01:39.244767"
+      },
+      {
+        "testId": "T-1763355648",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 3,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T05:00:48.218061"
+      },
+      {
+        "testId": "T-1763355595",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 3,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T04:59:55.022286"
+      },
+      {
+        "testId": "T-1763352742",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T04:12:22.167032"
+      }
+    ],
+    "page": 1,
+    "pageSize": 25,
+    "total": 22
+  }
+}   the data is still not getting updated in the individual analysis it just shows the earlier results when we clubbed the various categories under 5 categories 
