@@ -1,184 +1,25 @@
 {
-  "crew": {
-    "igaCode": "IGA6781",
-    "name": "Lavanya Singh"
-  },
-  "dateRange": {
-    "from": "2025-11-13",
-    "to": "2025-11-17",
-    "daysAnalyzed": 5
-  },
-  "summary": {
-    "totalAssessments": 44,
-    "compliant": 9,
-    "nonCompliant": 35,
-    "passRate": 20.45,
-    "passRatePercentage": "20.45%"
-  },
-  "nonComplianceByCategory": {
-    "uniform": 17,
-    "hairstyle": 15,
-    "accessories": 15,
-    "makeup": 12,
-    "nails": 8
-  },
-  "trend": [
-    {
-      "date": "2025-11-13",
-      "compliant": 0,
-      "nonCompliant": 4
-    },
-    {
-      "date": "2025-11-14",
-      "compliant": 3,
-      "nonCompliant": 14
-    },
-    {
-      "date": "2025-11-15",
-      "compliant": 0,
-      "nonCompliant": 1
-    },
-    {
-      "date": "2025-11-16",
-      "compliant": 0,
-      "nonCompliant": 0
-    },
-    {
-      "date": "2025-11-17",
-      "compliant": 6,
-      "nonCompliant": 16
-    }
-  ],
-  "recentAssessments": [
-    {
-      "timestamp": "2025-11-17T07:27:07.579450",
-      "date": "2025-11-17",
-      "score": 8,
-      "assessment": "COMPLIANT",
-      "issues": [
-        "Hairstyle is non-compliant; the short bob style is not listed as an approved option.",
-        "Nails were not visible for assessment.",
-        "Watch, rings, and bangles were not visible for assessment.",
-        "Hairstyle violation (Score: 0/2)"
-      ]
-    },
-    {
-      "timestamp": "2025-11-17T07:26:09.756384",
-      "date": "2025-11-17",
-      "score": 0,
-      "assessment": "NON-COMPLIANT",
-      "issues": [
-        "Assessment criteria are gender-specific (female only)",
-        "Male crew member does not comply with female standards"
-      ]
-    },
-    {
-      "timestamp": "2025-11-17T07:07:27.143064",
-      "date": "2025-11-17",
-      "score": 0,
-      "assessment": "NON-COMPLIANT",
-      "issues": [
-        "Assessment criteria are gender-specific (female only)",
-        "Male crew member does not comply with female standards"
-      ]
-    },
-    {
-      "timestamp": "2025-11-17T07:04:21.044060",
-      "date": "2025-11-17",
-      "score": 8,
-      "assessment": "COMPLIANT",
-      "issues": [
-        "Hairstyle is non-compliant; the short bob is not an approved style.",
-        "Nails were not visible for assessment.",
-        "Watch, rings, and bangles were not visible for assessment."
-      ]
-    },
-    {
-      "timestamp": "2025-11-17T07:03:02.472743",
-      "date": "2025-11-17",
-      "score": 9,
-      "assessment": "COMPLIANT",
-      "issues": [
-        "Uniform: Scarf knot is loose and improperly positioned.",
-        "Nails: Not visible for assessment.",
-        "Accessories: Watch, rings, and bangles were not visible for assessment.",
-        "Uniform: Stockings were not visible for assessment."
-      ]
-    },
-    {
-      "timestamp": "2025-11-17T07:01:49.502603",
-      "date": "2025-11-17",
-      "score": 0,
-      "assessment": "NON-COMPLIANT",
-      "issues": [
-        "Assessment criteria are gender-specific (female only)",
-        "Male crew member does not comply with female standards"
-      ]
-    },
-    {
-      "timestamp": "2025-11-17T07:00:26.638546",
-      "date": "2025-11-17",
-      "score": 0,
-      "assessment": "NON-COMPLIANT",
-      "issues": [
-        "Assessment criteria are gender-specific (female only)",
-        "Male crew member does not comply with female standards"
-      ]
-    },
-    {
-      "timestamp": "2025-11-17T06:59:20.620483",
-      "date": "2025-11-17",
-      "score": 8,
-      "assessment": "COMPLIANT",
-      "issues": [
-        "Hairstyle is a non-compliant bob cut, which is not an approved style for female cabin crew.",
-        "Nails were not visible for assessment.",
-        "Watch, rings, and bangles were not visible for assessment."
-      ]
-    },
-    {
-      "timestamp": "2025-11-17T06:58:44.196564",
-      "date": "2025-11-17",
-      "score": 10,
-      "assessment": "COMPLIANT",
-      "issues": [
-        "Nails were not visible for assessment.",
-        "Watch, rings, and bangles were not visible for assessment."
-      ]
-    },
-    {
-      "timestamp": "2025-11-17T06:31:33.481016",
-      "date": "2025-11-17",
-      "score": 10,
-      "assessment": "COMPLIANT",
-      "issues": [
-        "Nails were not visible for assessment.",
-        "Watch, rings, and bangles were not visible for assessment."
-      ]
-    }
-  ]
-}             {
   "meta": {
-    "generatedAt": "2025-11-17T07:29:40.197614Z",
+    "generatedAt": "2025-11-17T08:10:37.031437Z",
     "filters": {
       "dateFrom": "2025-11-17",
       "dateTo": "2025-11-17"
     }
   },
   "overview": {
-    "total": 22,
-    "compliant": 6,
-    "nonCompliant": 16,
-    "passRate": 0.2727272727272727,
-    "failRate": 0.7272727272727273,
+    "total": 24,
+    "compliant": 7,
+    "nonCompliant": 17,
+    "passRate": 0.2916666666666667,
+    "failRate": 0.7083333333333334,
     "base": null
   },
   "trends": {
     "daily": [
       {
         "date": "2025-11-17",
-        "compliant": 6,
-        "nonCompliant": 16,
+        "compliant": 7,
+        "nonCompliant": 17,
         "base": null
       }
     ]
@@ -187,31 +28,31 @@
     {
       "category": "accessories",
       "nonCompliantCount": 9,
-      "share": 0.562,
+      "share": 0.529,
       "base": null
     },
     {
       "category": "uniform",
       "nonCompliantCount": 6,
-      "share": 0.375,
+      "share": 0.353,
       "base": null
     },
     {
       "category": "hairstyle",
       "nonCompliantCount": 6,
-      "share": 0.375,
+      "share": 0.353,
       "base": null
     },
     {
       "category": "makeup",
       "nonCompliantCount": 6,
-      "share": 0.375,
+      "share": 0.353,
       "base": null
     },
     {
       "category": "nails",
       "nonCompliantCount": 6,
-      "share": 0.375,
+      "share": 0.353,
       "base": null
     }
   ],
@@ -220,11 +61,11 @@
       {
         "crewId": "IGA6781",
         "crewName": "Lavanya Singh",
-        "compliant": 6,
-        "totalTests": 22,
-        "compliantRate": 0.273,
-        "avgScore": 3.18,
-        "lastSeen": "2025-11-17T07:27:07.579450",
+        "compliant": 7,
+        "totalTests": 24,
+        "compliantRate": 0.292,
+        "avgScore": 3.25,
+        "lastSeen": "2025-11-17T08:08:31.775253",
         "base": null
       }
     ],
@@ -232,17 +73,39 @@
       {
         "crewId": "IGA6781",
         "crewName": "Lavanya Singh",
-        "nonCompliant": 16,
-        "totalTests": 22,
-        "nonCompliantRate": 0.727,
-        "avgScore": 3.18,
-        "lastSeen": "2025-11-17T07:27:07.579450",
+        "nonCompliant": 17,
+        "totalTests": 24,
+        "nonCompliantRate": 0.708,
+        "avgScore": 3.25,
+        "lastSeen": "2025-11-17T08:08:31.775253",
         "base": null
       }
     ]
   },
   "recentTests": {
     "items": [
+      {
+        "testId": "T-1763366911",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 0,
+        "assessment": "NON-COMPLIANT",
+        "status": "NON-COMPLIANT",
+        "passFail": "FAIL",
+        "takenAt": "2025-11-17T08:08:31.775253"
+      },
+      {
+        "testId": "T-1763366860",
+        "crewId": "IGA6781",
+        "crewName": "Lavanya Singh",
+        "base": null,
+        "score": 8,
+        "assessment": "COMPLIANT",
+        "status": "COMPLIANT",
+        "passFail": "PASS",
+        "takenAt": "2025-11-17T08:07:40.977745"
+      },
       {
         "testId": "T-1763364427",
         "crewId": "IGA6781",
@@ -488,6 +351,167 @@
     ],
     "page": 1,
     "pageSize": 25,
-    "total": 22
+    "total": 24
   }
-}   the data is still not getting updated in the individual analysis it just shows the earlier results when we clubbed the various categories under 5 categories 
+}    {
+  "crew": {
+    "igaCode": "IGA6781",
+    "name": "Lavanya Singh"
+  },
+  "dateRange": {
+    "from": "2025-11-13",
+    "to": "2025-11-17",
+    "daysAnalyzed": 5
+  },
+  "summary": {
+    "totalAssessments": 46,
+    "compliant": 10,
+    "nonCompliant": 36,
+    "passRate": 21.74,
+    "passRatePercentage": "21.74%"
+  },
+  "nonComplianceByCategory": {
+    "uniform": 17,
+    "hairstyle": 15,
+    "accessories": 15,
+    "makeup": 12,
+    "nails": 8
+  },
+  "trend": [
+    {
+      "date": "2025-11-13",
+      "compliant": 0,
+      "nonCompliant": 4
+    },
+    {
+      "date": "2025-11-14",
+      "compliant": 3,
+      "nonCompliant": 14
+    },
+    {
+      "date": "2025-11-15",
+      "compliant": 0,
+      "nonCompliant": 1
+    },
+    {
+      "date": "2025-11-16",
+      "compliant": 0,
+      "nonCompliant": 0
+    },
+    {
+      "date": "2025-11-17",
+      "compliant": 7,
+      "nonCompliant": 17
+    }
+  ],
+  "recentAssessments": [
+    {
+      "timestamp": "2025-11-17T08:08:31.775253",
+      "date": "2025-11-17",
+      "score": 0,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Assessment criteria are gender-specific (female only)",
+        "Male crew member does not comply with female standards"
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T08:07:40.977745",
+      "date": "2025-11-17",
+      "score": 8,
+      "assessment": "COMPLIANT",
+      "issues": [
+        "Hairstyle is non-compliant; the short bob style is not listed as an approved option.",
+        "Nails were not visible for assessment.",
+        "Watch, rings, and bangles were not visible for assessment.",
+        "Hairstyle violation (Score: 0/2)"
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:27:07.579450",
+      "date": "2025-11-17",
+      "score": 8,
+      "assessment": "COMPLIANT",
+      "issues": [
+        "Hairstyle is non-compliant; the short bob style is not listed as an approved option.",
+        "Nails were not visible for assessment.",
+        "Watch, rings, and bangles were not visible for assessment.",
+        "Hairstyle violation (Score: 0/2)"
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:26:09.756384",
+      "date": "2025-11-17",
+      "score": 0,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Assessment criteria are gender-specific (female only)",
+        "Male crew member does not comply with female standards"
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:07:27.143064",
+      "date": "2025-11-17",
+      "score": 0,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Assessment criteria are gender-specific (female only)",
+        "Male crew member does not comply with female standards"
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:04:21.044060",
+      "date": "2025-11-17",
+      "score": 8,
+      "assessment": "COMPLIANT",
+      "issues": [
+        "Hairstyle is non-compliant; the short bob is not an approved style.",
+        "Nails were not visible for assessment.",
+        "Watch, rings, and bangles were not visible for assessment."
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:03:02.472743",
+      "date": "2025-11-17",
+      "score": 9,
+      "assessment": "COMPLIANT",
+      "issues": [
+        "Uniform: Scarf knot is loose and improperly positioned.",
+        "Nails: Not visible for assessment.",
+        "Accessories: Watch, rings, and bangles were not visible for assessment.",
+        "Uniform: Stockings were not visible for assessment."
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:01:49.502603",
+      "date": "2025-11-17",
+      "score": 0,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Assessment criteria are gender-specific (female only)",
+        "Male crew member does not comply with female standards"
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T07:00:26.638546",
+      "date": "2025-11-17",
+      "score": 0,
+      "assessment": "NON-COMPLIANT",
+      "issues": [
+        "Assessment criteria are gender-specific (female only)",
+        "Male crew member does not comply with female standards"
+      ]
+    },
+    {
+      "timestamp": "2025-11-17T06:59:20.620483",
+      "date": "2025-11-17",
+      "score": 8,
+      "assessment": "COMPLIANT",
+      "issues": [
+        "Hairstyle is a non-compliant bob cut, which is not an approved style for female cabin crew.",
+        "Nails were not visible for assessment.",
+        "Watch, rings, and bangles were not visible for assessment."
+      ]
+    }
+  ]
+}   the uniform was set to 67 from 73 in non compliance category when i made the canges but when i did some new tests throug upload video photo check and live video check and then checked the analysis no values changed even though categories were compliant when i ran the test 
