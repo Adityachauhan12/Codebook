@@ -1,14 +1,12 @@
 """
 Dashboard service for grooming analytics and insights.
 
-CRITICAL FIX: _issue_heading() now maps ALL categories to 5 main categories:
-- Uniform
-- Hairstyle  
-- Makeup
-- Nails
-- Accessories
+CRITICAL FIX v2: Consolidates BOTH new AND old category formats.
+- NEW format: Already mapped to 5 categories
+- OLD format: Granular categories like "uniform violation", "subject-standard mismatch"
+  are NOW consolidated to 5 main categories
 
-This ensures consistency between what's shown on dashboard and what's in the database.
+This ensures individual-analysis works with historical data.
 """
 
 from __future__ import annotations
@@ -108,7 +106,7 @@ def _parse_result_text(text: str) -> Dict[str, Any]:
 
 
 # =========================================================================
-# CRITICAL FIX: Enhanced _issue_heading() - Maps ALL categories to 5 main ones
+# CRITICAL FIX v2: Enhanced _issue_heading() - NOW CONSOLIDATES OLD FORMATS TOO
 # =========================================================================
 def _issue_heading(s: str) -> str:
     """
@@ -119,8 +117,8 @@ def _issue_heading(s: str) -> str:
     - Nails
     - Accessories
     
-    This is the KEY FIX for the dashboard category mismatch.
-    All granular categories from Gemini are consolidated into these 5.
+    FIXED: Now consolidates BOTH new AND old category formats.
+    Old granular categories are now properly mapped.
     """
     s = (s or "").strip().lower()
     
@@ -128,14 +126,16 @@ def _issue_heading(s: str) -> str:
     s = s.replace(",", "").replace(":", "")
     
     # ===== UNIFORM =====
-    # Includes: tunic, scarf, badge, stockings, overall uniform issues
+    # Maps: uniform, tunic, scarf, badge, stockings, AND OLD granular categories
     uniform_keywords = [
         "uniform", "tunic", "scarf", "badge", "name badge", 
         "stockings", "attire", "dress", "clothing",
-        "subject-standard mismatch",  # Often refers to uniform policy
-        "items not visible",  # Usually uniform elements
-        "incomplete view",  # Often related to uniform assessment
-        "image quality"  # Technical issues preventing uniform assessment
+        "subject-standard mismatch",      # OLD: Maps to Uniform
+        "items not visible",              # OLD: Maps to Uniform
+        "incomplete view",                # OLD: Maps to Uniform
+        "image quality",                  # OLD: Maps to Uniform
+        "uniform violation",              # OLD: Maps to Uniform
+        "total non-compliance"            # OLD: Maps to Uniform
     ]
     for kw in uniform_keywords:
         if kw in s:
@@ -145,7 +145,8 @@ def _issue_heading(s: str) -> str:
     hairstyle_keywords = [
         "hair", "hairstyle", "hair style", "bun", "braid", 
         "ponytail", "chignon", "curl", "hair color", "highlights",
-        "beard", "mustache", "moustache", "facial hair"  # Include facial hair in hairstyle
+        "beard", "mustache", "moustache", "facial hair",  # Include facial hair
+        "grooming non-compliance"  # Sometimes refers to hairstyle
     ]
     for kw in hairstyle_keywords:
         if kw in s:
@@ -158,7 +159,8 @@ def _issue_heading(s: str) -> str:
         "bracelet", "jewelry", "jewellery", "stud",
         "nose pin", "piercing", "religious thread", 
         "prohibited accessor",  # Catch prohibited items
-        "earbud"  # Sometimes classified as accessory
+        "earbud",  # Sometimes classified as accessory
+        "prohibited accessories"  # NEW: OLD format support
     ]
     for kw in accessories_keywords:
         if kw in s:
@@ -168,7 +170,7 @@ def _issue_heading(s: str) -> str:
     makeup_keywords = [
         "makeup", "make-up", "make up", "foundation", "base",
         "eyeshadow", "eye shadow", "liner", "eyeliner", 
-        "mascara", "lipstick", "lip", "cosmetic"
+        "mascara", "lipstick", "lip", "cosmetic", "lip color"
     ]
     for kw in makeup_keywords:
         if kw in s:
@@ -181,11 +183,6 @@ def _issue_heading(s: str) -> str:
     for kw in nails_keywords:
         if kw in s:
             return "nails"
-    
-    # ===== CATCH-ALL FOR COMPLIANCE ISSUES =====
-    # "Grooming Non-Compliance" without specific category → default to uniform
-    if "grooming" in s or "compliance" in s or "violation" in s:
-        return "uniform"
     
     # Default fallback
     return "other"
@@ -325,8 +322,8 @@ def _daily_graph(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
     """
-    FIX: Non-compliant categories - ONLY RETURNS 5 MAIN CATEGORIES.
-    Maps all granular issues to: uniform, hairstyle, makeup, nails, accessories.
+    CRITICAL FIX v2: Returns ONLY 5 MAIN CATEGORIES.
+    Maps ALL issues (both new and old formats) to 5 categories.
     """
     VALID_CATEGORIES = {"uniform", "hairstyle", "makeup", "nails", "accessories"}
     
@@ -334,8 +331,8 @@ def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[
     for r in records:
         if r["assessment"] == "NON-COMPLIANT":
             for raw in r.get("issues", []):
-                s = raw  # No canonicalization function defined; use raw directly
-                head = _issue_heading(s)
+                s = raw
+                head = _issue_heading(s)  # ← Uses FIXED function that handles old formats
                 
                 # Only count valid categories
                 if head in VALID_CATEGORIES:
