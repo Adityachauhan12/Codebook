@@ -1,51 +1,139 @@
-curl -X 'GET' \
-  'https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA9999&crewName=Vanya%20Verma&dateFrom=2025-11-11&dateTo=2025-11-17' \
-  -H 'accept: application/json'
-Request URL
-https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA9999&crewName=Vanya%20Verma&dateFrom=2025-11-11&dateTo=2025-11-17 {
-  "detail": [
-    {
-      "type": "missing",
-      "loc": [
-        "query",
-        "iga_code"
-      ],
-      "msg": "Field required",
-      "input": null
-    },
-    {
-      "type": "missing",
-      "loc": [
-        "query",
-        "crew_name"
-      ],
-      "msg": "Field required",
-      "input": null
-    },
-    {
-      "type": "missing",
-      "loc": [
-        "query",
-        "date_from"
-      ],
-      "msg": "Field required",
-      "input": null
-    },
-    {
-      "type": "missing",
-      "loc": [
-        "query",
-        "date_to"
-      ],
-      "msg": "Field required",
-      "input": null
-    }
-  ]
-}     the ayload should be this igaCode
-IGA6781
-crewName
-Lavanya Singh
-dateFrom
-2025-11-10
-dateTo
-2025-11-17
+@app.get("/v1/individual-analysis")
+async def individual_analysis(
+    igaCode: str = Query(..., description="IGA code e.g., IGA6781"),
+    crewName: str = Query(..., description="Crew name e.g., Lavanya Singh"),
+    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD format"),
+    dateTo: str = Query(..., description="End date in YYYY-MM-DD format"),
+):
+    """
+    Individual crew analysis with category violations counted from ALL records.
+    Uses camelCase parameters (igaCode, crewName, dateFrom, dateTo).
+    """
+    try:
+        start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
+        end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
+
+        # Load fresh records from GCS
+        filters = DashboardFilters(date_from=start_date, date_to=end_date)
+        all_records = load_records(filters)
+        print(f"[INDIVIDUAL-ANALYSIS] Loaded {len(all_records)} total records from GCS")
+
+        # Filter by crew
+        iga_search = igaCode.strip().upper()
+        crew_search = crewName.strip().upper()
+
+        crew_records = []
+        for record in all_records:
+            record_iga = record.get("iga_code", "").strip().upper()
+            record_crew = record.get("crew_name", "").strip().upper()
+            if record_iga == iga_search and record_crew == crew_search:
+                crew_records.append(record)
+
+        print(f"[INDIVIDUAL-ANALYSIS] Filtered to {len(crew_records)} crew records")
+
+        if not crew_records:
+            return JSONResponse(
+                error="No assessments found for this crew in given date range",
+                debug={
+                    "searched_for": {"igaCode": igaCode, "crewName": crewName},
+                    "dateRange": f"{dateFrom} to {dateTo}",
+                    "total_records_in_range": len(all_records),
+                    "matching_records": 0,
+                },
+                status_code=404,
+            )
+
+        # === Count violations from ALL records (COMPLIANT + NON-COMPLIANT) ===
+        category_violation_count = defaultdict(int)
+        
+        for record in crew_records:
+            issues = record.get("issues") or []
+            
+            print(f"[INDIVIDUAL-ANALYSIS] Processing record: assessment={record.get('assessment')}, issues_count={len(issues)}")
+            
+            for issue in issues:
+                heading = issue_heading(issue)
+                
+                if heading in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
+                    category_violation_count[heading] += 1
+                    print(f"[INDIVIDUAL-ANALYSIS] Issue: '{issue}' → Category: '{heading}' (count: {category_violation_count[heading]})")
+
+        # Calculate summary statistics
+        total = len(crew_records)
+        compliant_count = sum(1 for r in crew_records if r.get("assessment") == "COMPLIANT")
+        non_compliant_count = total - compliant_count
+        pass_rate = (compliant_count / total * 100) if total > 0 else 0.0
+
+        print(f"[INDIVIDUAL-ANALYSIS] Summary: Total={total}, Compliant={compliant_count}, NC={non_compliant_count}, PassRate={pass_rate:.2f}%")
+
+        # Build category breakdown
+        nonComplianceByCategory = {}
+        for cat in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
+            violation_count = category_violation_count.get(cat, 0)
+            percentage = (violation_count / total * 100) if total > 0 else 0.0
+            
+            nonComplianceByCategory[cat] = {
+                "violations": violation_count,
+                "percentage": round(percentage, 2),
+            }
+            
+            print(f"[INDIVIDUAL-ANALYSIS] {cat.upper()}: violations={violation_count}, total={total}, percentage={percentage:.2f}%")
+
+        # Build trend (daily breakdown)
+        trend = []
+        for day in date_range(start_date, end_date):
+            day_records = [r for r in crew_records if r.get("date") == day.isoformat()]
+            day_compliant = sum(1 for r in day_records if r.get("assessment") == "COMPLIANT")
+            day_non_compliant = len(day_records) - day_compliant
+            
+            trend.append({
+                "date": day.isoformat(),
+                "compliant": day_compliant,
+                "nonCompliant": day_non_compliant,
+            })
+
+        # Build response with camelCase
+        response = {
+            "crew": {
+                "igaCode": igaCode,
+                "name": crewName,
+            },
+            "dateRange": {
+                "from": dateFrom,
+                "to": dateTo,
+                "daysAnalyzed": (end_date - start_date).days + 1,
+            },
+            "summary": {
+                "totalAssessments": total,
+                "compliant": compliant_count,
+                "nonCompliant": non_compliant_count,
+                "passRate": f"{pass_rate:.2f}",
+                "passRatePercentage": f"{pass_rate:.2f}%",
+            },
+            "nonComplianceByCategory": nonComplianceByCategory,
+            "trend": trend,
+            "recentAssessments": [
+                {
+                    "timestamp": r.get("timestamp").isoformat() if r.get("timestamp") else None,
+                    "date": r.get("date").isoformat() if r.get("date") else None,
+                    "score": r.get("score"),
+                    "assessment": r.get("assessment"),
+                    "issues": r.get("issues", []),
+                }
+                for r in crew_records[-10:]
+            ],
+        }
+
+        print(f"[INDIVIDUAL-ANALYSIS] Returning response with {len(crew_records)} records")
+        return response
+
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] individual_analysis: {str(e)}")
+        print(traceback.format_exc())
+        return JSONResponse(
+            error="Internal server error",
+            details=str(e),
+            type=type(e).__name__,
+            status_code=500,
+        )
