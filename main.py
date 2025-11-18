@@ -520,9 +520,9 @@ async def individual_analysis(
     KEY PRINCIPLES:
     - Load ALL records from GCS for date range
     - Filter by crew
-    - Count violations ONLY from NON-COMPLIANT records
+    - Count violations from ALL records (COMPLIANT or NON-COMPLIANT)
+    - If a category has ANY issues in ANY assessment, increment by 1 (not by issue count)
     - Show violations as count and percentage
-    - Percentage decreases as COMPLIANT tests are added
     """
     try:
         # ============= PARSE & VALIDATE DATES =============
@@ -600,27 +600,29 @@ async def individual_analysis(
         # ============= CRITICAL: CATEGORY BREAKDOWN =============
         print(f"\n[INDIVIDUAL-ANALYSIS] === CATEGORY BREAKDOWN CALCULATION ===")
 
-        # Count violations by category from ONLY NON-COMPLIANT records
+        # Count violations by category from ALL records (regardless of overall assessment status)
         category_violation_count = defaultdict(int)
 
         for record in crew_records:
-            if record["assessment"] == "NON-COMPLIANT":
-                issues = record.get("issues") or []
+            issues = record.get("issues") or []
 
-                print(f"[INDIVIDUAL-ANALYSIS] Processing NON-COMPLIANT record: {record.get('timestamp')}")
-                print(f"[INDIVIDUAL-ANALYSIS]   Issues: {issues}")
+            print(f"[INDIVIDUAL-ANALYSIS] Processing record: {record.get('timestamp')}, Assessment: {record['assessment']}")
+            print(f"[INDIVIDUAL-ANALYSIS]   Issues: {issues}")
 
-                cats_found = set()
-                for issue in issues:
-                    heading = _issue_heading(issue)
-                    if heading in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
-                        cats_found.add(heading)
-                        print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Category '{heading}'")
-                    else:
-                        print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Skipped (category: '{heading}')")
-                for cat in cats_found:
-                    category_violation_count[cat] += 1
-                    print(f"[INDIVIDUAL-ANALYSIS]   Category '{cat}' incremented to {category_violation_count[cat]}")
+            # Collect unique categories that have issues in THIS record
+            cats_found = set()
+            for issue in issues:
+                heading = _issue_heading(issue)
+                if heading in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
+                    cats_found.add(heading)
+                    print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Category '{heading}'")
+                else:
+                    print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Skipped (category: '{heading}')")
+            
+            # Increment count by 1 for each unique category in this record
+            for cat in cats_found:
+                category_violation_count[cat] += 1
+                print(f"[INDIVIDUAL-ANALYSIS]   Category '{cat}' incremented to {category_violation_count[cat]}")
 
         # Convert to final format: violations + percentage
         category_breakdown = {}
@@ -720,4 +722,5 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=True)
+
 
