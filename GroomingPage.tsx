@@ -1,0 +1,559 @@
+import React, { useState, useEffect } from "react";
+import GroomingCard from "../components/GroomingCard";
+import UnifiedCheck from "../components/UnifiedCheck";
+import UploadVideo from "../components/UploadVideo";
+import { GroomingReport, GroomingStats } from "../types";
+import Layout from "../../../components/Layout";
+import { sortReportsByDate } from "../utils/groomingHelpers";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
+import "./GroomingPage.css";
+
+declare global {
+  interface Window {
+    IFS_365_GROOMING_URL: string;
+  }
+}
+
+type ViewMode = "reports" | "assessment" | "upload";
+
+const GroomingPage: React.FC = () => {
+  const [viewMode, setViewMode] = useState<ViewMode>("reports");
+  const [stats, setStats] = useState<GroomingStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [dateFilter, setDateFilter] = useState("last7days");
+  const [customStart, setCustomStart] = useState<Date | null>(null);
+  const [customEnd, setCustomEnd] = useState<Date | null>(null);
+  const [dateError, setDateError] = useState<string>("");
+  const [apiData, setApiData] = useState<any>(null);
+
+  // Crew data - you may need to fetch this from user context/session
+  const crewData = {
+    name: "Lavanya Singh", // Replace with actual crew name from your auth/context
+    igaCode: "IGA6781", // Replace with actual IGA code from your auth/context
+  };
+
+  const fetchFilteredData = async () => {
+    const url = `${window.IFS_365_GROOMING_URL}/v1/individual-analysis`;
+
+    // Calculate date range based on filter
+    let startDate: string;
+    let endDate: string = new Date().toISOString().split("T")[0];
+
+    if (dateFilter === "last7days") {
+      const date = new Date();
+      date.setDate(date.getDate() - 7);
+      startDate = date.toISOString().split("T")[0];
+    } else if (dateFilter === "last2weeks") {
+      const date = new Date();
+      date.setDate(date.getDate() - 14);
+      startDate = date.toISOString().split("T")[0];
+    } else if (dateFilter === "lastmonth") {
+      const date = new Date();
+      date.setDate(date.getDate() - 30);
+      startDate = date.toISOString().split("T")[0];
+    } else if (dateFilter === "custom" && customStart && customEnd) {
+      startDate = customStart.toISOString().split("T")[0];
+      endDate = customEnd.toISOString().split("T")[0];
+    } else {
+      // Default to last 7 days
+      const date = new Date();
+      date.setDate(date.getDate() - 7);
+      startDate = date.toISOString().split("T")[0];
+    }
+
+    // Build query parameters
+    const queryParams = new URLSearchParams({
+      igaCode: crewData.igaCode,
+      crewName: crewData.name,
+      dateFrom: startDate,
+      dateTo: endDate,
+    });
+
+    setLoading(true);
+    try {
+      const response = await fetch(`${url}?${queryParams.toString()}`);
+      if (!response.ok) {
+        throw new Error("Network response was not ok");
+      }
+      const data = await response.json();
+      setApiData(data);
+
+      // Calculate stats from API response
+      const passRateNumber = parseFloat(data.summary.passRate.replace("%", ""));
+      const calculatedStats = {
+        total: data.summary.totalAssessments,
+        compliant: data.summary.compliant,
+        nonCompliant: data.summary.nonCompliant,
+        averageScore: Math.round(passRateNumber),
+      };
+      setStats(calculatedStats);
+    } catch (error) {
+      console.error("Failed to load grooming data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load data on component mount and when date filter changes
+  useEffect(() => {
+    fetchFilteredData();
+  }, []);
+
+  const handleApplyFilter = () => {
+    if (dateFilter === "custom" && customStart && customEnd) {
+      if (customStart > customEnd) {
+        setDateError("Start date cannot be later than end date");
+        return;
+      }
+    }
+    setDateError("");
+    if (dateFilter === "custom" && customStart && customEnd) {
+      if (customStart > customEnd) {
+        setDateError("Start date cannot be later than end date");
+        return;
+      }
+    }
+    setDateError("");
+    fetchFilteredData();
+  };
+
+  const handleClearFilters = () => {
+    setDateFilter("last7days");
+    setCustomStart(null);
+    setCustomEnd(null);
+    setDateError("");
+  };
+
+
+
+  const handleAssessmentComplete = (result?: any) => {
+    if (result) {
+      // Refresh data after new assessment
+      fetchFilteredData();
+    }
+    setViewMode("reports");
+  };
+
+  if (loading) {
+    return (
+      <Layout>
+        <div className="loading-container">
+          <div className="loading-card">
+            <div className="loading-content">
+              <div className="spinner-container">
+                <div className="spinner-outer"></div>
+                <div className="spinner-inner">
+                  <div className="spinner-dot"></div>
+                </div>
+              </div>
+              <div className="text-center">
+                <h3 className="text-xl font-bold text-gray-900 mb-2">
+                  Loading Grooming Reports
+                </h3>
+                <p className="text-gray-600 text-sm">
+                  Please wait while we fetch your data...
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  // Assessment View
+  if (viewMode === "assessment") {
+    return (
+      <div className="assessment-container">
+        <div className="assessment-content">
+          <div className="back-button-container">
+            <button
+              onClick={() => setViewMode("reports")}
+              className="back-button"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+              Back to Reports
+            </button>
+          </div>
+
+          <div className="assessment-card">
+            <UnifiedCheck
+              crewName={crewData.name}
+              igaCode={crewData.igaCode}
+              onComplete={handleAssessmentComplete}
+              onCancel={() => setViewMode("reports")}
+              onUploadVideo={() => setViewMode("upload")}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Upload Video View
+  if (viewMode === "upload") {
+    return (
+      <div className="assessment-container">
+        <div className="assessment-content">
+          <div className="back-button-container">
+            <button
+              onClick={() => setViewMode("assessment")}
+              className="back-button"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+              Back to Assessment
+            </button>
+          </div>
+
+          <div className="assessment-card">
+            <UploadVideo
+              crewName={crewData.name}
+              igaCode={crewData.igaCode}
+              onComplete={handleAssessmentComplete}
+              onError={(error) => console.error("Upload error:", error)}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Reports View (Default)
+  return (
+    <Layout>
+      <div className="space-y-4">
+        {/* Header Card */}
+        <div className="card-glass shadow-indigo border border-indigo-100">
+          <div className="header-card">
+            <div className="header-content">
+              <div className="header-title-section">
+                <div className="header-icon">
+                  <svg
+                    className="w-6 h-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                </div>
+
+                <div>
+                  <h1 className="text-2xl sm:text-2xl font-bold text-gray-900 mb-1">Grooming Assessment Center</h1>
+                  <p className="text-xs sm:text-sm text-gray-600">
+                    AI-powered grooming evaluations for {crewData.name} (
+                    {crewData.igaCode})
+                  </p>
+                </div>
+              </div>
+
+              {/* Date Filter Controls and Action Button */}
+              <div className="filter-controls">
+                <div className="filter-row">
+                  <div className="filter-group">
+                    <label className="filter-label">Period</label>
+                    <select
+                      value={dateFilter}
+                      onChange={(e) => {
+                        setDateFilter(e.target.value);
+                        setDateError("");
+                      }}
+                     
+                      className="filter-select"
+                    >
+                      <option value="last7days">Last 7 Days</option>
+                      <option value="last2weeks">Last 2 Weeks</option>
+                      <option value="lastmonth">Last Month</option>
+                      <option value="custom">Custom Date Range</option>
+                    </select>
+                  </div>
+
+                  
+                  {dateFilter === "custom" && (
+                    <>
+                      <div className="filter-group">
+                        <label className="filter-label">Start Date</label>
+                        <DatePicker
+                          selected={customStart}
+                          onChange={(date: Date | null) => {
+                            setCustomStart(date);
+                            setDateError("");
+                          }}
+                          dateFormat="dd/MM/yyyy"
+                          placeholderText="Select start date"
+                           popperPlacement="bottom-start"
+                          maxDate={new Date()}
+                          className="filter-input"
+                          wrapperClassName="w-full"
+                         
+                        />
+                      </div>
+                      <div className="filter-group">
+                        <label className="filter-label">End Date</label>
+                        <DatePicker
+                          selected={customEnd}
+                          onChange={(date: Date | null) => {
+                            setCustomEnd(date);
+                            setDateError("");
+                          }}
+                          dateFormat="dd/MM/yyyy"
+                          placeholderText="Select end date"
+                           popperPlacement="bottom-start"
+                          maxDate={new Date()}
+                          minDate={customStart || undefined}
+                          className="filter-input"
+                          wrapperClassName="w-full"
+                         
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  <div className="flex gap-2 items-end">
+                    <button
+                      onClick={handleApplyFilter}
+                       className="bg-gray-100 text-gray-700 px-2 py-2 rounded-lg text-sm font-lg hover:bg-gray-100 transition-colors whitespace-nowrap h-[2.5rem]"
+                    
+                      disabled={
+                        dateFilter === "custom" && (!customStart || !customEnd)
+                      }
+                    >
+                      Apply Filter
+                    </button>
+                     
+                    <button
+                      onClick={handleClearFilters}
+                      className="bg-gray-100 text-gray-700 px-2 py-2 rounded-lg text-sm font-semibold hover:bg-gray-200 transition-colors whitespace-nowrap h-[2.5rem]"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                {dateError && (
+                  <div className="text-red-500 text-sm mt-2 flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                    {dateError}
+                  </div>
+                )}
+
+                {dateError && (
+                  <div className="text-red-500 text-sm mt-2 flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                    {dateError}
+                  </div>
+                )}
+
+                <button
+                  onClick={() => setViewMode("assessment")}
+                  className="assessment-button mt-4 relative overflow-hidden"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-indigo-primary to-indigo-800 animate-pulse"></div>
+                  <div className="relative flex items-center justify-center gap-2">
+                    <div className="w-3 h-3 bg-white rounded-full animate-ping"></div>
+                    <span className="font-bold">Start Live Assessment</span>
+                    <div className="w-2 h-2 bg-white rounded-full animate-ping animation-delay-500"></div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Stats Cards */}
+        {stats && (
+          <div className="stats-grid">
+            {[
+              {
+                title: "Total Assessments",
+                value: stats.total,
+                colorClass: "blue",
+              },
+              {
+                title: "Compliant",
+                value: stats.compliant,
+                colorClass: "green",
+              },
+              {
+                title: "Non-Compliant",
+                value: stats.nonCompliant,
+                colorClass: "red",
+              },
+              {
+                title: "Pass Rate",
+                value: apiData?.summary?.passRatePercentage || "0%",
+                colorClass: "indigo",
+              },
+            ].map((stat, idx) => (
+              <div
+                key={idx}
+                className={`stat-card ${
+                  stat.colorClass
+                } animate-fade-in-up delay-${idx * 100}`}
+              >
+                <div className="stat-content">
+                  <div className="stat-value">{stat.value}</div>
+                  <div className="stat-title">{stat.title}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Non-Compliance by Category */}
+        {apiData?.nonComplianceByCategory && (
+          <div className="content-card">
+            <h3 className="content-title">Non-Compliance by Category</h3>
+            <div className="category-grid">
+              {Object.entries(apiData.nonComplianceByCategory).map(
+                ([category, data]: [string, any], idx: number) => {
+                  const violations = data.violations || 0;
+                  const percentage = data.percentage || 0;
+
+                  return (
+                    <div key={idx} className="category-item">
+                      <div className="category-header">
+                        <span className="category-name">{category}</span>
+                        <span className="category-count">{violations}</span>
+                      </div>
+                      <div className="category-progress">
+                        <div className="progress-bar">
+                          <div className={`progress-fill w-[${Math.round(percentage)}%]`}></div>
+                        </div>
+                        <span className="progress-text">
+                          {violations > 0
+                            ? `${Math.round(percentage)}% violation rate`
+                            : "No violations"}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Trends Section */}
+        {apiData?.trend && apiData.trend.length > 0 && (
+          <div className="content-card">
+            <h3 className="content-title">Compliance Trend</h3>
+            <div className="trends-grid">
+              {apiData.trend.map((trend: any, idx: number) => {
+                const formattedDate = trend.date
+                  ? new Date(trend.date).toLocaleDateString('en-GB')
+                  : trend.date;
+                return (
+                  <div key={idx} className="trend-item">
+                    <div className="trend-date">{formattedDate}</div>
+                    <div className="trend-stats">
+                      <span className="trend-compliant">
+                        ✓ Compliant: {trend.compliant}
+                      </span>
+                      <span className="trend-non-compliant">
+                        ✗ Non-Compliant: {trend.nonCompliant}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              {apiData.trend.map((trend: any, idx: number) => {
+                const formattedDate = trend.date
+                  ? new Date(trend.date).toLocaleDateString('en-GB')
+                  : trend.date;
+                return (
+                  <div key={idx} className="trend-item">
+                    <div className="trend-date">{formattedDate}</div>
+                    <div className="trend-stats">
+                      <span className="trend-compliant">
+                        ✓ Compliant: {trend.compliant}
+                      </span>
+                      <span className="trend-non-compliant">
+                        ✗ Non-Compliant: {trend.nonCompliant}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Empty State */}
+        {stats?.total === 0 && (
+          <div className="content-card text-center py-12">
+            <svg
+              className="mx-auto h-12 w-12 text-gray-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+              />
+            </svg>
+            <h3 className="mt-2 text-lg font-medium text-gray-900">
+              No assessments found
+            </h3>
+            <p className="mt-1 text-sm text-gray-500">
+              No grooming assessments found for the selected date range. Try
+              adjusting your filters or start a new assessment.
+            </p>
+            <div className="mt-6">
+              <button
+                onClick={() => setViewMode("assessment")}
+                className="assessment-button relative overflow-hidden"
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-red-500 to-red-600 animate-pulse"></div>
+                <div className="relative flex items-center justify-center gap-2">
+                  <div className="w-2 h-2 bg-white rounded-full animate-ping"></div>
+                  <span className="font-semibold">Start First Assessment</span>
+                  <div className="w-2 h-2 bg-white rounded-full animate-ping animation-delay-500"></div>
+                </div>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Layout>
+  );
+};
+
+export default GroomingPage;
