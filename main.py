@@ -516,7 +516,7 @@ async def individual_analysis(
 ):
     """
     FINAL COMPLETE FIX: Freshly recalculate from ALL GCS records.
-    
+
     KEY PRINCIPLES:
     - Load ALL records from GCS for date range
     - Filter by crew
@@ -537,7 +537,7 @@ async def individual_analysis(
                 },
                 status_code=400
             )
-        
+
         if start_date > end_date:
             return JSONResponse(
                 {
@@ -546,31 +546,31 @@ async def individual_analysis(
                 },
                 status_code=400
             )
-        
+
         # ============= LOAD FRESH RECORDS FROM GCS =============
         print(f"\n[INDIVIDUAL-ANALYSIS] Starting fresh load from GCS")
         print(f"[INDIVIDUAL-ANALYSIS] Date range: {start_date} to {end_date}")
         print(f"[INDIVIDUAL-ANALYSIS] Crew: {igaCode} / {crewName}")
-        
+
         filters = DashboardFilters(date_from=start_date, date_to=end_date)
         all_records = _load_records(filters)
-        
+
         print(f"[INDIVIDUAL-ANALYSIS] Loaded {len(all_records)} total records from GCS")
-        
+
         # ============= FILTER BY CREW =============
         iga_search = igaCode.strip().upper()
         crew_search = crewName.strip().upper()
-        
+
         crew_records = []
         for record in all_records:
             record_iga = (record.get("iga_code") or "").strip().upper()
             record_crew = (record.get("crew_name") or "").strip().upper()
-            
+
             if record_iga == iga_search and record_crew == crew_search:
                 crew_records.append(record)
-        
+
         print(f"[INDIVIDUAL-ANALYSIS] Filtered to {len(crew_records)} crew records")
-        
+
         if not crew_records:
             print(f"[INDIVIDUAL-ANALYSIS] No records found for {iga_search} / {crew_search}")
             return JSONResponse(
@@ -588,81 +588,82 @@ async def individual_analysis(
                 },
                 status_code=404
             )
-        
+
         # ============= CALCULATE SUMMARY STATISTICS =============
         total = len(crew_records)
         compliant_count = sum(1 for r in crew_records if r["assessment"] == "COMPLIANT")
         noncompliant_count = total - compliant_count
         pass_rate = (compliant_count / total * 100) if total > 0 else 0
-        
+
         print(f"[INDIVIDUAL-ANALYSIS] Summary: Total={total}, Compliant={compliant_count}, NC={noncompliant_count}, PassRate={pass_rate:.2f}%")
-        
+
         # ============= CRITICAL: CATEGORY BREAKDOWN =============
         print(f"\n[INDIVIDUAL-ANALYSIS] === CATEGORY BREAKDOWN CALCULATION ===")
-        
+
         # Count violations by category from ONLY NON-COMPLIANT records
         category_violation_count = defaultdict(int)
-        
+
         for record in crew_records:
             if record["assessment"] == "NON-COMPLIANT":
                 issues = record.get("issues") or []
-                
+
                 print(f"[INDIVIDUAL-ANALYSIS] Processing NON-COMPLIANT record: {record.get('timestamp')}")
                 print(f"[INDIVIDUAL-ANALYSIS]   Issues: {issues}")
-                
+
+                cats_found = set()
                 for issue in issues:
                     heading = _issue_heading(issue)
-                    
-                    # CRITICAL: Only count valid 5 categories
                     if heading in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
-                        category_violation_count[heading] += 1
-                        print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Category '{heading}' (count: {category_violation_count[heading]})")
+                        cats_found.add(heading)
+                        print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Category '{heading}'")
                     else:
                         print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Skipped (category: '{heading}')")
-        
+                for cat in cats_found:
+                    category_violation_count[cat] += 1
+                    print(f"[INDIVIDUAL-ANALYSIS]   Category '{cat}' incremented to {category_violation_count[cat]}")
+
         # Convert to final format: violations + percentage
-        # KEY: Percentage = violations / TOTAL TESTS (allows COMPLIANT tests to decrease it)
         category_breakdown = {}
-        
+
         for cat in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
             violation_count = category_violation_count.get(cat, 0)
             percentage = (violation_count / total * 100) if total > 0 else 0
-            
+
             category_breakdown[cat] = {
                 "violations": violation_count,
                 "percentage": round(percentage, 2)
             }
-            
+
             print(f"[INDIVIDUAL-ANALYSIS] {cat.upper()}: violations={violation_count}, total={total}, percentage={percentage:.2f}%")
-        
+
         print(f"[INDIVIDUAL-ANALYSIS] === END CATEGORY BREAKDOWN ===\n")
-        
+
         # ============= BUILD DAILY TRENDS =============
         daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
-        
+
         for record in crew_records:
             record_date = record["date"]
-            
+
             if record["assessment"] == "COMPLIANT":
                 daily_stats[record_date]["compliant"] += 1
             else:
                 daily_stats[record_date]["nonCompliant"] += 1
-        
+
         # Build trend array
         trend_list = []
         current_date = start_date
         while current_date <= end_date:
             date_key = current_date.isoformat()
             stats = daily_stats.get(current_date, {"compliant": 0, "nonCompliant": 0})
-            
+
             trend_list.append({
                 "date": date_key,
                 "compliant": stats["compliant"],
                 "nonCompliant": stats["nonCompliant"]
             })
-            
+
             current_date += timedelta(days=1)
-        
+
         # ============= BUILD RESPONSE =============
         response = {
             "crew": {
@@ -694,16 +695,16 @@ async def individual_analysis(
                 for r in crew_records[:10]
             ]
         }
-        
+
         print(f"[INDIVIDUAL-ANALYSIS] Returning response with {len(crew_records)} records\n")
-        
+
         return response
-        
+
     except Exception as e:
         import traceback
         print(f"[ERROR] individual_analysis: {str(e)}")
         print(traceback.format_exc())
-        
+
         return JSONResponse(
             {
                 "error": "Internal server error",
@@ -719,3 +720,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=True)
+
