@@ -112,3 +112,50 @@ useEffect(() => {
     )}
   </div>
 </div>
+
+
+
+
+
+
+
+
+
+
+
+
+const runGroomingPhoto = async (imageBase64: string) => {
+  // ⭐ ADD THIS VALIDATION AT THE TOP
+  if (!selectedBase) {
+    setError("⚠️ Please select a base before submitting");
+    return;
+  }
+
+  try {
+    const res = await fetch(apiUrl("check-grooming"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        imageBase64, 
+        crewName, 
+        igaCode,
+        base: selectedBase  // ⭐ ADD THIS LINE
+      }),
+    });
+    
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    setGroomingResult(data?.result ?? null);
+    setStatus("done");
+  } catch (e) {
+    console.error(e);
+    setError("Grooming check failed.");
+  }
+};
+
+
+
+fd.append("video", file);
+fd.append("name", crewName);
+fd.append("igacode", igaCode);
+fd.append("base", selectedBase);  // ⭐ ADD THIS LINE
