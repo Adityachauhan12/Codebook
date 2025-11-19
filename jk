@@ -32,3 +32,27 @@ const bases = ["DEL", "AMD", "BOM", "CCU", "MAA", "HYD", "LKO", "PNQ", "COK", "I
   )}
 </div>
 
+
+
+
+
+
+
+const handleSubmitGrooming = async (imageData: string) => {
+  // ⭐ ADD THIS VALIDATION AT THE TOP
+  if (!selectedBase) {
+    setFeedback("⚠️ Please select a base before submitting");
+    return;
+  }
+
+  // Your existing code...
+  setStatus("uploading");
+  setFeedback("📤 Uploading and analyzing grooming standards...");
+
+  try {
+    const payload = {
+      imageBase64: imageData,
+      crewName: crewName,
+      igaCode: igaCode,
+      base: selectedBase,  // ⭐ ADD THIS LINE to your existing payload
+    };
