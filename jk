@@ -155,6 +155,21 @@ const runGroomingPhoto = async (imageBase64: string) => {
 
 
 
+
+// ⭐ TEMPORARY: Mock data for testing UI
+useEffect(() => {
+  // Simulate base data
+  const mockBaseData = [
+    { base: "DEL", compliant: 45, nonCompliant: 78, total: 123 },
+    { base: "BOM", compliant: 38, nonCompliant: 52, total: 90 },
+    { base: "BLR", compliant: 29, nonCompliant: 41, total: 70 },
+    { base: "MAA", compliant: 22, nonCompliant: 33, total: 55 },
+    { base: "HYD", compliant: 18, nonCompliant: 27, total: 45 },
+  ];
+  setBaseData(mockBaseData);
+}, []);
+
+
 fd.append("video", file);
 fd.append("name", crewName);
 fd.append("igacode", igaCode);
