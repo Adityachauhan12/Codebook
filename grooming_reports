@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   XAxis,
   YAxis,
@@ -43,14 +43,12 @@ type ReportData = {
   takenAt: string;
   status: string;
 };
-
-// ⭐ NEW: Base data type
-type BaseData = {
-  base: string;
-  compliant: number;
-  nonCompliant: number;
-  total: number;
-};
+type BaseData={
+  base:string;
+  compliant:number;
+  nonCompliant:number;
+  total:number;
+}
 
 const Grooming: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -62,14 +60,14 @@ const Grooming: React.FC = () => {
   const [allGrooomingdata, setAllGroomingData] = useState<ReportData[]>([]);
   const [rawData, setRawData] = useState<any>(null);
   const [groomedTableData, setGroomedTableData] = useState<CrewData[]>([]);
-  const [nonGroomedTableData, setNonGroomedTableData] = useState<CrewData[]>([]);
-
-  // ⭐ NEW: Base data state
-  const [baseData, setBaseData] = useState<BaseData[]>([]);
+  const [nonGroomedTableData, setNonGroomedTableData] = useState<CrewData[]>(
+    []
+  );
 
   const [selectedFilter, setSelectedFilter] = useState("last7Days");
   const [customStart, setCustomStart] = useState<Date | null>(null);
   const [customEnd, setCustomEnd] = useState<Date | null>(null);
+  const [baseData, setBaseData] = useState<BaseData[]>([]);
 
   const API_URL = `${(window as any).IFS_365_GROOMING_URL}/v1/insights`;
 
@@ -89,35 +87,6 @@ const Grooming: React.FC = () => {
       console.error("Error fetching data:", error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  // ⭐ NEW: Fetch base data
-  const fetchBaseData = async () => {
-    let queryParams = "";
-
-    if (selectedFilter === "last2weeks") {
-      queryParams = "?days=14";
-    } else if (selectedFilter === "lastMonth") {
-      queryParams = "?days=30";
-    } else if (selectedFilter === "custom" && customStart && customEnd) {
-      queryParams = `?dateFrom=${customStart.toISOString().split("T")[0]}&dateTo=${customEnd.toISOString().split("T")[0]}`;
-    }
-
-    try {
-      const response = await fetch(`${API_URL}/by-base${queryParams}`);
-      if (!response.ok) {
-        console.error("Failed to fetch base data");
-        setBaseData([]);
-        return;
-      }
-
-      const data = await response.json();
-      console.log("Base data:", data);
-      setBaseData(data.bases || []);
-    } catch (error) {
-      console.error("Error fetching base data:", error);
-      setBaseData([]);
     }
   };
 
@@ -156,7 +125,6 @@ const Grooming: React.FC = () => {
     }));
     setDailyData(linechartData);
   };
-
   const filteredReports = allGrooomingdata.filter((report) => {
     const query = searchQuery.toLowerCase();
     return (
@@ -204,7 +172,9 @@ const Grooming: React.FC = () => {
     } else if (selectedFilter === "lastMonth") {
       queryParams = "?days=30";
     } else if (selectedFilter === "custom" && customStart && customEnd) {
-      queryParams = `?dateFrom=${customStart.toISOString().split("T")[0]}&dateTo=${customEnd.toISOString().split("T")[0]}`;
+      queryParams = `?dateFrom=${
+        customStart.toISOString().split("T")[0]
+      }&dateTo=${customEnd.toISOString().split("T")[0]}`;
     } else {
       return;
     }
@@ -223,6 +193,36 @@ const Grooming: React.FC = () => {
       setLoading(false);
     }
   };
+
+  
+// ⭐ ADD THIS ENTIRE FUNCTION after your existing fetch functions
+const fetchBaseData = async () => {
+  let queryParams = "";
+
+  if (selectedFilter === "last2weeks") {
+    queryParams = "?days=14";
+  } else if (selectedFilter === "lastMonth") {
+    queryParams = "?days=30";
+  } else if (selectedFilter === "custom" && customStart && customEnd) {
+    queryParams = `?dateFrom=${customStart.toISOString().split("T")[0]}&dateTo=${customEnd.toISOString().split("T")[0]}`;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/by-base${queryParams}`);
+    if (!response.ok) {
+      console.error("Failed to fetch base data");
+      setBaseData([]);
+      return;
+    }
+
+    const data = await response.json();
+    console.log("Base data:", data);
+    setBaseData(data.bases || []);
+  } catch (error) {
+    console.error("Error fetching base data:", error);
+    setBaseData([]);
+  }
+};
 
   useEffect(() => {
     fetchAllDataOnce();
@@ -244,13 +244,27 @@ const Grooming: React.FC = () => {
     if (selectedFilter === "custom") {
       if (customStart && customEnd) {
         fetchFilteredData();
-        fetchBaseData(); // ⭐ Fetch base data
+        fetchBaseData();  // ⭐ ADD THIS LINE
       }
     } else {
       fetchFilteredData();
-      fetchBaseData(); // ⭐ Fetch base data
+      fetchBaseData();  // ⭐ ADD THIS LINE
     }
   }, [selectedFilter, customStart, customEnd]);
+
+  useEffect(() => {
+  // Simulate base data
+  const mockBaseData = [
+    { base: "DEL", compliant: 45, nonCompliant: 78, total: 123 },
+    { base: "BOM", compliant: 38, nonCompliant: 52, total: 90 },
+    { base: "BLR", compliant: 29, nonCompliant: 41, total: 70 },
+    { base: "MAA", compliant: 22, nonCompliant: 33, total: 55 },
+    { base: "HYD", compliant: 18, nonCompliant: 27, total: 45 },
+  ];
+  setBaseData(mockBaseData);
+}, []);
+
+
 
   const pieColors1 = ["#000099", "#cb2229"];
   const piecolor2 = [
@@ -275,7 +289,9 @@ const Grooming: React.FC = () => {
 
     try {
       const response = await fetch(
-        `${(window as any).IFS_365_API_URL}/api/ai-search?query=${query}&type=grooming_report`
+        `${
+          (window as any).IFS_365_API_URL
+        }/api/ai-search?query=${query}&type=grooming_report`
       );
 
       if (!response.ok) {
@@ -284,6 +300,7 @@ const Grooming: React.FC = () => {
 
       const data = await response.json();
       console.log("AI Search Response:", data);
+      // Handle the response data as needed
     } catch (error) {
       console.error("Error fetching AI search data:", error);
     } finally {
@@ -382,6 +399,73 @@ const Grooming: React.FC = () => {
           </div>
         </div>
 
+        {/* AI Search Bar */}
+        {/* <div className="card-glass shadow-md border border-gray-200 animate-fade-in-up">
+          <div className="p-6">
+            <form onSubmit={handleSearch} className="relative w-full">
+              <div className="p-[3px] rounded-full bg-gradient-to-r from-yellow-400 via-red-500 via-green-400 to-blue-500 animate-glow">
+                <div className="relative bg-white rounded-full">
+                  <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
+                    <Brain className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <input
+                    name="query"
+                    type="text"
+                    placeholder="Ask me anything about your grooming data..."
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    className="w-full pl-12 pr-24 py-4 text-sm bg-transparent rounded-full focus:outline-none"
+                  />
+                  {query.trim() !== "" && (
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="absolute right-3 top-1/2 transform-translate-y-1/2 px-4 py-2 bg-indigo-gradient text-white rounded-full font-semibold hover:shadow-indigo transform hover:scale-105 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                    >
+                      {loading ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      ) : (
+                        <>
+                          <Plane className="w-4 h-4" />
+                          Ask
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <button type="submit" className="hidden" aria-hidden="true" />
+            </form>
+
+            <div className="mt-6">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-indigo-primary" />
+                Quick Questions
+              </h3>
+              <div className="flex flex-wrap gap-3">
+                {quickChips.map((item: any, index: number) => (
+                  <button
+                    key={index}
+                    onClick={(event) => handleQuickChipClick(event, item.label)}
+                    disabled={loading}
+                    className={`group relative px-4 py-3 bg-gradient-to-r ${
+                      item.color
+                    } text-blue-800 rounded-xl font-medium text-sm transition-all duration-300 hover:scale-105 hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed animate-stagger-${
+                      index + 1
+                    } flex items-center gap-2`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {item.icon}
+                      {item.label}
+                    </div>
+                    <div className="absolute inset-0 bg-white opacity-0 group-hover:opacity-20 rounded-xl transition-opacity duration-300"></div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div> */}
+
         {/* Charts Section */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Compliant Status Chart */}
@@ -453,104 +537,59 @@ const Grooming: React.FC = () => {
             </div>
           </div>
         </div>
-
-        {/* ⭐ NEW: Base-wise Compliance Bar Graph */}
         <div className="card-glass shadow-md border border-indigo-200">
-          <div className="p-4">
-            <h3 className="text-lg font-semibold text-indigo-primary mb-4 flex items-center gap-2">
-              <span className="w-2 h-2 bg-indigo-primary rounded-full"></span>
-              Top 5 Bases by Test Volume
-            </h3>
+  <div className="p-4">
+    <h3 className="text-lg font-semibold text-indigo-primary mb-4 flex items-center gap-2">
+      <span className="w-2 h-2 bg-indigo-primary rounded-full"></span>
+      Top 5 Bases by Test Volume
+    </h3>
 
-            {loading ? (
-              <div className="flex items-center justify-center h-72">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-primary"></div>
-              </div>
-            ) : baseData.length === 0 ? (
-              <div className="flex items-center justify-center h-72 text-gray-500">
-                <div className="text-center">
-                  <svg className="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                  </svg>
-                  <p className="text-lg font-medium mb-2">No base data available yet</p>
-                  <p className="text-sm">Base information will appear once assessments are submitted with base details</p>
-                </div>
-              </div>
-            ) : (
-              <>
-                <ResponsiveContainer width="100%" height={350}>
-                  <BarChart
-                    data={baseData}
-                    margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                    <XAxis
-                      dataKey="base"
-                      tick={{ fill: '#666', fontSize: 14, fontWeight: 500 }}
-                      axisLine={{ stroke: '#ccc' }}
-                    />
-                    <YAxis
-                      tick={{ fill: '#666', fontSize: 12 }}
-                      axisLine={{ stroke: '#ccc' }}
-                      label={{ value: 'Number of Tests', angle: -90, position: 'insideLeft', style: { fill: '#666' } }}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: '#fff',
-                        border: '1px solid #ccc',
-                        borderRadius: '8px',
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                      }}
-                      cursor={{ fill: 'rgba(0, 0, 0, 0.05)' }}
-                    />
-                    <Legend
-                      wrapperStyle={{ paddingTop: '20px' }}
-                      iconType="circle"
-                    />
-                    <Bar
-                      dataKey="compliant"
-                      stackId="a"
-                      fill="#27ae60"
-                      name="Compliant"
-                      radius={[0, 0, 0, 0]}
-                    />
-                    <Bar
-                      dataKey="nonCompliant"
-                      stackId="a"
-                      fill="#e74c3c"
-                      name="Non-Compliant"
-                      radius={[8, 8, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-
-                {/* Base Statistics Summary */}
-                <div className="mt-6 grid grid-cols-2 md:grid-cols-5 gap-4">
-                  {baseData.map((base) => (
-                    <div
-                      key={base.base}
-                      className="bg-gradient-to-br from-gray-50 to-gray-100 p-3 rounded-lg border border-gray-200 hover:shadow-md transition-shadow"
-                    >
-                      <p className="text-xs text-gray-600 mb-1 font-medium">Base {base.base}</p>
-                      <p className="text-2xl font-bold text-indigo-primary">{base.total}</p>
-                      <div className="mt-2 flex items-center gap-2">
-                        <div className="flex-1 bg-gray-200 rounded-full h-2">
-                          <div
-                            className="bg-green-500 h-2 rounded-full"
-                            style={{ width: `${(base.compliant / base.total) * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {((base.compliant / base.total) * 100).toFixed(1)}% pass rate
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
+    {loading ? (
+      <div className="flex items-center justify-center h-72">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-primary"></div>
+      </div>
+    ) : baseData.length === 0 ? (
+      <div className="flex items-center justify-center h-72 text-gray-500">
+        <div className="text-center">
+          <svg className="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+          <p className="text-lg font-medium mb-2">No base data available yet</p>
+          <p className="text-sm">Base information will appear once assessments are submitted with base details</p>
         </div>
+      </div>
+    ) : (
+      <>
+        <ResponsiveContainer width="100%" height={350}>
+          <BarChart data={baseData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+            <XAxis dataKey="base" tick={{ fill: '#666', fontSize: 14, fontWeight: 500 }} axisLine={{ stroke: '#ccc' }} />
+            <YAxis tick={{ fill: '#666', fontSize: 12 }} axisLine={{ stroke: '#ccc' }} label={{ value: 'Number of Tests', angle: -90, position: 'insideLeft', style: { fill: '#666' } }} />
+            <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }} cursor={{ fill: 'rgba(0, 0, 0, 0.05)' }} />
+            <Legend wrapperStyle={{ paddingTop: '20px' }} iconType="circle" />
+            <Bar dataKey="compliant" stackId="a" fill="#27ae60" name="Compliant" radius={[0, 0, 0, 0]} />
+            <Bar dataKey="nonCompliant" stackId="a" fill="#e74c3c" name="Non-Compliant" radius={[8, 8, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+
+        <div className="mt-6 grid grid-cols-2 md:grid-cols-5 gap-4">
+          {baseData.map((base) => (
+            <div key={base.base} className="bg-gradient-to-br from-gray-50 to-gray-100 p-3 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+              <p className="text-xs text-gray-600 mb-1 font-medium">Base {base.base}</p>
+              <p className="text-2xl font-bold text-indigo-primary">{base.total}</p>
+              <div className="mt-2 flex items-center gap-2">
+                <div className="flex-1 bg-gray-200 rounded-full h-2">
+                  <div className="bg-green-500 h-2 rounded-full" style={{ width: `${(base.compliant / base.total) * 100}%` }} />
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">{((base.compliant / base.total) * 100).toFixed(1)}% pass rate</p>
+            </div>
+          ))}
+        </div>
+      </>
+    )}
+  </div>
+</div>
 
         {/* Line Chart */}
         <div className="card-glass shadow-md border border-indigo-200">
