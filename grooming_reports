@@ -1,2 +1,15 @@
-grooming_reports_admin.tsx:213 Failed to fetch base data
-fetchBaseData	@	grooming_reports_admin.tsx:213     th emock data isnt showing 
+useEffect(() => {
+  // Wait a bit for fetchBaseData to fail, then set mock data
+  const timer = setTimeout(() => {
+    const mockBaseData = [
+      { base: "DEL", compliant: 45, nonCompliant: 78, total: 123 },
+      { base: "BOM", compliant: 38, nonCompliant: 52, total: 90 },
+      { base: "BLR", compliant: 29, nonCompliant: 41, total: 70 },
+      { base: "MAA", compliant: 22, nonCompliant: 33, total: 55 },
+      { base: "HYD", compliant: 18, nonCompliant: 27, total: 45 },
+    ];
+    setBaseData(mockBaseData);
+  }, 500); // Wait 500ms
+
+  return () => clearTimeout(timer);
+}, []);
