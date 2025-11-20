@@ -52,3 +52,24 @@ Traceback (most recent call last):
     if not blob_name.endswith(".json"):
            ^^^^^^^^^^^^^^^^^^
 AttributeError: 'Blob' object has no attribute 'endswith'
+
+
+
+
+2025-11-20 14:54:59.913 IST
+GET500130 B70 mspython-httpx/0.28.1 https://6e-ifs-grooming-be-dev.goindigo.in/v1/search?q=KORDE%2C+RAKESH&days=60 
+{
+httpRequest: {13}
+insertId: "691ede6b000f0746d92b3e9d"
+labels: {9}
+logName: "projects/prj-ifs-dev/logs/run.googleapis.com%2Frequests"
+payload: "payloadNotSet"
+receiveLocation: "asia-south1"
+receiveTimestamp: "2025-11-20T09:25:00.229124453Z"
+resource: {2}
+severity: "ERROR"
+spanId: "d96e49f73ec824cb"
+timestamp: "2025-11-20T09:24:59.913206Z"
+trace: "projects/prj-ifs-dev/traces/f5a4d70aacc05c63279a0459d2751225"
+traceSampled: true
+}
