@@ -1,12 +1,14 @@
 """
 FastAPI backend for grooming checks + insights API
 
-FINAL COMPLETE VERSION - ALL FIXES INCLUDED:
+UPDATED WITH BASE SUPPORT:
 1. Video results persisted to GCS
 2. Issues extracted and saved correctly
 3. Category breakdown shows only 5 categories
 4. Individual analysis recalculates fresh from GCS with proper percentages
 5. Debug logging on all critical operations
+6. ⭐ NEW: Base and terminal support from localStorage
+7. ⭐ NEW: Base-wise insights APIs
 """
 
 from __future__ import annotations
@@ -348,7 +350,8 @@ class GroomingRequest(BaseModel):
     imageBase64: str
     crewName: Optional[str] = None
     igaCode: Optional[str] = None
-    base: Optional[str] = None
+    base: Optional[str] = None      # ⭐ NEW: Base location
+    terminal: Optional[str] = None  # ⭐ NEW: Terminal
     department: Optional[str] = None
 
 
@@ -364,6 +367,13 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         return JSONResponse({"error": "Invalid image"}, status_code=400)
 
     try:
+        # ⭐ Log received data
+        print(f"📥 Received photo assessment:")
+        print(f"  IGA Code: {payload.igaCode}")
+        print(f"  Name: {payload.crewName}")
+        print(f"  Base: {payload.base}")
+        print(f"  Terminal: {payload.terminal}")
+
         b64 = payload.imageBase64.split(",")[-1]
         img_bytes = base64.b64decode(b64)
 
@@ -371,20 +381,46 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         parsed = _parse_text_to_ui(report, payload.crewName, payload.igaCode)
 
         img_path = upload_image_bytes(img_bytes, payload.igaCode, "image", payload.crewName)
-        upload_grooming_result_text(report, payload.crewName, payload.igaCode, img_path, parsed=parsed)
+        
+        # ⭐ Pass base and terminal to GCS save function
+        upload_grooming_result_text(
+            report, 
+            payload.crewName, 
+            payload.igaCode, 
+            img_path, 
+            parsed=parsed,
+            base=payload.base,          # ⭐ NEW
+            terminal=payload.terminal   # ⭐ NEW
+        )
+        
         append_event_to_crew_log(
-            {"type": "image", "parsed": parsed, "image_path": img_path},
+            {
+                "type": "image", 
+                "parsed": parsed, 
+                "image_path": img_path,
+                "base": payload.base,          # ⭐ NEW
+                "terminal": payload.terminal   # ⭐ NEW
+            },
             payload.crewName,
             payload.igaCode,
         )
+        
         create_ticket(
-            {"type": "image", "igaCode": payload.igaCode, "crewName": payload.crewName, "image_path": img_path}
+            {
+                "type": "image", 
+                "igaCode": payload.igaCode, 
+                "crewName": payload.crewName, 
+                "image_path": img_path,
+                "base": payload.base,          # ⭐ NEW
+                "terminal": payload.terminal   # ⭐ NEW
+            }
         )
+
+        print(f"✅ Photo assessment saved with base: {payload.base}")
 
         return {"status": "ok", "result": parsed}
     except Exception as e:
         import traceback
-
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -395,9 +431,12 @@ async def check_grooming_video(
     video: UploadFile = File(...),
     name: str = Form(...),
     iga_code: str = Form(...),
+    base: Optional[str] = Form(None),      # ⭐ NEW: Base location
+    terminal: Optional[str] = Form(None),  # ⭐ NEW: Terminal
 ):
     """
     Video assessment with full persistence to GCS.
+    Now includes base and terminal information.
     """
     MAX_SIZE = 20 * 1024 * 1024  # 20 MB
     size = 0
@@ -416,6 +455,13 @@ async def check_grooming_video(
     await video.seek(0)
 
     try:
+        # ⭐ Log received data
+        print(f"📥 Received video assessment:")
+        print(f"  IGA Code: {iga_code}")
+        print(f"  Name: {name}")
+        print(f"  Base: {base}")
+        print(f"  Terminal: {terminal}")
+
         videos_dir = os.path.join("uploads", "videos")
         os.makedirs(videos_dir, exist_ok=True)
         video_path = os.path.join(videos_dir, video.filename)
@@ -429,28 +475,45 @@ async def check_grooming_video(
         video_bytes = open(video_path, 'rb').read()
         video_gcs_path = upload_image_bytes(video_bytes, iga_code, "video", name)
         
+        # ⭐ Pass base and terminal to GCS save function
         upload_grooming_result_text(
             full_text, 
             name, 
             iga_code, 
             video_gcs_path,
-            parsed=parsed
+            parsed=parsed,
+            base=base,          # ⭐ NEW
+            terminal=terminal   # ⭐ NEW
         )
         
         append_event_to_crew_log(
-            {"type": "video", "parsed": parsed, "video_path": video_gcs_path},
+            {
+                "type": "video", 
+                "parsed": parsed, 
+                "video_path": video_gcs_path,
+                "base": base,          # ⭐ NEW
+                "terminal": terminal   # ⭐ NEW
+            },
             name,
             iga_code,
         )
         
         create_ticket(
-            {"type": "video", "igaCode": iga_code, "crewName": name, "video_path": video_gcs_path}
+            {
+                "type": "video", 
+                "igaCode": iga_code, 
+                "crewName": name, 
+                "video_path": video_gcs_path,
+                "base": base,          # ⭐ NEW
+                "terminal": terminal   # ⭐ NEW
+            }
         )
+
+        print(f"✅ Video assessment saved with base: {base}")
 
         return {"status": "ok", "result": parsed}
     except Exception as e:
         import traceback
-
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -504,6 +567,159 @@ async def search_endpoint(
 ):
     _from, _to = _resolve_range(dateFrom, dateTo, days)
     return search_people(_from, _to, q, page, pageSize)
+
+
+# ============= ⭐ NEW: Base-wise Insights APIs =============
+
+@app.get("/v1/insights/by-base")
+async def insights_by_base(
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None),
+    topN: int = Query(5, description="Number of top bases to return")
+):
+    """
+    Get compliance statistics grouped by base (summary only).
+    Returns top N bases by total test count.
+    """
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    
+    print(f"[BY-BASE] Fetching data from {_from} to {_to}")
+    
+    # Load all records
+    filters = DashboardFilters(date_from=_from, date_to=_to)
+    records = _load_records(filters)
+    
+    print(f"[BY-BASE] Loaded {len(records)} total records")
+    
+    # Group by base
+    base_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
+    
+    for record in records:
+        # ⭐ Read base from record (stored from frontend localStorage)
+        base = record.get("base") or record.get("terminal") or "UNKNOWN"
+        
+        if record["assessment"] == "COMPLIANT":
+            base_stats[base]["compliant"] += 1
+        else:
+            base_stats[base]["nonCompliant"] += 1
+    
+    # Convert to list and calculate totals
+    result = []
+    for base, stats in base_stats.items():
+        total = stats["compliant"] + stats["nonCompliant"]
+        result.append({
+            "base": base,
+            "compliant": stats["compliant"],
+            "nonCompliant": stats["nonCompliant"],
+            "total": total
+        })
+    
+    # Sort by total tests descending, take top N
+    result.sort(key=lambda x: x["total"], reverse=True)
+    
+    print(f"[BY-BASE] Returning {len(result[:topN])} bases")
+    for base in result[:topN]:
+        print(f"[BY-BASE]   {base['base']}: {base['total']} tests ({base['compliant']} compliant)")
+    
+    return {
+        "meta": {
+            "generatedAt": datetime.utcnow().isoformat() + "Z",
+            "filters": {
+                "dateFrom": _from.isoformat(),
+                "dateTo": _to.isoformat()
+            }
+        },
+        "bases": result[:topN]
+    }
+
+
+@app.get("/v1/insights/by-base-with-crew")
+async def insights_by_base_with_crew(
+    dateFrom: Optional[_date] = Query(None),
+    dateTo: Optional[_date] = Query(None),
+    days: Optional[int] = Query(None),
+    topN: int = Query(5, description="Number of top bases to return")
+):
+    """
+    Get compliance statistics grouped by base with crew member breakdown.
+    Returns top N bases by total test count with crew details.
+    """
+    _from, _to = _resolve_range(dateFrom, dateTo, days)
+    
+    print(f"[BY-BASE-CREW] Fetching data from {_from} to {_to}")
+    
+    # Load all records
+    filters = DashboardFilters(date_from=_from, date_to=_to)
+    records = _load_records(filters)
+    
+    print(f"[BY-BASE-CREW] Loaded {len(records)} total records")
+    
+    # Group by base, then by crew
+    base_stats = defaultdict(lambda: {
+        "compliant": 0, 
+        "nonCompliant": 0,
+        "crew": defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
+    })
+    
+    for record in records:
+        # ⭐ Read base from record
+        base = record.get("base") or record.get("terminal") or "UNKNOWN"
+        iga_code = record.get("iga_code")
+        crew_name = record.get("crew_name")
+        
+        # Base-level aggregation
+        if record["assessment"] == "COMPLIANT":
+            base_stats[base]["compliant"] += 1
+            base_stats[base]["crew"][(iga_code, crew_name)]["compliant"] += 1
+        else:
+            base_stats[base]["nonCompliant"] += 1
+            base_stats[base]["crew"][(iga_code, crew_name)]["nonCompliant"] += 1
+    
+    # Build result with crew details
+    result = []
+    for base, stats in base_stats.items():
+        total = stats["compliant"] + stats["nonCompliant"]
+        
+        # Build crew list
+        crew_list = []
+        for (iga_code, crew_name), crew_stats in stats["crew"].items():
+            crew_total = crew_stats["compliant"] + crew_stats["nonCompliant"]
+            crew_list.append({
+                "igaCode": iga_code,
+                "crewName": crew_name,
+                "compliant": crew_stats["compliant"],
+                "nonCompliant": crew_stats["nonCompliant"],
+                "total": crew_total,
+                "passRate": round((crew_stats["compliant"] / crew_total * 100), 2) if crew_total > 0 else 0
+            })
+        
+        # Sort crew by total tests descending
+        crew_list.sort(key=lambda x: x["total"], reverse=True)
+        
+        result.append({
+            "base": base,
+            "compliant": stats["compliant"],
+            "nonCompliant": stats["nonCompliant"],
+            "total": total,
+            "crewMembers": crew_list
+        })
+    
+    # Sort by total tests descending, take top N
+    result.sort(key=lambda x: x["total"], reverse=True)
+    
+    print(f"[BY-BASE-CREW] Returning {len(result[:topN])} bases with crew details")
+    
+    return {
+        "meta": {
+            "generatedAt": datetime.utcnow().isoformat() + "Z",
+            "filters": {
+                "dateFrom": _from.isoformat(),
+                "dateTo": _to.isoformat()
+            }
+        },
+        "bases": result[:topN]
+    }
 
 
 # ============= Individual Analysis - FINAL COMPLETE FIX =============
@@ -722,5 +938,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=True)
-
-
