@@ -1,192 +1,253 @@
-# gcs_utils.py
-import os, json, re, uuid
+"""
+GCS utilities for grooming assessment system
+
+UPDATED WITH BASE SUPPORT:
+- All save operations now include base and terminal information
+- Base data flows from localStorage → Frontend → Backend → GCS
+"""
+
+import os
+import json
+import re
+import uuid
 from datetime import datetime
 from typing import Optional, List, Tuple, Dict
 from google.cloud import storage
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
-
-# ----------------- ENV -----------------
+# ============= ENV =============
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")  # REQUIRED
 GCS_BASE_FOLDER = os.getenv("GCS_BASE_FOLDER", "Grooming-Results")
 
 if not GCS_BUCKET_NAME:
     raise RuntimeError("GCS_BUCKET_NAME is not set. Put it in .env or env vars.")
 
-_client = storage.Client()
-_bucket = _client.bucket(GCS_BUCKET_NAME)
+client = storage.Client()
+bucket = client.bucket(GCS_BUCKET_NAME)
 
-# ----------------- Internals -----------------
+
+# ============= Helpers =============
 def _yyyymmdd(dt: Optional[datetime] = None) -> str:
     dt = dt or datetime.now()
     return dt.strftime("%Y%m%d")
+
 
 def _hhmmss(dt: Optional[datetime] = None) -> str:
     dt = dt or datetime.now()
     return dt.strftime("%H%M%S")
 
+
 def _slugify(s: Optional[str]) -> str:
     s = (s or "Unknown").strip()
-    s = re.sub(r"[^A-Za-z0-9_-]+", "_", s)
+    s = re.sub(r"[^A-Za-z0-9-]", "_", s)
     return s or "Unknown"
 
+
 def _upload_text(content: str, dest_blob: str, content_type: str = "application/json", metadata: Optional[Dict[str, str]] = None) -> str:
-    blob = _bucket.blob(dest_blob)
+    """Upload text content to GCS."""
+    blob = bucket.blob(dest_blob)
     if metadata:
         blob.metadata = metadata
     blob.upload_from_string(content, content_type=content_type)
     return f"gs://{GCS_BUCKET_NAME}/{dest_blob}"
 
-def _upload_bytes(data: bytes, dest_blob: str, content_type: str, metadata: Optional[Dict[str, str]] = None) -> str:
-    blob = _bucket.blob(dest_blob)
-    if metadata:
-        blob.metadata = metadata
+
+def _upload_bytes(data: bytes, dest_blob: str, content_type: str = "application/octet-stream") -> str:
+    """Upload binary data to GCS."""
+    blob = bucket.blob(dest_blob)
     blob.upload_from_string(data, content_type=content_type)
     return f"gs://{GCS_BUCKET_NAME}/{dest_blob}"
 
-def _download_text(src_blob: str) -> str:
-    return _bucket.blob(src_blob).download_as_text()
 
-def _download_json(src_blob: str) -> dict:
-    return json.loads(_download_text(src_blob))
+# ============= Public Functions =============
 
-def _exists(blob_name: str) -> bool:
-    return _bucket.blob(blob_name).exists()
-
-def _list_by_prefix(prefix: str) -> List[str]:
-    names = [b.name for b in _bucket.list_blobs(prefix=prefix)]
-    names.sort()
-    names.reverse()
-    return names
-
-# ----------------- Public APIs -----------------
-def upload_image_bytes(img_bytes: bytes, iga_code: str, kind: str = "frame", crew_name: Optional[str] = None, now: Optional[datetime] = None) -> str:
+def upload_image_bytes(img_bytes: bytes, iga_code: Optional[str], media_type: str = "image", crew_name: Optional[str] = None) -> str:
     """
-    Upload image bytes to:
-      BASE/DATE/images/<IGA>/<kind>_<HHMMSS>.jpg
-    Adds metadata: crew_name, iga_code.
+    Upload image/video bytes to GCS.
+    
+    Args:
+        img_bytes: Binary data (image or video)
+        iga_code: IGA code
+        media_type: "image" or "video"
+        crew_name: Crew member name
+    
+    Returns:
+        GCS path where file was saved
     """
-    dt = now or datetime.now()
-    date_str = _yyyymmdd(dt)
-    time_str = _hhmmss(dt)
-    iga = _slugify(iga_code)
-    blob_path = f"{GCS_BASE_FOLDER}/{date_str}/images/{iga}/{kind}_{time_str}.jpg"
-    return _upload_bytes(
-        img_bytes,
-        blob_path,
-        content_type="image/jpeg",
-        metadata={"crew_name": crew_name or "Unknown", "iga_code": iga_code or "Unknown", "kind": kind},
-    )
+    slug_iga = _slugify(iga_code)
+    slug_crew = _slugify(crew_name or "Unknown")
+    
+    ext = "jpg" if media_type == "image" else "webm"
+    file_name = f"{slug_iga}_{slug_crew}_{_yyyymmdd()}_{_hhmmss()}.{ext}"
+    
+    content_type = "image/jpeg" if media_type == "image" else "video/webm"
+    dest_blob = f"{GCS_BASE_FOLDER}/{media_type}s/{file_name}"
+    
+    return _upload_bytes(img_bytes, dest_blob, content_type)
 
-def append_event_to_crew_log(item: dict, crew_name: Optional[str], iga_code: Optional[str], now: Optional[datetime] = None) -> Tuple[str, int]:
-    """
-    Save to per-crew JSON:
-      BASE/DATE/crew_<IGA>_<HHMMSS>.json with {assessments:[...]}
-    Returns (blob_path, assessment_number)
-    """
-    dt = now or datetime.now()
-    date_str = _yyyymmdd(dt)
-    time_str = _hhmmss(dt)
-    iga = _slugify(iga_code)
-    folder = f"{GCS_BASE_FOLDER}/{date_str}"
-    file_name = f"crew_{iga}_{time_str}.json"
-    blob_path = f"{folder}/{file_name}"
-
-    if _exists(blob_path):
-        doc = _download_json(blob_path)
-    else:
-        doc = {
-            "iga_code": iga_code or "Unknown",
-            "crew_name": crew_name or "Unknown",
-            "date": date_str,
-            "assessments": []
-        }
-
-    num = len(doc.get("assessments", [])) + 1
-    doc["assessments"].append({**item, "assessment_number": num})
-    _upload_text(json.dumps(doc, indent=2), blob_path, content_type="application/json",
-                 metadata={"crew_name": crew_name or "Unknown", "iga_code": iga_code or "Unknown", "type": "per_crew_log"})
-    return blob_path, num
-
-def create_ticket(item: dict, log_name: str = "grooming_tickets_log.json") -> str:
-    """
-    Append an entry to BASE/grooming_tickets_log.json
-    Returns ticket_id
-    """
-    log_blob = f"{GCS_BASE_FOLDER}/{log_name}"
-    log = _download_json(log_blob) if _exists(log_blob) else []
-    ticket_id = f"SNTKT-{str(uuid.uuid4())[:8]}"
-    log.append({"ticket_id": ticket_id, "timestamp": datetime.now().isoformat(), **item})
-    _upload_text(json.dumps(log, indent=2), log_blob, metadata={"type": "tickets_log"})
-    return ticket_id
- 
-def latest_assessments_today(iga_code: str, now: Optional[datetime] = None) -> list:
-    """Return assessments[] from the latest per-crew JSON today (if exists)."""
-    dt = now or datetime.now()
-    date_str = _yyyymmdd(dt)
-    iga = _slugify(iga_code)
-    prefix = f"{GCS_BASE_FOLDER}/{date_str}/crew_{iga}_"
-    names = _list_by_prefix(prefix)
-    if not names:
-        return []
-    latest = names[0]
-    doc = _download_json(latest)
-    return doc.get("assessments", [])
-# gcs_utils.py
 
 def upload_grooming_result_text(
-    result_text: str,
-    crew_name: Optional[str],
-    iga_code: Optional[str],
-    image_gcs_path: Optional[str] = None,
-    parsed: Optional[dict] = None,           # <-- NEW (optional)
-    now: Optional[datetime] = None
+    text: str,
+    crew_name: str,
+    iga_code: str,
+    media_path: str,
+    parsed: Optional[Dict] = None,
+    base: Optional[str] = None,      # ⭐ NEW: Base location
+    terminal: Optional[str] = None   # ⭐ NEW: Terminal
 ) -> str:
-    dt = now or datetime.now()
-    date_str = _yyyymmdd(dt)
-    time_str = _hhmmss(dt)
-    iga = _slugify(iga_code)
-
-    blob_path = f"{GCS_BASE_FOLDER}/{date_str}/results/{iga}/grooming_result_{iga}_{time_str}.json"
-
-    # Safely pick parsed fields if present
-    assessment = None
-    score = None
-    issues = []
-    details = {}
-    scores = {}
-
-    if isinstance(parsed, dict):
-        assessment = parsed.get("assessment")
-        score = parsed.get("score")
-        issues = parsed.get("issues") or []
-        details = parsed.get("details") or {}
-        scores = parsed.get("scores") or {}
-
-    payload = {
-        "timestamp": datetime.now().isoformat(),
-        "iga_code": iga_code or "Unknown",
-        "crew_name": crew_name or "Unknown",
-        "image_gcs_path": image_gcs_path,
-        "result_text": result_text,           # raw Gemini output (unchanged)
-        # ------- NEW convenience fields for Insights --------
-        "assessment": assessment,             # COMPLIANT / NON-COMPLIANT (if available)
-        "score": score,                       # number or null
-        "issues": issues,                     # list[str]
-        "details": details,                   # map
-        "scores": scores,                     # map
-        "parsed": parsed if isinstance(parsed, dict) else None,  # full parsed blob
+    """
+    Save grooming assessment result to GCS.
+    Now includes base and terminal information.
+    
+    Args:
+        text: Raw AI analysis text
+        crew_name: Crew member name
+        iga_code: IGA code
+        media_path: GCS path to image/video
+        parsed: Parsed result dictionary
+        base: Base location (e.g., "DEL", "BOM")
+        terminal: Terminal (e.g., "T1", "T2")
+    
+    Returns:
+        GCS path where result was saved
+    """
+    
+    # Build result data with base information
+    result_data = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "date": datetime.utcnow().date().isoformat(),
+        "crew_name": crew_name,
+        "iga_code": iga_code,
+        "base": base or "UNKNOWN",          # ⭐ NEW
+        "terminal": terminal or "UNKNOWN",  # ⭐ NEW
+        "media_path": media_path,
+        "raw_text": text,
+        "assessment": parsed.get("assessment") if parsed else "NON-COMPLIANT",
+        "score": parsed.get("score") if parsed else 0,
+        "scores": parsed.get("scores") if parsed else {},
+        "issues": parsed.get("issues") if parsed else [],
+        "recommendations": parsed.get("recommendations") if parsed else [],
+        "details": parsed.get("details") if parsed else {},
     }
+    
+    print(f"💾 Saving to GCS with base: {base}, terminal: {terminal}")
+    
+    # Generate GCS path
+    # Format: Grooming-Results/results/YYYY/MM/DD/IGA_CODE_TIMESTAMP.json
+    now = datetime.utcnow()
+    file_name = f"{_slugify(iga_code)}_{now.strftime('%Y%m%d_%H%M%S')}.json"
+    gcs_path = f"{GCS_BASE_FOLDER}/results/{now.year}/{now.month:02d}/{now.day:02d}/{file_name}"
+    
+    # Upload to GCS
+    try:
+        _upload_text(
+            json.dumps(result_data, indent=2),
+            gcs_path,
+            content_type="application/json"
+        )
+        
+        print(f"✅ Saved to GCS: {gcs_path}")
+        return gcs_path
+        
+    except Exception as e:
+        print(f"❌ Error saving to GCS: {e}")
+        raise
 
-    return _upload_text(
-        json.dumps(payload, indent=2),
-        blob_path,
-        metadata={
-            "crew_name": crew_name or "Unknown",
-            "iga_code": iga_code or "Unknown",
-            "type": "grooming_result"
-        }
-    )
-    return _upload_text(json.dumps(payload, indent=2), blob_path, metadata={"crew_name": crew_name or "Unknown", "iga_code": iga_code or "Unknown", "type": "grooming_result"})
+
+def append_event_to_crew_log(
+    event_data: Dict,
+    crew_name: str,
+    iga_code: str
+) -> None:
+    """
+    Append assessment event to crew's log file.
+    Event data now includes base and terminal.
+    
+    Args:
+        event_data: Event dictionary containing assessment details
+        crew_name: Crew member name
+        iga_code: IGA code
+    """
+    
+    log_entry = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "crew_name": crew_name,
+        "iga_code": iga_code,
+        "base": event_data.get("base", "UNKNOWN"),          # ⭐ NEW
+        "terminal": event_data.get("terminal", "UNKNOWN"),  # ⭐ NEW
+        "type": event_data.get("type"),
+        "assessment": event_data.get("parsed", {}).get("assessment"),
+        "score": event_data.get("parsed", {}).get("score"),
+        "media_path": event_data.get("image_path") or event_data.get("video_path"),
+    }
+    
+    # Append to crew log in GCS
+    log_path = f"{GCS_BASE_FOLDER}/crew_logs/{_slugify(iga_code)}.jsonl"
+    
+    try:
+        blob = bucket.blob(log_path)
+        
+        # Append to existing log
+        existing_content = ""
+        if blob.exists():
+            existing_content = blob.download_as_text()
+        
+        new_content = existing_content + json.dumps(log_entry) + "\n"
+        blob.upload_from_string(new_content, content_type="text/plain")
+        
+        print(f"✅ Appended to crew log: {log_path}")
+        
+    except Exception as e:
+        print(f"❌ Error appending to crew log: {e}")
+
+
+def create_ticket(ticket_data: Dict) -> None:
+    """
+    Create ticket for assessment.
+    Ticket now includes base and terminal.
+    
+    Args:
+        ticket_data: Ticket information dictionary
+    """
+    
+    ticket = {
+        "ticket_id": f"GROOM_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "iga_code": ticket_data.get("igaCode"),
+        "crew_name": ticket_data.get("crewName"),
+        "base": ticket_data.get("base", "UNKNOWN"),          # ⭐ NEW
+        "terminal": ticket_data.get("terminal", "UNKNOWN"),  # ⭐ NEW
+        "type": ticket_data.get("type"),
+        "media_path": ticket_data.get("image_path") or ticket_data.get("video_path"),
+        "status": "pending",
+    }
+    
+    ticket_path = f"{GCS_BASE_FOLDER}/tickets/{ticket['ticket_id']}.json"
+    
+    try:
+        _upload_text(
+            json.dumps(ticket, indent=2),
+            ticket_path,
+            content_type="application/json"
+        )
+        
+        print(f"✅ Created ticket: {ticket_path}")
+        
+    except Exception as e:
+        print(f"❌ Error creating ticket: {e}")
+
+
+# ============= List and Download (for dashboard) =============
+
+def _list_by_prefix(prefix: str) -> List[storage.Blob]:
+    """List all blobs with given prefix."""
+    return list(bucket.list_blobs(prefix=prefix))
+
+
+def _download_json(blob_name: str) -> Dict:
+    """Download and parse JSON blob."""
+    blob = bucket.blob(blob_name)
+    content = blob.download_as_text()
+    return json.loads(content)
