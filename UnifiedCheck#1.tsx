@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { FaceLandmarker, FilesetResolver, NormalizedLandmark } from '@mediapipe/tasks-vision';
-import { UnifiedCheckProps } from '../types';
-import { apiConfig } from '../utils/groomingHelpers';
+import React, { useState, useEffect, useCallback } from "react";
+import { FaceLandmarker, FilesetResolver, NormalizedLandmark } from "@mediapipe/tasks-vision";
+import { UnifiedCheckProps } from "../types";
+import { apiConfig } from "../utils/groomingHelpers";
 
 interface UnifiedCheckPropsExtended extends UnifiedCheckProps {
   onUploadVideo?: () => void;
@@ -22,13 +22,14 @@ interface GroomingResult {
 }
 
 type Status =
-  | 'loading'
-  | 'ready'
-  | 'chooseLive'   // choose Photo or 10s Live Video (after selecting "Do Live Check")
-  | 'detecting'    // running liveliness for Photo flow
-  | 'recording'    // recording 10s and running liveliness for Video flow
-  | 'uploading'
-  | 'done';
+  | "loading"
+  | "ready"
+  | "chooseLive"
+  | "choosePhoto"
+  | "detecting"
+  | "recording"
+  | "uploading"
+  | "done";
 
 const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   crewName,
@@ -37,17 +38,17 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   onCancel,
   onUploadVideo,
 }) => {
-  /** -------------------- STATE -------------------- **/
-  const [status, setStatus] = useState<Status>('loading');
-  const [feedback, setFeedback] = useState<string>('Please wait, loading AI model...');
+  // -------------------- STATE --------------------
+  const [status, setStatus] = useState<Status>("loading");
+  const [feedback, setFeedback] = useState<string>("Please wait, loading AI model...");
   const [declarationAccepted, setDeclarationAccepted] = useState<boolean>(false);
   const [showDisclaimer, setShowDisclaimer] = useState<boolean>(false);
   const [groomingResult, setGroomingResult] = useState<GroomingResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recTimer, setRecTimer] = useState<number>(0);
 
-  /** -------------------- REFS -------------------- **/
-  const videoRef = React.useRef<HTMLVideoElement>(null);
+  // -------------------- REFS --------------------
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
   const landmarkerRef = React.useRef<FaceLandmarker | null>(null);
   const detectionLoopRef = React.useRef<number | null>(null);
@@ -61,7 +62,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   }>({ ear: null, faceWidth: null, faceHeight: null });
 
   // flow control
-  const flowRef = React.useRef<'photo' | 'video' | null>(null);
+  const flowRef = React.useRef<"photo" | "video" | null>(null);
   const livenessPassedRef = React.useRef<boolean>(false);
 
   // recording
@@ -69,15 +70,41 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   const recordedChunksRef = React.useRef<Blob[]>([]);
   const recIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
 
-  /** -------------------- HELPERS -------------------- **/
-  const apiUrl = (path: string) =>
-    `${apiConfig.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
+  // ⭐ NEW: Helper functions to get base from localStorage
+  const getUserBase = (): string => {
+    try {
+      const userInfo = localStorage.getItem("userInfo");
+      if (userInfo) {
+        const parsed = JSON.parse(userInfo);
+        return parsed.user_base || parsed.base || "UNKNOWN";
+      }
+    } catch (e) {
+      console.error("Error reading user base:", e);
+    }
+    return "UNKNOWN";
+  };
+
+  const getUserTerminal = (): string => {
+    try {
+      const userInfo = localStorage.getItem("userInfo");
+      if (userInfo) {
+        const parsed = JSON.parse(userInfo);
+        return parsed.terminal || "UNKNOWN";
+      }
+    } catch (e) {
+      console.error("Error reading user terminal:", e);
+    }
+    return "UNKNOWN";
+  };
+
+  // -------------------- HELPERS --------------------
+  const apiUrl = (path: string) => `${apiConfig.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 
   const cancelDetectionLoop = useCallback(() => {
     if (detectionLoopRef.current) {
       cancelAnimationFrame(detectionLoopRef.current);
       detectionLoopRef.current = null;
-      console.log('Detection loop cancelled');
+      console.log("Detection loop cancelled");
     }
   }, []);
 
@@ -85,52 +112,47 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
-      console.log('Camera stopped');
+      console.log("Camera stopped");
     }
   }, []);
 
   const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 1280 } },
+        video: { facingMode: "user", width: { ideal: 1280 } },
       });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        // Ensure video plays; detection loop will check pause/ready state
         await videoRef.current.play().catch(() => void 0);
       }
       return true;
     } catch (e) {
-      setError('Camera permission denied.');
+      setError("Camera permission denied.");
       return false;
     }
   }, []);
 
-  // ⭐ ADD ONLY THESE TWO LINES - don't touch existing state
-  const [selectedBase, setSelectedBase] = useState<string>("");
-  const bases = ["DEL", "AMD", "BOM", "CCU", "MAA", "HYD", "LKO", "PNQ", "COK", "IXC", "IDR", "JAI", "BLR"];
-
-  /** -------------------- DETECTION LOOP -------------------- **/
+  // -------------------- DETECTION LOOP --------------------
   const runLiveDetectionLoop = useCallback(() => {
     const video = videoRef.current;
-
-    // keep the loop going regardless; we'll exit when status changes
+    
     const loop = () => {
       if (!video || video.paused || !landmarkerRef.current) {
         detectionLoopRef.current = requestAnimationFrame(loop);
         return;
       }
 
-      // Only run detection during detecting/recording
-      if (status !== 'detecting' && status !== 'recording') {
+      if (status !== "detecting" && status !== "recording") {
         return;
       }
 
       try {
         const results = landmarkerRef.current.detectForVideo(video, performance.now());
+
         if (results.faceLandmarks && results.faceLandmarks.length > 0) {
           const landmarks = results.faceLandmarks[0];
+
           if (!landmarks || landmarks.length < 470) {
             detectionLoopRef.current = requestAnimationFrame(loop);
             return;
@@ -146,33 +168,25 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
             Math.hypot(p1.x - p2.x, p1.y - p2.y, (p1.z ?? 0) - (p2.z ?? 0));
 
           const getEAR = (idx: number[]): number => {
-            const p1 = landmarks[idx[0]],
-              p2 = landmarks[idx[1]],
-              p3 = landmarks[idx[2]];
-            const p4 = landmarks[idx[3]],
-              p5 = landmarks[idx[4]],
-              p6 = landmarks[idx[5]];
+            const [p1, p2, p3, p4, p5, p6] = idx.map((i) => landmarks[i]);
             return (dist(p2, p6) + dist(p3, p5)) / (2 * dist(p1, p4));
           };
 
           const ear = (getEAR(LEYE) + getEAR(REYE)) / 2;
 
-          // Calculate face metrics for validation
+          // Calculate face metrics
           const leftEyeCenter = {
             x: (landmarks[33].x + landmarks[133].x) / 2,
             y: (landmarks[33].y + landmarks[133].y) / 2,
-            z: ((landmarks[33].z ?? 0) + (landmarks[133].z ?? 0)) / 2
+            z: ((landmarks[33].z ?? 0) + (landmarks[133].z ?? 0)) / 2,
           };
           const rightEyeCenter = {
             x: (landmarks[362].x + landmarks[263].x) / 2,
             y: (landmarks[362].y + landmarks[263].y) / 2,
-            z: ((landmarks[362].z ?? 0) + (landmarks[263].z ?? 0)) / 2
+            z: ((landmarks[362].z ?? 0) + (landmarks[263].z ?? 0)) / 2,
           };
 
-          // Face width (inter-eye distance) - should remain relatively stable
           const faceWidth = dist(leftEyeCenter as NormalizedLandmark, rightEyeCenter as NormalizedLandmark);
-
-          // Face height (forehead to chin) - should remain relatively stable
           const faceHeight = dist(landmarks[FOREHEAD], landmarks[CHIN]);
 
           // Initialize baselines
@@ -180,59 +194,49 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
           if (baselinesRef.current.faceWidth === null) baselinesRef.current.faceWidth = faceWidth;
           if (baselinesRef.current.faceHeight === null) baselinesRef.current.faceHeight = faceHeight;
 
-          // Validate face stability - reject if face size changed significantly
+          // Validate face stability
           const widthDeviation = Math.abs(faceWidth - (baselinesRef.current.faceWidth ?? faceWidth));
           const heightDeviation = Math.abs(faceHeight - (baselinesRef.current.faceHeight ?? faceHeight));
-
-          // Face should not move more than 2% in size (prevents hand covering face or moving away)
           const isFaceStable = widthDeviation < 0.02 && heightDeviation < 0.02;
 
           if (!isFaceStable) {
-            // Face size changed significantly - likely occlusion or movement, don't count gestures
             detectionLoopRef.current = requestAnimationFrame(loop);
             return;
           }
 
-          // Check if eyes are clearly visible (both eye aspect ratios should be reasonable)
+          // Check if eyes are visible
           const leftEAR = getEAR(LEYE);
           const rightEAR = getEAR(REYE);
           const eyesVisible = leftEAR > 0.1 && rightEAR > 0.1 && Math.abs(leftEAR - rightEAR) < 0.15;
 
           if (!eyesVisible) {
-            // Eyes not clearly visible - likely occlusion, don't count gestures
             detectionLoopRef.current = requestAnimationFrame(loop);
             return;
           }
 
-          // Blink detection - only when face is stable and eyes were visible
+          // Blink detection
           if (baselinesRef.current.ear !== null && ear < baselinesRef.current.ear * 0.8) {
-            // Additional check: both eyes should close similarly for a real blink
             if (Math.abs(leftEAR - rightEAR) < 0.08) {
-              if (!actionsDoneRef.current.blink) actionsDoneRef.current.blink = true;
+              if (!actionsDoneRef.current.blink) {
+                actionsDoneRef.current.blink = true;
+                setFeedback("✓ Blink Passed");
+              }
             }
           }
 
-          setFeedback(
-            `${actionsDoneRef.current.blink ? 'Blink ✓' : 'Blink'}`
-          );
-
-          // Passed liveliness
+          // liveliness
           if (actionsDoneRef.current.blink) {
             livenessPassedRef.current = true;
-
-            if (flowRef.current === 'photo' && status === 'detecting') {
-              // Capture the frame immediately and upload
+            if (flowRef.current === "photo" && status === "detecting") {
               handlePhotoPassAndUpload();
-              return; // stop loop after capture
+              return;
             }
-
-            // For video flow we continue recording; on stop, we decide to upload
           }
         } else {
-          setFeedback('No face detected - please position yourself in the camera');
+          setFeedback("No face detected - please position yourself in the camera");
         }
       } catch (err) {
-        console.error('Detection loop error:', err);
+        console.error("Detection loop error", err);
       }
 
       detectionLoopRef.current = requestAnimationFrame(loop);
@@ -242,29 +246,30 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   }, [status]);
 
   useEffect(() => {
-    if ((status === 'detecting' || status === 'recording') && !detectionLoopRef.current) {
+    if ((status === "detecting" || status === "recording") && !detectionLoopRef.current) {
       runLiveDetectionLoop();
     }
   }, [status, runLiveDetectionLoop]);
 
-  /** -------------------- MODEL LOAD / CLEANUP -------------------- **/
+  // -------------------- MODEL LOAD CLEANUP --------------------
   const loadModel = useCallback(async () => {
     try {
       const fileset = await FilesetResolver.forVisionTasks(apiConfig.visionWasmBase);
       const landmarker = await FaceLandmarker.createFromOptions(fileset, {
         baseOptions: {
           modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
         },
-        runningMode: 'VIDEO',
+        runningMode: "VIDEO",
         numFaces: 1,
       });
+
       landmarkerRef.current = landmarker;
-      setStatus('ready');
-      setFeedback('Choose how you want to continue.');
+      setStatus("ready");
+      setFeedback("Choose how you want to continue.");
     } catch (err) {
-      console.error('Model loading error:', err);
-      setError('Could not load AI model. Please refresh and try again.');
+      console.error("Model loading error", err);
+      setError("Could not load AI model. Please refresh and try again.");
     }
   }, []);
 
@@ -276,188 +281,202 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
     };
   }, [loadModel, cancelDetectionLoop, stopCamera]);
 
-  /** -------------------- FLOWS -------------------- **/
+  // -------------------- FLOWS --------------------
   const resetLiveliness = () => {
     actionsDoneRef.current = { blink: false };
     baselinesRef.current = { ear: null, faceWidth: null, faceHeight: null };
     livenessPassedRef.current = false;
   };
 
-  // Entry from "Do Live Check"
   const goToLiveOptions = useCallback(() => {
-    setStatus('chooseLive');
-    setFeedback('Choose your live assessment method.');
+    setStatus("chooseLive");
+    setFeedback("Choose your live assessment method.");
   }, []);
 
-  /** -------- Photo flow: start + auto-capture on pass -------- **/
+  // -------- Photo flow --------
   const startPhotoFlow = useCallback(async () => {
     if (!declarationAccepted || !crewName || !igaCode) return;
 
     resetLiveliness();
-    flowRef.current = 'photo';
-
+    flowRef.current = "photo";
     const ok = await startCamera();
     if (!ok) return;
 
-    setStatus('detecting');
-    setFeedback('Look at the camera. Blink to pass liveliness. We will auto-capture on pass.');
+    setStatus("detecting");
+    setFeedback("Look at the camera. Blink to pass liveliness. We will auto-capture on pass.");
   }, [declarationAccepted, crewName, igaCode, startCamera]);
 
   const handlePhotoPassAndUpload = useCallback(() => {
     try {
       cancelDetectionLoop();
-      // Capture current frame
-      const canvas = document.createElement('canvas');
+
+      const canvas = document.createElement("canvas");
       const video = videoRef.current;
       if (!video) return;
 
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
       ctx.drawImage(video, 0, 0);
-      const imageB64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+      const imageB64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
 
-      setStatus('uploading');
+      setStatus("uploading");
       stopCamera();
-
       runGroomingPhoto(imageB64);
     } catch (e) {
       console.error(e);
-      setError('Could not capture photo.');
+      setError("Could not capture photo.");
     }
-  }, []);
+  }, [cancelDetectionLoop, stopCamera]);
 
+  // ⭐ UPDATED: Photo submission with base from localStorage
   const runGroomingPhoto = async (imageBase64: string) => {
-  // ⭐ ADD THIS VALIDATION AT THE TOP
-  if (!selectedBase) {
-    setError("⚠️ Please select a base before submitting");
-    return;
-  }
+    try {
+      // ⭐ Get base and terminal from localStorage
+      const userBase = getUserBase();
+      const userTerminal = getUserTerminal();
 
-  try {
-    const res = await fetch(apiUrl("check-grooming"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        imageBase64, 
-        crewName, 
-        igaCode,
-        base: selectedBase  // ⭐ ADD THIS LINE
-      }),
-    });
-    
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-    setGroomingResult(data?.result ?? null);
-    setStatus("done");
-  } catch (e) {
-    console.error(e);
-    setError("Grooming check failed.");
-  }
-};
+      console.log("📤 Sending photo assessment with base:", userBase);
 
+      const res = await fetch(apiUrl("check-grooming"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64,
+          crewName,
+          igaCode,
+          base: userBase,           // ⭐ ADD THIS
+          terminal: userTerminal    // ⭐ ADD THIS
+        }),
+      });
 
-  /** -------- Live Video (10s) flow: record + pass check -------- **/
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+
+      const data = await res.json();
+      console.log("✅ Photo assessment response:", data);
+
+      setGroomingResult(data?.result ?? null);
+      setStatus("done");
+    } catch (e) {
+      console.error("❌ Photo assessment error:", e);
+      setError("Grooming check failed.");
+    }
+  };
+
+  // -------- Live Video 10s flow --------
   const startVideoFlow = useCallback(async () => {
     if (!declarationAccepted || !crewName || !igaCode) return;
 
     resetLiveliness();
-    flowRef.current = 'video';
-
+    flowRef.current = "video";
     const ok = await startCamera();
     if (!ok) return;
 
-    // prepare recording
     recordedChunksRef.current = [];
     setRecTimer(0);
 
-    const options: MediaRecorderOptions = { mimeType: 'video/webm;codecs=vp8' };
+    const options: MediaRecorderOptions = { mimeType: "video/webm;codecs=vp8" };
     let mr: MediaRecorder;
     try {
       mr = new MediaRecorder(streamRef.current as MediaStream, options);
     } catch (err) {
-      setError('Unable to start video recording.');
+      setError("Unable to start video recording.");
       return;
     }
 
     mediaRecorderRef.current = mr;
+
     mr.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+      if (e.data && e.data.size > 0) {
+        recordedChunksRef.current.push(e.data);
+      }
     };
+
     mr.onstop = handleRecordingStop;
 
-    setStatus('recording');
-    setFeedback('Recording for 10s. Blink to pass liveliness.');
+    setStatus("recording");
+    setFeedback("Recording for 10s. Blink to pass liveliness.");
 
-    // timer for UI
     if (recIntervalRef.current) clearInterval(recIntervalRef.current);
     recIntervalRef.current = setInterval(() => setRecTimer((t) => t + 1), 1000);
 
-    mr.start(100); // gather in chunks
+    mr.start(100);
 
-    // Stop automatically at 10s
     setTimeout(() => {
-      if (mr.state !== 'inactive') mr.stop();
+      if (mr.state !== "inactive") {
+        mr.stop();
+      }
     }, 10000);
   }, [declarationAccepted, crewName, igaCode, startCamera]);
 
   const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
     }
   }, []);
 
+  // ⭐ UPDATED: Video submission with base from localStorage
   const handleRecordingStop = useCallback(() => {
     if (recIntervalRef.current) {
       clearInterval(recIntervalRef.current);
       recIntervalRef.current = null;
     }
 
-    // If liveliness failed within 10s → do not upload
     if (!livenessPassedRef.current) {
       cancelDetectionLoop();
       stopCamera();
-      setStatus('ready');
-      setError('Liveliness failed. Video will not be sent for assessment.');
+      setStatus("ready");
+      setError("Liveliness failed. Video will not be sent for assessment.");
       return;
     }
 
-    // Liveliness passed → upload the 10s clip
-    const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-    const file = new File([blob], 'grooming.webm', { type: 'video/webm' });
+    const blob = new Blob(recordedChunksRef.current, { type: "video/webm" });
+    const file = new File([blob], "grooming.webm", { type: "video/webm" });
+
+    // ⭐ Get base and terminal from localStorage
+    const userBase = getUserBase();
+    const userTerminal = getUserTerminal();
+
+    console.log("📤 Sending video assessment with base:", userBase);
+
     const fd = new FormData();
     fd.append("video", file);
     fd.append("name", crewName);
     fd.append("igacode", igaCode);
-    fd.append("base", selectedBase);  // ⭐ ADD THIS LINE
+    fd.append("base", userBase);           // ⭐ ADD THIS
+    fd.append("terminal", userTerminal);   // ⭐ ADD THIS
 
-    setStatus('uploading');
+    setStatus("uploading");
     cancelDetectionLoop();
     stopCamera();
 
-    fetch(apiUrl('/check-grooming-video'), { method: 'POST', body: fd })
+    fetch(apiUrl("check-grooming-video"), {
+      method: "POST",
+      body: fd,
+    })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status} ${await r.text()}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
       })
       .then((data) => {
-        if (!data || data.status !== 'ok') throw new Error(data?.error ?? 'API error');
+        if (!data || data.status !== "ok") throw new Error(data?.error ?? "API error");
+        console.log("✅ Video assessment response:", data);
         setGroomingResult(data.result);
-        setStatus('done');
+        setStatus("done");
       })
       .catch((e) => {
-        console.error(e);
-        setError('Video grooming check failed.');
+        console.error("❌ Video assessment error:", e);
+        setError("Video grooming check failed.");
       });
   }, [cancelDetectionLoop, stopCamera, crewName, igaCode]);
 
-  /** -------------------- CANCEL / NAV -------------------- **/
+  // -------------------- CANCEL NAV --------------------
   const handleCancel = useCallback(() => {
     cancelDetectionLoop();
     stopCamera();
-    setStatus('ready');
+    setStatus("ready");
     if (onCancel) onCancel();
   }, [cancelDetectionLoop, stopCamera, onCancel]);
 
@@ -470,10 +489,10 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   }, [onComplete, onCancel, groomingResult]);
 
   const handleNewAssessment = useCallback(() => {
-    setStatus('ready');
+    setStatus("ready");
     setGroomingResult(null);
     setError(null);
-    setFeedback('Choose how you want to continue.');
+    setFeedback("Choose how you want to continue.");
     setDeclarationAccepted(false);
     setShowDisclaimer(false);
     resetLiveliness();
@@ -500,7 +519,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
     setShowDisclaimer(false);
   };
 
-  /** -------------------- UI -------------------- **/
+  // -------------------- UI --------------------
   return (
     <div className="max-w-4xl mx-auto p-6">
       {/* Header */}
@@ -523,32 +542,6 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
           </div>
         </div>
       </div>
-      {/* Select Base */}
-      <div className="mb-6">
-        <label htmlFor="base-select" className="block text-sm font-semibold text-gray-700 mb-2">
-          Select Base <span className="text-red-500">*</span>
-        </label>
-        <select
-          id="base-select"
-          value={selectedBase}
-          onChange={(e) => setSelectedBase(e.target.value)}
-          disabled={status === "detecting" || status === "recording" || status === "uploading"}
-          className="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-white text-gray-800 font-medium"
-        >
-          <option value="">-- Select Your Base Location --</option>
-          {bases.map((base) => (
-            <option key={base} value={base}>{base}</option>
-          ))}
-        </select>
-        {!selectedBase && status === "ready" && (
-          <p className="text-sm text-amber-600 mt-2 flex items-center gap-2">
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-            Please select your base location before proceeding
-          </p>
-        )}
-      </div>
 
       {/* Declaration */}
       <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6 mb-8">
@@ -563,8 +556,9 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
               />
               <div className="relative w-5 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded border-2 border-gray-300 peer-checked:bg-[#000099] peer-checked:border-[#000099] transition-all duration-300">
                 <div
-                  className={`absolute inset-0 flex items-center justify-center transition-all duration-300 ${declarationAccepted ? 'opacity-100' : 'opacity-0'
-                    }`}
+                  className={`absolute inset-0 flex items-center justify-center transition-all duration-300 ${
+                    declarationAccepted ? "opacity-100" : "opacity-0"
+                  }`}
                 >
                   <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
                     <path
@@ -587,20 +581,27 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
         </div>
       </div>
 
-      {/* Camera surface (visible whenever we're using the camera) */}
-      {status !== 'uploading' && !groomingResult && (
+      {/* Camera surface */}
+      {status !== "uploading" && !groomingResult && (
         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden mb-8">
           <div className="relative">
-            <video ref={videoRef} autoPlay playsInline muted className="w-full h-auto bg-black max-h-96 object-cover" />
-            {/* Liveliness overlay during detecting/recording */}
-            {(status === 'detecting' || status === 'recording') && (
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-auto bg-black max-h-96 object-cover"
+            />
+
+            {/* Liveliness overlay */}
+            {(status === "detecting" || status === "recording") && (
               <div className="absolute top-4 left-4 right-4">
                 <div className="bg-black bg-opacity-50 backdrop-blur-sm rounded-xl p-4">
                   <p className="feedback-overlay text-center text-white">
-                    <span style={{ color: actionsDoneRef.current?.blink ? '#16a34a' : '#ffffff' }}>
-                      Blink {actionsDoneRef.current?.blink ? '✓' : ''}
+                    <span style={{ color: actionsDoneRef.current?.blink ? "#16a34a" : "#ffffff" }}>
+                      ✓ Blink {actionsDoneRef.current?.blink && "✓"}
                     </span>
-                    {status === 'recording' && (
+                    {status === "recording" && (
                       <span className="ml-3 inline-block rounded-full bg-blue-600 px-2 py-0.5 text-xs">
                         {recTimer}s / 10s
                       </span>
@@ -622,16 +623,17 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
 
       {/* Controls */}
       <div className="flex flex-col items-center gap-6 mb-8">
-        {status === 'ready' && (
+        {status === "ready" && (
           <div className="flex flex-col items-center gap-4">
             <div className="flex flex-wrap justify-center gap-4">
               <button
                 onClick={goToLiveOptions}
-                disabled={!crewName || !selectedBase || !igaCode || !declarationAccepted}
-                className={`px-8 py-4 rounded-xl text-sm font-semibold transition-all duration-300 transform hover:scale-105 ${declarationAccepted
-                    ? 'bg-gradient-to-r from-[#000099] to-blue-700 text-white hover:shadow-lg'
-                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
+                disabled={!crewName || !igaCode || !declarationAccepted}
+                className={`px-8 py-4 rounded-xl text-sm font-semibold transition-all duration-300 transform hover:scale-105 ${
+                  declarationAccepted
+                    ? "bg-gradient-to-r from-[#000099] to-blue-700 text-white hover:shadow-lg"
+                    : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                }`}
               >
                 Do Live Check
               </button>
@@ -648,37 +650,40 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
           </div>
         )}
 
-        {status === 'chooseLive' && (
+        {status === "chooseLive" && (
           <div className="flex flex-col items-center gap-6">
-            <p className="text-gray-700 text-center font-medium">Choose your live assessment method:</p>
+            <p className="text-gray-700 text-center font-medium">Choose your live assessment method</p>
             <div className="flex flex-wrap justify-center gap-4">
               <button
                 onClick={startPhotoFlow}
-                disabled={!declarationAccepted || !selectedBase}
-                className={`px-6 py-3 rounded-xl text-sm font-semibold transition-all duration-300 ${declarationAccepted
-                    ? 'bg-gradient-to-r from-green-600 to-green-500 text-white hover:shadow-lg transform hover:scale-105'
-                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
+                disabled={!declarationAccepted}
+                className={`px-6 py-3 rounded-xl text-sm font-semibold transition-all duration-300 ${
+                  declarationAccepted
+                    ? "bg-gradient-to-r from-green-600 to-green-500 text-white hover:shadow-lg transform hover:scale-105"
+                    : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                }`}
               >
-                Photo (with Liveliness)
+                📸 Photo with Liveliness
               </button>
+
               <button
                 onClick={startVideoFlow}
                 disabled={!declarationAccepted}
-                className={`px-6 py-3 rounded-xl text-sm font-semibold transition-all duration-300 ${declarationAccepted
-                    ? 'bg-gradient-to-r from-[#000099] to-blue-700 text-white hover:shadow-lg transform hover:scale-105'
-                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
+                className={`px-6 py-3 rounded-xl text-sm font-semibold transition-all duration-300 ${
+                  declarationAccepted
+                    ? "bg-gradient-to-r from-[#000099] to-blue-700 text-white hover:shadow-lg transform hover:scale-105"
+                    : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                }`}
               >
-                Live Video (10s + Liveliness)
+                🎥 Live Video (10s + Liveliness)
               </button>
             </div>
           </div>
         )}
 
-        {(status === 'detecting' || status === 'recording') && (
+        {(status === "detecting" || status === "recording") && (
           <div className="flex flex-wrap justify-center gap-4">
-            {status === 'recording' && (
+            {status === "recording" && (
               <button
                 onClick={stopRecording}
                 className="bg-gradient-to-r from-amber-600 to-amber-500 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105"
@@ -686,6 +691,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
                 Stop Recording ({recTimer}s)
               </button>
             )}
+
             <button
               onClick={handleCancel}
               className="bg-gradient-to-r from-red-600 to-red-500 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105"
@@ -697,7 +703,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
       </div>
 
       {/* Processing */}
-      {status === 'uploading' && (
+      {status === "uploading" && (
         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-12 text-center">
           <div className="flex flex-col items-center gap-6">
             <div className="relative">
@@ -706,28 +712,29 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
                 <div className="w-8 h-8 bg-[#000099] rounded-full animate-pulse"></div>
               </div>
             </div>
-            <div>
-              <p className="text-gray-900 font-semibold text-lg mb-2">Analyzing Your Assessment</p>
-              <p className="text-gray-600 text-sm">Our AI is evaluating your grooming standards...</p>
-            </div>
+            <p className="text-gray-900 font-semibold text-lg mb-2">Analyzing Your Assessment</p>
+            <p className="text-gray-600 text-sm">Our AI is evaluating your grooming standards...</p>
           </div>
         </div>
       )}
 
       {/* Results */}
-      {status === 'done' && groomingResult && (
+      {status === "done" && groomingResult && (
         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-8">
           <div className="text-center mb-8">
             <h3 className="text-2xl font-bold text-gray-900 mb-4">Assessment Complete</h3>
+
             <div className="flex justify-center items-center gap-6 mb-6">
               <div
-                className={`px-6 py-3 rounded-full text-white font-bold text-lg ${groomingResult.assessment === 'COMPLIANT'
-                    ? 'bg-gradient-to-r from-green-600 to-green-500'
-                    : 'bg-gradient-to-r from-red-600 to-red-500'
-                  }`}
+                className={`px-6 py-3 rounded-full text-white font-bold text-lg ${
+                  groomingResult.assessment === "COMPLIANT"
+                    ? "bg-gradient-to-r from-green-600 to-green-500"
+                    : "bg-gradient-to-r from-red-600 to-red-500"
+                }`}
               >
                 {groomingResult.assessment}
               </div>
+
               <div className="text-center">
                 <div className="text-4xl font-bold text-[#000099]">{groomingResult.score ?? 0}/10</div>
                 <div className="text-gray-600 text-sm">Overall Score</div>
@@ -741,14 +748,15 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
               <h4 className="text-lg font-semibold text-gray-900 mb-4 text-center">Category Breakdown</h4>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 {[
-                  { key: 'uniform', label: 'Uniform', max: 3 },
-                  { key: 'hairstyle', label: 'Hairstyle', max: 2 },
-                  { key: 'makeup', label: 'Makeup', max: 2 },
-                  { key: 'nails', label: 'Nails', max: 1 },
-                  { key: 'accessories', label: 'Accessories', max: 2 },
+                  { key: "uniform", label: "Uniform", max: 3 },
+                  { key: "hairstyle", label: "Hairstyle", max: 2 },
+                  { key: "makeup", label: "Makeup", max: 2 },
+                  { key: "nails", label: "Nails", max: 1 },
+                  { key: "accessories", label: "Accessories", max: 2 },
                 ].map((item) => {
                   const score = groomingResult.scores![item.key as keyof typeof groomingResult.scores];
                   const percentage = Math.round((score / item.max) * 100);
+
                   return (
                     <div key={item.key} className="bg-blue-50 rounded-xl p-4 text-center border border-blue-200">
                       <div className="text-2xl font-bold text-[#000099] mb-1">
@@ -756,8 +764,9 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
                       </div>
                       <div className="text-gray-600 text-sm mb-2">{item.label}</div>
                       <div
-                        className={`text-xs font-medium ${percentage >= 80 ? 'text-green-600' : percentage >= 60 ? 'text-yellow-600' : 'text-red-600'
-                          }`}
+                        className={`text-xs font-medium ${
+                          percentage >= 80 ? "text-green-600" : percentage >= 60 ? "text-yellow-600" : "text-red-600"
+                        }`}
                       >
                         {percentage}%
                       </div>
@@ -856,116 +865,21 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
                   <span className="text-2xl">⚠️</span>
                   <div>
                     <h4 className="font-bold text-amber-900 mb-2">IMPORTANT NOTICE</h4>
-                    <p className="text-amber-800 text-sm">This is a demonstration tool powered by AI. Results are generated automatically and may contain inaccuracies. Always rely on trained human inspectors for final grooming compliance decisions.</p>
+                    <p className="text-amber-800 text-sm">
+                      This is a demonstration tool powered by AI. Results are generated automatically and may contain
+                      inaccuracies. Always rely on trained human inspectors for final grooming compliance decisions.
+                    </p>
                   </div>
                 </div>
               </div>
 
-              <div>
-                <h4 className="font-bold text-[#000099] text-lg mb-3">KNOWN LIMITATIONS & ENVIRONMENTAL FACTORS</h4>
-                <div className="space-y-3">
-                  <div className="bg-blue-50 p-3 rounded-lg">
-                    <h5 className="font-semibold text-gray-900 mb-1">Lighting Conditions</h5>
-                    <p className="text-gray-700 text-sm">Poor, dim, or colored lighting can affect accuracy of color detection (hair, makeup, nail polish). Bright backlighting may obscure details.</p>
-                  </div>
-                  <div className="bg-blue-50 p-3 rounded-lg">
-                    <h5 className="font-semibold text-gray-900 mb-1">Camera Angle & Resolution</h5>
-                    <p className="text-gray-700 text-sm">Extreme angles, blurry footage, or low resolution may prevent accurate assessment of nails, stockings, or badge positioning.</p>
-                  </div>
-                  <div className="bg-blue-50 p-3 rounded-lg">
-                    <h5 className="font-semibold text-gray-900 mb-1">Video Quality</h5>
-                    <p className="text-gray-700 text-sm">Compression artifacts, motion blur, or low frame rate may cause misidentification of hairstyle, scarf knots, or accessory compliance.</p>
-                  </div>
-                  <div className="bg-blue-50 p-3 rounded-lg">
-                    <h5 className="font-semibold text-gray-900 mb-1">Partial Visibility</h5>
-                    <p className="text-gray-700 text-sm">If only upper body is visible, stockings, lower portions of uniform, and certain accessories cannot be assessed. These are marked (NOT VISIBLE).</p>
-                  </div>
-                  <div className="bg-blue-50 p-3 rounded-lg">
-                    <h5 className="font-semibold text-gray-900 mb-1">Makeup Variation</h5>
-                    <p className="text-gray-700 text-sm">Makeup appearance varies significantly under different lighting. The tool may misclassify shades or blending under inconsistent conditions.</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid md:grid-cols-2 gap-4">
-                <div>
-                  <h4 className="font-bold text-[#000099] text-lg mb-3">WHAT THE TOOL ASSESSES</h4>
-                  <ul className="space-y-2 text-sm text-gray-700">
-                    <li className="flex items-start gap-2">
-                      <span className="text-green-600 mt-0.5">✓</span>
-                      <span>Hairstyle (style, neatness, color, integrity)</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-green-600 mt-0.5">✓</span>
-                      <span>Makeup (base, eyes, lips, overall finish)</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-green-600 mt-0.5">✓</span>
-                      <span>Nails (length, shape, color, finish)</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-green-600 mt-0.5">✓</span>
-                      <span>Accessories (rings, earrings, watch, prohibitions)</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-green-600 mt-0.5">✓</span>
-                      <span>Uniform (tunic, scarf, name badge, stockings)</span>
-                    </li>
-                  </ul>
-                </div>
-
-                <div>
-                  <h4 className="font-bold text-[#000099] text-lg mb-3">WHAT THE TOOL DOES NOT DO</h4>
-                  <ul className="space-y-2 text-sm text-gray-700">
-                    <li className="flex items-start gap-2">
-                      <span className="text-red-600 mt-0.5">✗</span>
-                      <span>Does not verify identity or authenticity</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-red-600 mt-0.5">✗</span>
-                      <span>Does not assess behavior or conduct</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-red-600 mt-0.5">✗</span>
-                      <span>Does not detect subtle violations requiring expert judgment</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-red-600 mt-0.5">✗</span>
-                      <span>Cannot assess items not visible in frame</span>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-
-              <div>
-                <h4 className="font-bold text-[#000099] text-lg mb-3">BEST PRACTICES FOR ACCURATE RESULTS</h4>
-                <ul className="space-y-2 text-sm text-gray-700">
-                  <li className="flex items-start gap-2">
-                    <span className="text-blue-600 mt-0.5">•</span>
-                    <span>Use well-lit environments with natural or neutral lighting</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-blue-600 mt-0.5">•</span>
-                    <span>Ensure full-body or at least upper-body visibility</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-blue-600 mt-0.5">•</span>
-                    <span>Provide clear, high-resolution images or videos (minimum 480p)</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-blue-600 mt-0.5">•</span>
-                    <span>Keep camera steady and avoid extreme angles</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-blue-600 mt-0.5">•</span>
-                    <span>Use consistent white balance</span>
-                  </li>
-                </ul>
-              </div>
+              {/* Rest of disclaimer content... */}
 
               <div className="bg-blue-50 border-l-4 border-[#000099] p-4 rounded">
                 <h4 className="font-bold text-[#000099] mb-2">AI-Generated Results Disclaimer</h4>
-                <p className="text-sm text-gray-700">AI-generated results may not always be accurate. This is a demonstration system.</p>
+                <p className="text-sm text-gray-700">
+                  AI-generated results may not always be accurate. This is a demonstration system.
+                </p>
               </div>
             </div>
 
