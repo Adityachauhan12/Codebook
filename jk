@@ -1,196 +1,54 @@
-// ⭐ ADD THIS STATE with your existing useState declarations
-const [baseData, setBaseData] = useState<BaseData[]>([]);
-
-
-// ⭐ ADD THIS ENTIRE FUNCTION after your existing fetch functions
-const fetchBaseData = async () => {
-  let queryParams = "";
-
-  if (selectedFilter === "last2weeks") {
-    queryParams = "?days=14";
-  } else if (selectedFilter === "lastMonth") {
-    queryParams = "?days=30";
-  } else if (selectedFilter === "custom" && customStart && customEnd) {
-    queryParams = `?dateFrom=${customStart.toISOString().split("T")[0]}&dateTo=${customEnd.toISOString().split("T")[0]}`;
-  }
-
-  try {
-    const response = await fetch(`${API_URL}/by-base${queryParams}`);
-    if (!response.ok) {
-      console.error("Failed to fetch base data");
-      setBaseData([]);
-      return;
-    }
-
-    const data = await response.json();
-    console.log("Base data:", data);
-    setBaseData(data.bases || []);
-  } catch (error) {
-    console.error("Error fetching base data:", error);
-    setBaseData([]);
-  }
-};
-
-
-
-
-
-// Find your existing useEffect that calls fetchFilteredData
-// ADD fetchBaseData(); call to it:
-
-useEffect(() => {
-  if (selectedFilter === "") return;
-
-  if (selectedFilter === "custom") {
-    if (customStart && customEnd) {
-      fetchFilteredData();
-      fetchBaseData();  // ⭐ ADD THIS LINE
-    }
-  } else {
-    fetchFilteredData();
-    fetchBaseData();  // ⭐ ADD THIS LINE
-  }
-}, [selectedFilter, customStart, customEnd]);
-
-
-
-
-
-
-
-{/* ⭐ ADD THIS ENTIRE SECTION after your pie charts grid and before line chart */}
-<div className="card-glass shadow-md border border-indigo-200">
-  <div className="p-4">
-    <h3 className="text-lg font-semibold text-indigo-primary mb-4 flex items-center gap-2">
-      <span className="w-2 h-2 bg-indigo-primary rounded-full"></span>
-      Top 5 Bases by Test Volume
-    </h3>
-
-    {loading ? (
-      <div className="flex items-center justify-center h-72">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-primary"></div>
-      </div>
-    ) : baseData.length === 0 ? (
-      <div className="flex items-center justify-center h-72 text-gray-500">
-        <div className="text-center">
-          <svg className="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-          </svg>
-          <p className="text-lg font-medium mb-2">No base data available yet</p>
-          <p className="text-sm">Base information will appear once assessments are submitted with base details</p>
-        </div>
-      </div>
-    ) : (
-      <>
-        <ResponsiveContainer width="100%" height={350}>
-          <BarChart data={baseData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-            <XAxis dataKey="base" tick={{ fill: '#666', fontSize: 14, fontWeight: 500 }} axisLine={{ stroke: '#ccc' }} />
-            <YAxis tick={{ fill: '#666', fontSize: 12 }} axisLine={{ stroke: '#ccc' }} label={{ value: 'Number of Tests', angle: -90, position: 'insideLeft', style: { fill: '#666' } }} />
-            <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }} cursor={{ fill: 'rgba(0, 0, 0, 0.05)' }} />
-            <Legend wrapperStyle={{ paddingTop: '20px' }} iconType="circle" />
-            <Bar dataKey="compliant" stackId="a" fill="#27ae60" name="Compliant" radius={[0, 0, 0, 0]} />
-            <Bar dataKey="nonCompliant" stackId="a" fill="#e74c3c" name="Non-Compliant" radius={[8, 8, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-
-        <div className="mt-6 grid grid-cols-2 md:grid-cols-5 gap-4">
-          {baseData.map((base) => (
-            <div key={base.base} className="bg-gradient-to-br from-gray-50 to-gray-100 p-3 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
-              <p className="text-xs text-gray-600 mb-1 font-medium">Base {base.base}</p>
-              <p className="text-2xl font-bold text-indigo-primary">{base.total}</p>
-              <div className="mt-2 flex items-center gap-2">
-                <div className="flex-1 bg-gray-200 rounded-full h-2">
-                  <div className="bg-green-500 h-2 rounded-full" style={{ width: `${(base.compliant / base.total) * 100}%` }} />
-                </div>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">{((base.compliant / base.total) * 100).toFixed(1)}% pass rate</p>
-            </div>
-          ))}
-        </div>
-      </>
-    )}
-  </div>
-</div>
-
-
-
-
-
-
-
-
-
-
-
-
-const runGroomingPhoto = async (imageBase64: string) => {
-  // ⭐ ADD THIS VALIDATION AT THE TOP
-  if (!selectedBase) {
-    setError("⚠️ Please select a base before submitting");
-    return;
-  }
-
-  try {
-    const res = await fetch(apiUrl("check-grooming"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        imageBase64, 
-        crewName, 
-        igaCode,
-        base: selectedBase  // ⭐ ADD THIS LINE
-      }),
-    });
-    
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-    setGroomingResult(data?.result ?? null);
-    setStatus("done");
-  } catch (e) {
-    console.error(e);
-    setError("Grooming check failed.");
-  }
-};
-
-
-
-
-// ⭐ TEMPORARY: Mock data for testing UI
-useEffect(() => {
-  // Simulate base data
-  const mockBaseData = [
-    { base: "DEL", compliant: 45, nonCompliant: 78, total: 123 },
-    { base: "BOM", compliant: 38, nonCompliant: 52, total: 90 },
-    { base: "BLR", compliant: 29, nonCompliant: 41, total: 70 },
-    { base: "MAA", compliant: 22, nonCompliant: 33, total: 55 },
-    { base: "HYD", compliant: 18, nonCompliant: 27, total: 45 },
-  ];
-  setBaseData(mockBaseData);
-}, []);
-
-
-fd.append("video", file);
-fd.append("name", crewName);
-fd.append("igacode", igaCode);
-fd.append("base", selectedBase);  // ⭐ ADD THIS LINE
-
-
-
-
-
-
-
-
-// ⭐ TEMPORARY: Mock data for testing UI
-useEffect(() => {
-  // Simulate base data
-  const mockBaseData = [
-    { base: "DEL", compliant: 45, nonCompliant: 78, total: 123 },
-    { base: "BOM", compliant: 38, nonCompliant: 52, total: 90 },
-    { base: "BLR", compliant: 29, nonCompliant: 41, total: 70 },
-    { base: "MAA", compliant: 22, nonCompliant: 33, total: 55 },
-    { base: "HYD", compliant: 18, nonCompliant: 27, total: 45 },
-  ];
-  setBaseData(mockBaseData);
-}, []);
+2025-11-20 14:54:26.480 IST
+Traceback (most recent call last):
+  File "/opt/venv/lib/python3.11/site-packages/uvicorn/protocols/http/h11_impl.py", line 406, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.11/site-packages/uvicorn/middleware/proxy_headers.py", line 70, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.11/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/middleware/errors.py", line 187, in __call__
+    raise exc
+  File "/opt/venv/lib/python3.11/site-packages/starlette/middleware/errors.py", line 165, in __call__
+    await self.app(scope, receive, _send)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/middleware/cors.py", line 93, in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/middleware/cors.py", line 144, in simple_response
+    await self.app(scope, receive, send)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/opt/venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/routing.py", line 288, in handle
+    await self.app(scope, receive, send)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/routing.py", line 76, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 62, in wrapped_app
+    raise exc
+  File "/opt/venv/lib/python3.11/site-packages/starlette/_exception_handler.py", line 51, in wrapped_app
+    await app(scope, receive, sender)
+  File "/opt/venv/lib/python3.11/site-packages/starlette/routing.py", line 73, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.11/site-packages/fastapi/routing.py", line 297, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.11/site-packages/fastapi/routing.py", line 210, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/main.py", line 591, in insights_by_base
+    records = _load_records(filters)
+              ^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/dashboard_service.py", line 214, in _load_records
+    if not blob_name.endswith(".json"):
+           ^^^^^^^^^^^^^^^^^^
+AttributeError: 'Blob' object has no attribute 'endswith'
