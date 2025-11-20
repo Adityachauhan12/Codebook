@@ -198,25 +198,24 @@ class Filters:
 def _load_records(filters: Filters) -> List[Dict[str, Any]]:
     """
     Read grooming result records from GCS and build normalized rows.
-    Preference order:
-      1) doc['parsed']  (full parsed blob saved by backend)
-      2) top-level duplicates: doc['assessment'], doc['score'], doc['issues']
-      3) legacy parse from doc['result_text'] via _parse_result_text()
-    Final assessment is normalized to "COMPLIANT" / "NON-COMPLIANT"
-    with a PASS_THRESHOLD-based fallback if needed.
     """
     records: List[Dict[str, Any]] = []
 
     for d in _daterange(filters.date_from, filters.date_to):
         prefix = f"{GCS_BASE_FOLDER}/{_yyyymmdd(d)}/results/"
-        names = _list_by_prefix(prefix)
-        for blob_name in names:
-            if not blob_name.endswith(".json"):
+        
+        # ✅ FIX: _list_by_prefix returns Blob objects
+        blobs = _list_by_prefix(prefix)
+        
+        for blob in blobs:
+            # ✅ FIX: Use blob.name (string) instead of blob (Blob object)
+            if not blob.name.endswith(".json"):
                 continue
 
             # Load one result JSON
             try:
-                doc = _download_json(blob_name)
+                # ✅ FIX: Pass blob.name (string) to _download_json
+                doc = _download_json(blob.name)
             except Exception:
                 # If this one fails to load, skip safely
                 continue
@@ -265,17 +264,19 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                 "date": (ts.date() if ts else d),
                 "iga_code": (doc.get("iga_code") or "").strip(),
                 "crew_name": (doc.get("crew_name") or "").strip(),
-                "score": score if isinstance(score, (int, float)) else score,  # keep as-is; caller can coerce
-                "assessment": assessment,   # guaranteed "COMPLIANT" / "NON-COMPLIANT"
+                "score": score if isinstance(score, (int, float)) else score,
+                "assessment": assessment,
                 "issues": issues or [],
-                # Optional/forward fields (remain None unless you start sending)
-                "base": doc.get("base"),
+                # ⭐ NEW: Read base and terminal from saved records
+                "base": doc.get("base") or "UNKNOWN",
+                "terminal": doc.get("terminal") or "UNKNOWN",
                 "department": doc.get("department"),
             })
 
     # Most recent first
     records.sort(key=lambda r: (r["timestamp"] or datetime.min), reverse=True)
     return records
+
 
 
 # ---------- Core aggregations ----------
@@ -570,3 +571,4 @@ def search_people(date_from: date, date_to: date, query: str, page: int, page_si
         "total": total,
         "results": rows[start:end]
     }
+
