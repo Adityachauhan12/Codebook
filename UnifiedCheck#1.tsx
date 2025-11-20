@@ -107,6 +107,10 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
     }
   }, []);
 
+  // ⭐ ADD ONLY THESE TWO LINES - don't touch existing state
+  const [selectedBase, setSelectedBase] = useState<string>("");
+  const bases = ["DEL", "AMD", "BOM", "CCU", "MAA", "HYD", "LKO", "PNQ", "COK", "IXC", "IDR", "JAI", "BLR"];
+
   /** -------------------- DETECTION LOOP -------------------- **/
   const runLiveDetectionLoop = useCallback(() => {
     const video = videoRef.current;
@@ -326,21 +330,34 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
   }, []);
 
   const runGroomingPhoto = async (imageBase64: string) => {
-    try {
-      const res = await fetch(apiUrl('/check-grooming'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64, crewName, igaCode }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text()}`);
-      const data = await res.json();
-      setGroomingResult(data?.result ?? null);
-      setStatus('done');
-    } catch (e) {
-      console.error(e);
-      setError('Grooming check failed.');
-    }
-  };
+  // ⭐ ADD THIS VALIDATION AT THE TOP
+  if (!selectedBase) {
+    setError("⚠️ Please select a base before submitting");
+    return;
+  }
+
+  try {
+    const res = await fetch(apiUrl("check-grooming"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        imageBase64, 
+        crewName, 
+        igaCode,
+        base: selectedBase  // ⭐ ADD THIS LINE
+      }),
+    });
+    
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    setGroomingResult(data?.result ?? null);
+    setStatus("done");
+  } catch (e) {
+    console.error(e);
+    setError("Grooming check failed.");
+  }
+};
+
 
   /** -------- Live Video (10s) flow: record + pass check -------- **/
   const startVideoFlow = useCallback(async () => {
@@ -411,9 +428,10 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
     const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
     const file = new File([blob], 'grooming.webm', { type: 'video/webm' });
     const fd = new FormData();
-    fd.append('video', file);
-    fd.append('name', crewName);
-    fd.append('iga_code', igaCode);
+    fd.append("video", file);
+    fd.append("name", crewName);
+    fd.append("igacode", igaCode);
+    fd.append("base", selectedBase);  // ⭐ ADD THIS LINE
 
     setStatus('uploading');
     cancelDetectionLoop();
@@ -505,6 +523,32 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
           </div>
         </div>
       </div>
+      {/* Select Base */}
+      <div className="mb-6">
+        <label htmlFor="base-select" className="block text-sm font-semibold text-gray-700 mb-2">
+          Select Base <span className="text-red-500">*</span>
+        </label>
+        <select
+          id="base-select"
+          value={selectedBase}
+          onChange={(e) => setSelectedBase(e.target.value)}
+          disabled={status === "detecting" || status === "recording" || status === "uploading"}
+          className="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-white text-gray-800 font-medium"
+        >
+          <option value="">-- Select Your Base Location --</option>
+          {bases.map((base) => (
+            <option key={base} value={base}>{base}</option>
+          ))}
+        </select>
+        {!selectedBase && status === "ready" && (
+          <p className="text-sm text-amber-600 mt-2 flex items-center gap-2">
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            Please select your base location before proceeding
+          </p>
+        )}
+      </div>
 
       {/* Declaration */}
       <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6 mb-8">
@@ -519,9 +563,8 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
               />
               <div className="relative w-5 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded border-2 border-gray-300 peer-checked:bg-[#000099] peer-checked:border-[#000099] transition-all duration-300">
                 <div
-                  className={`absolute inset-0 flex items-center justify-center transition-all duration-300 ${
-                    declarationAccepted ? 'opacity-100' : 'opacity-0'
-                  }`}
+                  className={`absolute inset-0 flex items-center justify-center transition-all duration-300 ${declarationAccepted ? 'opacity-100' : 'opacity-0'
+                    }`}
                 >
                   <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
                     <path
@@ -584,12 +627,11 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
             <div className="flex flex-wrap justify-center gap-4">
               <button
                 onClick={goToLiveOptions}
-                disabled={!crewName || !igaCode || !declarationAccepted}
-                className={`px-8 py-4 rounded-xl text-sm font-semibold transition-all duration-300 transform hover:scale-105 ${
-                  declarationAccepted
+                disabled={!crewName || !selectedBase || !igaCode || !declarationAccepted}
+                className={`px-8 py-4 rounded-xl text-sm font-semibold transition-all duration-300 transform hover:scale-105 ${declarationAccepted
                     ? 'bg-gradient-to-r from-[#000099] to-blue-700 text-white hover:shadow-lg'
                     : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                }`}
+                  }`}
               >
                 Do Live Check
               </button>
@@ -612,23 +654,21 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
             <div className="flex flex-wrap justify-center gap-4">
               <button
                 onClick={startPhotoFlow}
-                disabled={!declarationAccepted}
-                className={`px-6 py-3 rounded-xl text-sm font-semibold transition-all duration-300 ${
-                  declarationAccepted
+                disabled={!declarationAccepted || !selectedBase}
+                className={`px-6 py-3 rounded-xl text-sm font-semibold transition-all duration-300 ${declarationAccepted
                     ? 'bg-gradient-to-r from-green-600 to-green-500 text-white hover:shadow-lg transform hover:scale-105'
                     : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                }`}
+                  }`}
               >
                 Photo (with Liveliness)
               </button>
               <button
                 onClick={startVideoFlow}
                 disabled={!declarationAccepted}
-                className={`px-6 py-3 rounded-xl text-sm font-semibold transition-all duration-300 ${
-                  declarationAccepted
+                className={`px-6 py-3 rounded-xl text-sm font-semibold transition-all duration-300 ${declarationAccepted
                     ? 'bg-gradient-to-r from-[#000099] to-blue-700 text-white hover:shadow-lg transform hover:scale-105'
                     : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                }`}
+                  }`}
               >
                 Live Video (10s + Liveliness)
               </button>
@@ -681,11 +721,10 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
             <h3 className="text-2xl font-bold text-gray-900 mb-4">Assessment Complete</h3>
             <div className="flex justify-center items-center gap-6 mb-6">
               <div
-                className={`px-6 py-3 rounded-full text-white font-bold text-lg ${
-                  groomingResult.assessment === 'COMPLIANT'
+                className={`px-6 py-3 rounded-full text-white font-bold text-lg ${groomingResult.assessment === 'COMPLIANT'
                     ? 'bg-gradient-to-r from-green-600 to-green-500'
                     : 'bg-gradient-to-r from-red-600 to-red-500'
-                }`}
+                  }`}
               >
                 {groomingResult.assessment}
               </div>
@@ -717,9 +756,8 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
                       </div>
                       <div className="text-gray-600 text-sm mb-2">{item.label}</div>
                       <div
-                        className={`text-xs font-medium ${
-                          percentage >= 80 ? 'text-green-600' : percentage >= 60 ? 'text-yellow-600' : 'text-red-600'
-                        }`}
+                        className={`text-xs font-medium ${percentage >= 80 ? 'text-green-600' : percentage >= 60 ? 'text-yellow-600' : 'text-red-600'
+                          }`}
                       >
                         {percentage}%
                       </div>
@@ -811,7 +849,7 @@ const UnifiedCheck: React.FC<UnifiedCheckPropsExtended> = ({
             <div className="bg-gradient-to-r from-[#000099] to-blue-700 text-white p-6 rounded-t-2xl">
               <h3 className="text-2xl font-bold text-center">GROOMING ASSESSMENT TOOL - DEMO DISCLAIMER</h3>
             </div>
-            
+
             <div className="p-6 space-y-6">
               <div className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded">
                 <div className="flex items-start gap-3">
