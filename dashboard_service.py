@@ -571,4 +571,3 @@ def search_people(date_from: date, date_to: date, query: str, page: int, page_si
         "total": total,
         "results": rows[start:end]
     }
-
