@@ -1,38 +1,29 @@
-curl -X 'GET' \
-  'https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-11-18&dateTo=2025-11-24' \
-  -H 'accept: application/json'
-Request URL
-https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-11-18&dateTo=2025-11-24
-Server response
-Code	Details
-500
-Undocumented
-Error: response status is 500
+2025-11-24 14:21:45.823 IST
+Traceback (most recent call last):
+  File "/app/main.py", line 772, in individual_analysis
+    all_records = _load_records(filters)
+                  ^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/dashboard_service.py", line 277, in _load_records
+    records.sort(key=lambda r: (r["timestamp"] or datetime.min), reverse=True)
+TypeError: can't compare offset-naive and offset-aware datetimes
 
-Response body
-Download
+
+
+
+
+
+GET500283 B686 msChrome 142 https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya+Singh&dateFrom=2025-11-18&dateTo=2025-11-24 
 {
-  "error": "Internal server error",
-  "details": "can't compare offset-naive and offset-aware datetimes",
-  "type": "TypeError"
-}
-
-
-
-curl -X 'GET' \
-  'https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-11-18&dateTo=2025-11-24' \
-  -H 'accept: application/json'
-Request URL
-https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-11-18&dateTo=2025-11-24
-Server response
-Code	Details
-500
-Undocumented
-Error: response status is 500
-
-Response body
-Download
-{
-  "error": "Internal server error",
-  "details": "can't compare offset-naive and offset-aware datetimes",
-  "type": "TypeError"
+httpRequest: {14}
+insertId: "69241ca1000c941ce29cafdf"
+labels: {9}
+logName: "projects/prj-ifs-dev/logs/run.googleapis.com%2Frequests"
+payload: "payloadNotSet"
+receiveLocation: "asia-south1"
+receiveTimestamp: "2025-11-24T08:51:45.826769724Z"
+resource: {2}
+severity: "ERROR"
+spanId: "d04d6cb0b7d021f7"
+timestamp: "2025-11-24T08:51:45.136555Z"
+trace: "projects/prj-ifs-dev/traces/6912c8efd397d0a645aa39b241281d44"
+traceSampled: true
