@@ -1,8 +1,38 @@
-created by
-created by iga
-approved by iga
-approved by
-approved by date
-rejected by date
-rejected by
-rejected by iga
+curl -X 'GET' \
+  'https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-11-18&dateTo=2025-11-24' \
+  -H 'accept: application/json'
+Request URL
+https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-11-18&dateTo=2025-11-24
+Server response
+Code	Details
+500
+Undocumented
+Error: response status is 500
+
+Response body
+Download
+{
+  "error": "Internal server error",
+  "details": "can't compare offset-naive and offset-aware datetimes",
+  "type": "TypeError"
+}
+
+
+
+curl -X 'GET' \
+  'https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-11-18&dateTo=2025-11-24' \
+  -H 'accept: application/json'
+Request URL
+https://6e-ifs-grooming-be-dev.goindigo.in/v1/individual-analysis?igaCode=IGA6781&crewName=Lavanya%20Singh&dateFrom=2025-11-18&dateTo=2025-11-24
+Server response
+Code	Details
+500
+Undocumented
+Error: response status is 500
+
+Response body
+Download
+{
+  "error": "Internal server error",
+  "details": "can't compare offset-naive and offset-aware datetimes",
+  "type": "TypeError"
