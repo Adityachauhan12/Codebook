@@ -135,10 +135,13 @@ def upload_grooming_result_text(
     print(f"💾 Saving to GCS with base: {base}, terminal: {terminal}")
     
     # Generate GCS path
-    # Format: Grooming-Results/results/YYYY/MM/DD/IGA_CODE_TIMESTAMP.json
+    # Format: Grooming-Results/YYYYMMDD/results/IGA_CODE/filename.json (matches actual GCP structure)
     now = datetime.utcnow()
-    file_name = f"{_slugify(iga_code)}_{now.strftime('%Y%m%d_%H%M%S')}.json"
-    gcs_path = f"{GCS_BASE_FOLDER}/results/{now.year}/{now.month:02d}/{now.day:02d}/{file_name}"
+    file_name = f"grooming_result_{_slugify(iga_code)}_{now.strftime('%H%M%S')}.json"
+    gcs_path = f"{GCS_BASE_FOLDER}/{now.strftime('%Y%m%d')}/results/{_slugify(iga_code)}/{file_name}"
+    
+    print(f"📁 GCS path: {gcs_path}")
+    print(f"📊 Assessment: {result_data['assessment']}, Score: {result_data['score']}")
     
     # Upload to GCS
     try:
@@ -148,7 +151,8 @@ def upload_grooming_result_text(
             content_type="application/json"
         )
         
-        print(f"✅ Saved to GCS: {gcs_path}")
+        print(f"✅ Successfully saved assessment to GCS: {gcs_path}")
+        print(f"🔍 Record contains: {len(result_data.get('issues', []))} issues")
         return gcs_path
         
     except Exception as e:
