@@ -249,10 +249,20 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                 else:
                     assessment = "NON-COMPLIANT"
 
-            # Parse timestamp safely
+            # Parse timestamp safely and make timezone-aware
             ts_str = doc.get("timestamp")
             try:
-                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")) if ts_str else None
+                if ts_str:
+                    if ts_str.endswith('Z'):
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    else:
+                        ts = datetime.fromisoformat(ts_str)
+                        # Make timezone-aware if naive
+                        if ts.tzinfo is None:
+                            from datetime import timezone
+                            ts = ts.replace(tzinfo=timezone.utc)
+                else:
+                    ts = None
             except Exception:
                 ts = None
 
@@ -273,8 +283,10 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
             records.append(record)
             print(f"✅ Loaded record: {record['iga_code']} - {record['assessment']} - {len(record['issues'])} issues")
 
-    # Most recent first
-    records.sort(key=lambda r: (r["timestamp"] or datetime.min), reverse=True)
+    # Most recent first - use timezone-aware datetime.min
+    from datetime import timezone
+    min_datetime = datetime.min.replace(tzinfo=timezone.utc)
+    records.sort(key=lambda r: (r["timestamp"] or min_datetime), reverse=True)
     print(f"✅ Total records loaded: {len(records)}")
     return records
 
