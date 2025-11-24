@@ -170,6 +170,13 @@ def check_grooming(image_b64: str) -> str:
                 }
             ]
         )
+        
+        # Log token usage
+        try:
+            print(f"🔢 Token count: {response.usage_metadata.total_token_count}")
+        except Exception as e:
+            print(f"⚠️ Could not get token count: {e}")
+        
         return _normalize_output(response.text)
     except Exception as e:
         return f"Error processing image: {str(e)}"
@@ -198,6 +205,12 @@ def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
                 }
             ]
         )
+        
+        # Log token usage
+        try:
+            print(f"🔢 Video token count: {response.usage_metadata.total_token_count}")
+        except Exception as e:
+            print(f"⚠️ Could not get video token count: {e}")
         
         return _normalize_output(response.text)
     except Exception as e:
