@@ -200,49 +200,47 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
     Read grooming result records from GCS and build normalized rows.
     """
     records: List[Dict[str, Any]] = []
+    print(f"\n🔍 Loading records from {filters.date_from} to {filters.date_to}")
 
     for d in _daterange(filters.date_from, filters.date_to):
-        prefix = f"{GCS_BASE_FOLDER}/{_yyyymmdd(d)}/results/"
+        date_prefix = f"{GCS_BASE_FOLDER}/{_yyyymmdd(d)}/results/"
+        print(f"📁 Checking date prefix: {date_prefix}")
         
-        # ✅ FIX: _list_by_prefix returns Blob objects
-        blobs = _list_by_prefix(prefix)
+        # Get all blobs under the date/results/ path (includes IGA subfolders)
+        all_blobs = _list_by_prefix(date_prefix)
+        json_blobs = [blob for blob in all_blobs if blob.name.endswith(".json")]
+        print(f"📊 Found {len(json_blobs)} JSON files for {d}")
         
-        for blob in blobs:
-            # ✅ FIX: Use blob.name (string) instead of blob (Blob object)
-            if not blob.name.endswith(".json"):
-                continue
-
+        for blob in json_blobs:
             # Load one result JSON
             try:
-                # ✅ FIX: Pass blob.name (string) to _download_json
                 doc = _download_json(blob.name)
             except Exception:
                 # If this one fails to load, skip safely
                 continue
 
-            # Prefer parsed blob if present
-            parsed_blob = doc.get("parsed") if isinstance(doc.get("parsed"), dict) else {}
-
-            # Top-level duplicates (present in new payloads)
-            top_assessment = (doc.get("assessment") or "").strip().upper()
-            top_score = doc.get("score")
-            top_issues = doc.get("issues") or []
-
-            # Pick source of truth in priority order
-            if parsed_blob:
-                assessment = (parsed_blob.get("assessment") or top_assessment or "").strip().upper()
-                score = parsed_blob.get("score", top_score)
-                issues = parsed_blob.get("issues") or top_issues
-            else:
-                # If top-level duplicates are valid, use them
-                if top_assessment in ("COMPLIANT", "NON-COMPLIANT"):
-                    assessment = top_assessment
-                    score = top_score
-                    issues = top_issues
-                else:
-                    # Legacy: parse raw Gemini result_text
-                    p = _parse_result_text(doc.get("result_text", ""))
-                    assessment, score, issues = p["assessment"], p["score"], p["issues"]
+            # Handle both old and new data formats
+            # New format has direct fields, old format may have parsed blob or raw text
+            
+            # Try direct fields first (new format)
+            assessment = (doc.get("assessment") or "").strip().upper()
+            score = doc.get("score")
+            issues = doc.get("issues") or []
+            
+            # If no direct assessment, try parsed blob
+            if not assessment or assessment not in ("COMPLIANT", "NON-COMPLIANT"):
+                parsed_blob = doc.get("parsed") if isinstance(doc.get("parsed"), dict) else {}
+                if parsed_blob:
+                    assessment = (parsed_blob.get("assessment") or "").strip().upper()
+                    score = parsed_blob.get("score") or score
+                    issues = parsed_blob.get("issues") or issues
+            
+            # Final fallback: parse raw text
+            if not assessment or assessment not in ("COMPLIANT", "NON-COMPLIANT"):
+                p = _parse_result_text(doc.get("raw_text") or doc.get("result_text", ""))
+                assessment = p["assessment"]
+                score = p["score"] if score is None else score
+                issues = p["issues"] if not issues else issues
 
             # Normalize assessment with PASS_THRESHOLD-based fallback if missing/invalid
             if assessment not in ("COMPLIANT", "NON-COMPLIANT"):
@@ -259,7 +257,7 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                 ts = None
 
             # Build normalized record
-            records.append({
+            record = {
                 "timestamp": ts,
                 "date": (ts.date() if ts else d),
                 "iga_code": (doc.get("iga_code") or "").strip(),
@@ -271,10 +269,13 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                 "base": doc.get("base") or "UNKNOWN",
                 "terminal": doc.get("terminal") or "UNKNOWN",
                 "department": doc.get("department"),
-            })
+            }
+            records.append(record)
+            print(f"✅ Loaded record: {record['iga_code']} - {record['assessment']} - {len(record['issues'])} issues")
 
     # Most recent first
     records.sort(key=lambda r: (r["timestamp"] or datetime.min), reverse=True)
+    print(f"✅ Total records loaded: {len(records)}")
     return records
 
 
