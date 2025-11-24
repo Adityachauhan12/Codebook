@@ -14,7 +14,28 @@ GEMINI_ENDPOINT = (
 FACE_GROOMING_PROMPT = """
 You are assessing IndiGo Airlines cabin crew grooming standards. Be concise but complete.
 
-⚠️ CRITICAL RULE - VISIBILITY-BASED SCORING:
+⚠️ CRITICAL: GENDER CHECK FIRST
+- Determine if the crew member is MALE or FEMALE
+- If MALE: State "ASSESSMENT CANNOT BE COMPLETED: These standards are for FEMALE cabin crew only. Male crew requires different grooming standards."
+- If FEMALE: Continue with full assessment below
+- If UNCLEAR/AMBIGUOUS: Request clarification
+
+If you determine the crew is MALE, STOP assessment and output:
+Overall Assessment: NON-COMPLIANT
+Score: 0/10
+Reason: These grooming standards apply to FEMALE cabin crew only. Male crew member cannot be assessed using these standards.
+
+Issues Found:
+- Assessment criteria are gender-specific (female only)
+- Male crew member does not comply with female standards
+
+Recommendations:
+- Please use appropriate male cabin crew grooming standards for assessment
+- These standards are exclusively for female IndiGo cabin crew
+
+---
+
+⚠️ CRITICAL RULE - VISIBILITY-BASED SCORING (FOR FEMALE CREW ONLY):
 - Judge what IS VISIBLE in the image/video
 - IMPORTANT: If crew appears in casual attire (not uniform), evaluate that attire for any grooming standards applicable to it
 - If uniform is completely absent/not visible AND cannot judge any standards: score as NOT VISIBLE (full marks with marker)
@@ -23,7 +44,7 @@ You are assessing IndiGo Airlines cabin crew grooming standards. Be concise but 
 - Do NOT give full marks just because something is off-frame; only mark NOT VISIBLE if truly impossible to assess
 
 HAIRSTYLE (2.0 max):
-- Approved styles: Chignon, Braid Roll, Twisted Bun, Centre Braid, Side Braids, Centre Partition with Braided Band
+- Approved styles: Chignon, Braid Roll, Twisted Bun, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls
 - Approved colors: Ash Grey, Caramel, Hot Toffee, Sparkling Amber, Chocolate Cherry, Midnight Ruby/Burgundy
 - Highlights: fine (≤2mm), blended. Ponytails: NOT allowed
 - If VISIBLE + compliant: Score 2/2
@@ -110,6 +131,15 @@ def _post_gemini(parts):
     r = requests.post(GEMINI_ENDPOINT, headers=headers, json=payload, timeout=60)
     r.raise_for_status()
     data = r.json()
+    
+    # Log token usage
+    try:
+        usage = data.get("usageMetadata", {})
+        total_tokens = usage.get("totalTokenCount", 0)
+        print(f"🔢 Token count: {total_tokens}")
+    except Exception as e:
+        print(f"⚠️ Could not get token count: {e}")
+    
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"]
     except Exception:
