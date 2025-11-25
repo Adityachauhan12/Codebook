@@ -3,6 +3,7 @@ import os
 import re
 import requests
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")
@@ -124,27 +125,32 @@ Recommendations:
 """
 
 
+
+# Configure logging at the top of your file (if not already done)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
 def _post_gemini(parts):
     """Send request to Gemini API and return text response."""
     headers = {"Content-Type": "application/json"}
     payload = {"contents": [{"parts": parts}]}
+
     r = requests.post(GEMINI_ENDPOINT, headers=headers, json=payload, timeout=60)
     r.raise_for_status()
     data = r.json()
-    
+
     # Log token usage
     try:
         usage = data.get("usageMetadata", {})
         total_tokens = usage.get("totalTokenCount", 0)
-        print(f"🔢 Token count: {total_tokens}")
+        logging.info(f"🔢 Token count: {total_tokens}")
     except Exception as e:
-        print(f"⚠️ Could not get token count: {e}")
-    
+        logging.warning(f"⚠️ Could not get token count: {e}")
+
+    # Return text response
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"]
     except Exception:
         return ""
-
 
 def _normalize_output(report_text: str) -> str:
     """Normalize scores to integer format (X/10, not X.X/10)."""
