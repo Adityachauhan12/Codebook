@@ -1,350 +1,208 @@
-# AFTER:
-@app.get("/v1/insights")
-async def insights(
-    dateFrom: Optional[_date] = Query(None),
-    dateTo: Optional[_date] = Query(None),
-    days: Optional[int] = Query(None, description="custom duration in days; e.g., 7 for last 7 days"),
-    page: int = 1,
-    pageSize: int = 20,  # ← CHANGED TO 20 (consistent with preset filters)
+@app.get("/v1/individual-analysis")
+async def individual_analysis(
+    igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
+    crewName: str = Query(None, description="Crew name (e.g., Lavanya Singh) - Optional"),
+    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD format"),
+    dateTo: str = Query(..., description="End date in YYYY-MM-DD format"),
 ):
     """
-    Get insights data with consistent pagination (20 records) and full date range trends.
+    Individual Analysis - Now with optional crewName!
     
-    When using preset date ranges (days=7, days=14) or custom date filters,
-    recent tests will always show 20 records (not 25).
+    KEY PRINCIPLES:
+    - Load ALL records from GCS for date range
+    - Filter by crew (if crewName provided)
+    - Count violations from ALL records (COMPLIANT or NON-COMPLIANT)
+    - If a category has ANY issues in ANY assessment, increment by 1 (not by issue count)
+    - Show violations as count and percentage
     
-    Trends data now includes ALL dates in the range, including dates with zero testing.
+    UPDATED: crewName is now OPTIONAL
+    - If crewName provided: Filter by both igaCode and crewName
+    - If crewName is None/empty: Show data for igaCode across ALL crew members
     """
-    _from, _to = _resolve_range(dateFrom, dateTo, days)
-    return get_insights(_from, _to, page, pageSize)
-
-
-
-
-# In _daily_graph() function - UPDATED:
-
-def _daily_graph(records: List[Dict[str, Any]], start_date: date = None, end_date: date = None) -> List[Dict[str, Any]]:
-    """
-    Generate daily graph data for ALL dates in range (including zero-testing dates).
-    Returns compliant=0, nonCompliant=0 for dates with no records.
-    
-    Args:
-        records: List of assessment records
-        start_date: Start of date range (optional - if None, only return dates with data)
-        end_date: End of date range (optional - if None, only return dates with data)
-    """
-    daily_compliant: Dict[date, int] = defaultdict(int)
-    daily_noncomp: Dict[date, int] = defaultdict(int)
-    
-    # Build counts from records
-    for r in records:
-        d = r["date"]
-        if r["assessment"] == "COMPLIANT":
-            daily_compliant[d] += 1
-        else:
-            daily_noncomp[d] += 1
-    
-    # Determine date range to return
-    if start_date is None or end_date is None:
-        # Fallback: only days with data
-        all_days = sorted(set(list(daily_compliant.keys()) + list(daily_noncomp.keys())))
-    else:
-        # NEW: Include ALL dates in range (including zero-testing dates)
-        # This ensures graph data matches UI visualization
-        all_days = [d for d in _daterange(start_date, end_date)]
-    
-    return [{
-        "date": d.isoformat(),
-        "compliant": daily_compliant.get(d, 0),
-        "nonCompliant": daily_noncomp.get(d, 0),
-        "base": None
-    } for d in all_days]
-
-
-# In get_insights() function - UPDATED:
-
-def get_insights(date_from: date, date_to: date, page: int, page_size: int) -> Dict[str, Any]:
-    """
-    MAIN API: grooming vs non-grooming, categories, daily graph (compliant/nonCompliant),
-    top 5 groomed & non-groomed, and recent tests. Includes base=null fields.
-    
-    FIXED: 
-    - Recent tests now always shows 20 records (consistent with preset filters)
-    - Daily graph includes ALL dates in range (even zero-testing dates)
-    - Data now matches graph UI visualization
-    """
-    records = _load_records(Filters(date_from=date_from, date_to=date_to))
-    
-    # FIXED: Always use 20 for recent tests (consistent across all filter types)
-    # This ensures 1-week, 2-week, and custom date filters all show same 20 records
-    effective_page_size = min(_safe_page_size(page_size, default=20, maximum=20), 20)
-    
-    meta = {
-        "generatedAt": datetime.utcnow().isoformat() + "Z",
-        "filters": {"dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat()},
-    }
-    return {
-        "meta": meta,
-        "overview": _overview(records),
-        "trends": {"daily": _daily_graph(records, start_date=date_from, end_date=date_to)},  # PASS date range
-        "categories": _category_breakdown(records),
-        "top": {
-            "groomed": _top_groomed(records, min_tests=3, top_n=5),
-            "nonGroomed": _top_non_groomed(records, min_tests=3, top_n=5)
-        },
-        "recentTests": _compute_recent_tests(records, page, page_size=effective_page_size),  # USE 20
-    }
-
-
-
-
-
-
-
-
-"""
-A toolkit for communicating with the Google Gemini API for grooming checks.
-This module provides standalone functions to assess grooming standards by sending
-image or video data to the Gemini API along with a detailed prompt.
-"""
-
-import base64
-import re
-import logging
-import google.auth
-import google.generativeai as genai
-
-# Setup logging
-logger = logging.getLogger(__name__)
-
-# Setup Gemini with ADC
-SCOPES = ["https://www.googleapis.com/auth/generative-language"]
-creds, _ = google.auth.default(scopes=SCOPES)
-genai.configure(credentials=creds)
-
-model = genai.GenerativeModel("models/gemini-2.5-pro", generation_config={"temperature": 0.0})
-
-# Core prompt: policy + rubric - UPDATED WITH GENDER CHECK
-FACE_GROOMING_PROMPT = """
-You are assessing IndiGo Airlines cabin crew grooming standards. Be concise but complete.
-
-⚠️ CRITICAL: GENDER CHECK FIRST
-- Determine if the crew member is MALE or FEMALE
-- If MALE: State "ASSESSMENT CANNOT BE COMPLETED: These standards are for FEMALE cabin crew only. Male crew requires different grooming standards."
-- If FEMALE: Continue with full assessment below
-- If UNCLEAR/AMBIGUOUS: Request clarification
-
-If you determine the crew is MALE, STOP assessment and output:
-Overall Assessment: NON-COMPLIANT
-Score: 0/10
-Reason: These grooming standards apply to FEMALE cabin crew only. Male crew member cannot be assessed using these standards.
-
-Issues Found:
-- Assessment criteria are gender-specific (female only)
-- Male crew member does not comply with female standards
-
-Recommendations:
-- Please use appropriate male cabin crew grooming standards for assessment
-- These standards are exclusively for female IndiGo cabin crew
-
----
-
-⚠️ CRITICAL RULE - VISIBILITY-BASED SCORING (FOR FEMALE CREW ONLY):
-- Judge what IS VISIBLE in the image/video
-- IMPORTANT: If crew appears in casual attire (not uniform), evaluate that attire for any grooming standards applicable to it
-- If uniform is completely absent/not visible AND cannot judge any standards: score as NOT VISIBLE (full marks with marker)
-- DEDUCT marks ONLY for visible violations
-- List NOT VISIBLE items in "Issues Found" for crew awareness
-- Do NOT give full marks just because something is off-frame; only mark NOT VISIBLE if truly impossible to assess
-
-HAIRSTYLE (2.0 max):
-- Approved styles: Chignon, Braid Roll, Twisted Bun, Centre Braid, Side Braids, Centre Partition with Braided Band, Natural Curls, Soft Curls
-- Approved colors: Ash Grey, Caramel, Hot Toffee, Sparkling Amber, Chocolate Cherry, Midnight Ruby/Burgundy
-- Highlights: fine (≤2mm), blended. Ponytails: NOT allowed
-- If VISIBLE + compliant: Score 2/2
-- If VISIBLE + violation: Deduct marks appropriately
-- If NOT VISIBLE (truly cannot assess): Score 2/2 → output "Hairstyle: 2/2 (NOT VISIBLE)"
-
-MAKEUP (2.0 max):
-- Base: must match skin tone
-- Eyes: approved palettes only (Swiss Beauty 05, Makeup Revolution Achieve, Nykaa Eyes On Me Night Out, Lakme Smokey Glam, Nykaa Tinsel Twilight, Sugar Blend 02)
-- Liner: brown (fair-wheatish), black (dusky-olive)
-- Mascara: black, volumizing
-- Lips: burgundy, wine, cranberry
-- If VISIBLE + compliant: Score 2/2
-- If VISIBLE + violation: Deduct marks appropriately
-- If NOT VISIBLE (truly cannot assess): Score 2/2 → output "Makeup: 2/2 (NOT VISIBLE)"
-
-NAILS (1.0 max):
-- Colors: Pearl white or French manicure ONLY
-- If nails are shown/visible (hands visible): ALWAYS evaluate - do NOT mark as NOT VISIBLE
-- If VISIBLE + compliant: Score 1/1
-- If VISIBLE + non-compliant color/length: Score 0/1 (deduct full marks)
-- If truly hands completely out of frame: Score 1/1 → output "Nails: 1/1 (NOT VISIBLE)"
-
-ACCESSORIES (2.0 max):
-- Earrings: white/rose-gold pearl or diamond studs only [0.4 each if wrong]
-- Rings: max one per hand, silver/rose-gold, ring or middle finger only [0.5 if violation]
-- Watch: MUST have visible seconds hand (black/silver/rose-gold/dark blue) [0.5 if wrong/missing]
-- Bangles: max one plain silver/rose-gold [0.4 if excess]
-- Prohibitions: NO religious threads, nose pins, extra piercings [0.4 each if present]
-- If all compliant and visible: Score 2/2
-- If violations visible: Deduct per breakdown above (total max deduction = 2.0)
-- If NOT VISIBLE (truly cannot assess any accessories): Score 2/2 → output "Accessories: 2/2 (NOT VISIBLE)"
-- IMPORTANT: If ANY accessory is visible, do NOT mark entire category as NOT VISIBLE
-
-UNIFORM (3.0 max):
-- Tunic: clean, well-fitted
-- Scarf: correct knot, properly positioned
-- Badge: visible, aligned
-- Stockings: compliant color
-- If VISIBLE + compliant: Score 3/3
-- If VISIBLE + violation OR in casual attire: Deduct marks appropriately (do NOT give full marks just because not in proper uniform)
-- If NOT VISIBLE (truly off-frame, impossible to assess): Score 3/3 → output "Uniform: 3/3 (NOT VISIBLE)"
-
-SCORING RULES (CRITICAL):
-- All scores MUST be integers (0, 1, 2, 3), NO DECIMALS
-- Example: "Hairstyle: 1/2" NOT "Hairstyle: 1.5/2"
-- Overall score MUST be integer (0-10), NO DECIMALS
-- Calculate: sum all category scores, cap at 10
-
-COMPLIANCE THRESHOLD:
-Score >= 7 = COMPLIANT
-Score < 7 = NON-COMPLIANT
-
-OUTPUT FORMAT (exact):
-Overall Assessment: [COMPLIANT or NON-COMPLIANT]
-Score: X/10
-
-Category Scores:
-Uniform: X/3
-Hairstyle: X/2
-Makeup: X/2
-Nails: X/1
-Accessories: X/2
-
-Observations:
-- Uniform: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
-- Hairstyle: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
-- Makeup: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
-- Nails: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
-- Accessories: [Description, include "(NOT VISIBLE)" only if truly cannot assess]
-
-Issues Found:
-- [Only visible violations, OR items marked as NOT VISIBLE]
-
-Recommendations:
-- [Actionable fixes for violations and guidance on non-visible items]
-"""
-
-
-def _normalize_output(report_text: str) -> str:
-    """Normalize scores to integer format (X/10, not X.X/10)."""
-    # Remove Evidence tags if any
-    report_text = re.sub(r'\s*\(Evidence:[^)]*\)', '', report_text, flags=re.IGNORECASE)
-    
-    # Fix Overall Score - remove decimals, make it integer
-    report_text = re.sub(
-        r'(Score)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*/\s*10',
-        lambda m: f"{m.group(1)}: {int(float(m.group(2)))}/10",
-        report_text,
-        flags=re.IGNORECASE
-    )
-    
-    # Fix category scores - convert to integers, remove decimals
-    category_maxes = {"Uniform": 3, "Hairstyle": 2, "Makeup": 2, "Nails": 1, "Accessories": 2}
-    
-    for cat, maxval in category_maxes.items():
-        pattern = rf'({re.escape(cat)}\s*:\s*)([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+)'
-        def replace_score(m):
-            num = int(float(m.group(2)))
-            return f"{m.group(1)}{num}/{m.group(3)}"
-        report_text = re.sub(pattern, replace_score, report_text, flags=re.IGNORECASE)
-    
-    return report_text
-
-
-def check_grooming(image_b64: str) -> str:
-    """Single image assessment - concise format."""
     try:
-        image_data = base64.b64decode(image_b64)
-        response = model.generate_content(
-            [
-                FACE_GROOMING_PROMPT,
-                {
-                    "mime_type": "image/jpeg",
-                    "data": image_data
-                }
-            ]
-        )
-        
-        # Log token usage
+        # ============= PARSE & VALIDATE DATES =============
         try:
-            token_count = response.usage_metadata.total_token_count
-            print(f"🔢 Token count: {token_count}")
-            logger.info(f"Gemini API token usage - Image assessment: {token_count} tokens")
-        except Exception as e:
-            print(f"⚠️ Could not get token count: {e}")
-            logger.warning(f"Failed to retrieve token count for image assessment: {e}")
-        
-        return _normalize_output(response.text)
-    except Exception as e:
-        return f"Error processing image: {str(e)}"
-
-
-def check_grooming_from_video(video_path: str, name: str, iga_code: str) -> str:
-    """Video assessment - concise format with crew info."""
-    try:
-        with open(video_path, "rb") as f:
-            video_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-        video_data = base64.b64decode(video_b64)
-        
-        prompt = (
-            f"{FACE_GROOMING_PROMPT}\n\n"
-            "This is a video. Sample frames uniformly. Use majority rule for assessment.\n"
-            f"Output format:\nOverall Assessment: [COMPLIANT or NON-COMPLIANT]\nScore: X/10\n..."
-        )
-        
-        response = model.generate_content(
-            [
-                prompt,
+            start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
+            end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
+        except ValueError as e:
+            return JSONResponse(
                 {
-                    "mime_type": "video/mp4",
-                    "data": video_data
+                    "error": "Invalid date format",
+                    "details": f"Dates must be in YYYY-MM-DD format: {str(e)}"
+                },
+                status_code=400
+            )
+
+        if start_date > end_date:
+            return JSONResponse(
+                {
+                    "error": "Invalid date range",
+                    "details": "dateFrom cannot be after dateTo"
+                },
+                status_code=400
+            )
+
+        # ============= LOAD FRESH RECORDS FROM GCS =============
+        print(f"\n[INDIVIDUAL-ANALYSIS] Starting fresh load from GCS")
+        print(f"[INDIVIDUAL-ANALYSIS] Date range: {start_date} to {end_date}")
+        print(f"[INDIVIDUAL-ANALYSIS] IGA Code: {igaCode}")
+        print(f"[INDIVIDUAL-ANALYSIS] Crew Name: {crewName} (Optional)")
+
+        filters = DashboardFilters(date_from=start_date, date_to=end_date)
+        all_records = _load_records(filters)
+        print(f"[INDIVIDUAL-ANALYSIS] Loaded {len(all_records)} total records from GCS")
+
+        # ============= FILTER BY IGA CODE AND OPTIONAL CREW NAME =============
+        iga_search = igaCode.strip().upper()
+        crew_search = (crewName or "").strip().upper()  # Empty string if crewName is None
+
+        crew_records = []
+        for record in all_records:
+            record_iga = (record.get("iga_code") or "").strip().upper()
+            record_crew = (record.get("crew_name") or "").strip().upper()
+
+            # If crewName provided, filter by both
+            if crew_search:
+                if record_iga == iga_search and record_crew == crew_search:
+                    crew_records.append(record)
+            else:
+                # If crewName not provided, match only igaCode
+                if record_iga == iga_search:
+                    crew_records.append(record)
+
+        print(f"[INDIVIDUAL-ANALYSIS] Filtered to {len(crew_records)} crew records")
+
+        if not crew_records:
+            print(f"[INDIVIDUAL-ANALYSIS] No records found for {iga_search} / {crew_search}")
+            return JSONResponse(
+                {
+                    "error": "No assessments found for this crew in given date range",
+                    "debug": {
+                        "searchedFor": {
+                            "igaCode": igaCode,
+                            "crewName": crewName or "(not specified - all crew members)",
+                            "dateRange": f"{dateFrom} to {dateTo}"
+                        },
+                        "totalRecordsInRange": len(all_records),
+                        "matchingRecords": 0,
+                    }
+                },
+                status_code=404
+            )
+
+        # ============= CALCULATE SUMMARY STATISTICS =============
+        total = len(crew_records)
+        compliant_count = sum(1 for r in crew_records if r["assessment"] == "COMPLIANT")
+        noncompliant_count = total - compliant_count
+        pass_rate = (compliant_count / total * 100) if total > 0 else 0
+
+        print(f"[INDIVIDUAL-ANALYSIS] Summary: Total={total}, Compliant={compliant_count}, NC={noncompliant_count}, PassRate={pass_rate:.2f}%")
+
+        # ============= CRITICAL: CATEGORY BREAKDOWN =============
+        print(f"\n[INDIVIDUAL-ANALYSIS] === CATEGORY BREAKDOWN CALCULATION ===")
+
+        # Count violations by category from ALL records (regardless of overall assessment status)
+        category_violation_count = defaultdict(int)
+
+        for record in crew_records:
+            issues = record.get("issues") or []
+            print(f"[INDIVIDUAL-ANALYSIS] Processing record: {record.get('timestamp')}, Assessment: {record['assessment']}")
+            print(f"[INDIVIDUAL-ANALYSIS] Issues: {issues}")
+
+            # Collect unique categories that have issues in THIS record
+            cats_found = set()
+            for issue in issues:
+                heading = _issue_heading(issue)
+                if heading in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
+                    cats_found.add(heading)
+                    print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Category '{heading}'")
+                else:
+                    print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Skipped (category: '{heading}')")
+
+            # Increment count by 1 for each unique category in this record
+            for cat in cats_found:
+                category_violation_count[cat] += 1
+                print(f"[INDIVIDUAL-ANALYSIS] Category '{cat}' incremented to {category_violation_count[cat]}")
+
+        # Convert to final format: violations + percentage
+        category_breakdown = {}
+        for cat in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
+            violation_count = category_violation_count.get(cat, 0)
+            percentage = (violation_count / total * 100) if total > 0 else 0
+            category_breakdown[cat] = {
+                "violations": violation_count,
+                "percentage": round(percentage, 2)
+            }
+            print(f"[INDIVIDUAL-ANALYSIS] {cat.upper()}: violations={violation_count}, total={total}, percentage={percentage:.2f}%")
+
+        print(f"[INDIVIDUAL-ANALYSIS] === END CATEGORY BREAKDOWN ===\n")
+
+        # ============= BUILD DAILY TRENDS =============
+        daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
+        for record in crew_records:
+            record_date = record["date"]
+            if record["assessment"] == "COMPLIANT":
+                daily_stats[record_date]["compliant"] += 1
+            else:
+                daily_stats[record_date]["nonCompliant"] += 1
+
+        # Build trend array
+        trend_list = []
+        current_date = start_date
+        while current_date <= end_date:
+            date_key = current_date.isoformat()
+            stats = daily_stats.get(current_date, {"compliant": 0, "nonCompliant": 0})
+            trend_list.append({
+                "date": date_key,
+                "compliant": stats["compliant"],
+                "nonCompliant": stats["nonCompliant"]
+            })
+            current_date += timedelta(days=1)
+
+        # ============= BUILD RESPONSE =============
+        response = {
+            "crew": {
+                "igaCode": igaCode,
+                "name": crewName if crewName else "(All crew members with this IGA code)"
+            },
+            "dateRange": {
+                "from": dateFrom,
+                "to": dateTo,
+                "daysAnalyzed": (end_date - start_date).days + 1
+            },
+            "summary": {
+                "totalAssessments": total,
+                "compliant": compliant_count,
+                "nonCompliant": noncompliant_count,
+                "passRate": f"{pass_rate:.2f}",
+                "passRatePercentage": f"{pass_rate:.2f}%"
+            },
+            "nonComplianceByCategory": category_breakdown,
+            "trend": trend_list,
+            "recentAssessments": [
+                {
+                    "timestamp": r["timestamp"].isoformat() if r["timestamp"] else None,
+                    "date": r["date"].isoformat(),
+                    "score": r["score"],
+                    "assessment": r["assessment"],
+                    "issues": r["issues"]
                 }
+                for r in crew_records[:10]
             ]
-        )
-        
-        # Log token usage
-        try:
-            token_count = response.usage_metadata.total_token_count
-            print(f"🔢 Video token count: {token_count}")
-            logger.info(f"Gemini API token usage - Video assessment: {token_count} tokens")
-        except Exception as e:
-            print(f"⚠️ Could not get video token count: {e}")
-            logger.warning(f"Failed to retrieve token count for video assessment: {e}")
-        
-        return _normalize_output(response.text)
+        }
+
+        print(f"[INDIVIDUAL-ANALYSIS] Returning response with {len(crew_records)} records\n")
+        return response
+
     except Exception as e:
-        return f"Error processing video: {str(e)}"
-
-
-def check_grooming_from_frames(frames_b64: list, name: str, iga_code: str) -> str:
-    """Multiple frames assessment - UPDATED for integer scores."""
-    results = []
-    frame_scores = []
-    
-    for idx, image_b64 in enumerate(frames_b64, start=1):
-        reply = check_grooming(image_b64)
-        results.append(f"--- Frame {idx} ---\n{reply}")
-        
-        score_match = re.search(r'Score:\s*([0-9]+)/10', reply)
-        if score_match:
-            frame_scores.append(int(score_match.group(1)))
-    
-    avg_score = int(sum(frame_scores) / len(frame_scores)) if frame_scores else 0
-    summary = f"CONSOLIDATED: {name} (IGA: {iga_code})\nAverage Score: {avg_score}/10\nAssessment: {'COMPLIANT' if avg_score >= 7 else 'NON-COMPLIANT'}\n\n"
-    
-    return summary + "\n".join(results)
-
+        import traceback
+        print(f"[ERROR] individual_analysis: {str(e)}")
+        print(traceback.format_exc())
+        return JSONResponse(
+            {
+                "error": "Internal server error",
+                "details": str(e),
+                "type": type(e).__name__
+            },
+            status_code=500
+        )
