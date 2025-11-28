@@ -1,6 +1,15 @@
 import React, { useState, useEffect } from "react";
 import Layout from "../../components/Layout";
 import { BarChart3, TrendingUp, Brain, Activity, Search, Calendar, Users, PieChart, LineChart } from "lucide-react";
+
+// ===== Date formatting helper =====
+const formatDateForAPI = (dateString: string): string => {
+  if (!dateString) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return dateString;
+  if (dateString.includes('T')) return dateString.split('T')[0];
+  return new Date(dateString).toISOString().split('T')[0];
+};
+// ===== END =====
 import {
   LineChart as RechartsLineChart,
   Line,
@@ -73,7 +82,7 @@ const UrtiAIAnalyticsAdminPage: React.FC = () => {
   const fetchLeaveData = async () => {
     try {
       setIsLoading(true);
-      const url = `${window.IFS_365_API_URL}/api/list_leaves_analytics`;
+      const url = `${window.IFS365API_URL}api/list_leaves_analytics`;
       const response = await fetch(url);
 
       if (!response.ok) throw new Error("Failed to fetch leave data");
