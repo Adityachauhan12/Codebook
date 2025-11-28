@@ -1,3 +1,5 @@
+Property 'rejectedBy' does not exist on type 'Attendance'.ts(2339)
+
 import React, { useState, useEffect } from "react";
 import Layout from "../../components/Layout";
 import { Calendar } from "lucide-react";
@@ -103,7 +105,7 @@ const AdminUrtiPage: React.FC = () => {
     try {
       setActionLoading(leaveId);
       const response = await fetch(
-        `${window.IFS365API_URL}api/ApproveRejectLeave/${leaveId}`,
+        `${window.IFS_365_API_URL}api/ApproveRejectLeave/${leaveId}`,
         {
           method: "PATCH",
           headers: {
@@ -145,7 +147,7 @@ const AdminUrtiPage: React.FC = () => {
         params.append("status", appliedFilters.statusFilter.toLowerCase());
       }
 
-      const url = `${window.IFS365API_URL}api/listLeaves${
+      const url = `${window.IFS_365_API_URL}api/listLeaves${
         params.toString() ? `?${params.toString()}` : ""
       }`;
 
@@ -341,7 +343,7 @@ const AdminUrtiPage: React.FC = () => {
 
       // Make API call with the updated leave record
       const response = await fetch(
-        window.IFS365API_URL + `api/ApproveRejectLeave/${leave.id}`,
+        window.IFS_365_API_URL + `api/ApproveRejectLeave/${leave.id}`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
