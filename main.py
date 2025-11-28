@@ -9,6 +9,8 @@ UPDATED WITH BASE SUPPORT:
 5. Debug logging on all critical operations
 6. ⭐ NEW: Base and terminal support from localStorage
 7. ⭐ NEW: Base-wise insights APIs
+8. ✅ FIXED: Category deduplication using sets
+9. ✅ FIXED: recentAssessments list comprehension syntax
 """
 
 from __future__ import annotations
@@ -17,14 +19,12 @@ import os
 import re
 import base64
 import shutil
-
 from datetime import datetime, timedelta, date as _date
 from typing import Optional, Dict, Any, Tuple, List
 from gcs_utils import _list_by_prefix, _download_json
 from dashboard_service import _load_records, Filters as DashboardFilters, _issue_heading
 from collections import defaultdict
 from datetime import datetime, date as _date, timedelta
-
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, UploadFile, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,13 +37,14 @@ load_dotenv()
 import config  # noqa: E402
 
 # ============= Grooming analysis (Gemini) =============
+
 from grooming_utils import (  # noqa: E402
     check_grooming as run_grooming_analysis,
     check_grooming_from_video,
 )
 
-
 # ============= Regex helpers to parse Gemini text =============
+
 _rx = {
     "overall_assessment": re.compile(r"^Overall\s*Assessment\s*:\s*(.+)$", re.I | re.M),
     "overall_score": re.compile(
@@ -71,11 +72,9 @@ _rx = {
     "observations_block": re.compile(r"Observations\s*:\s*(.+?)(?:\n\s*(?:Issues|$))", re.I | re.S),
 }
 
-
 def _extract(pat: re.Pattern, text: str) -> Tuple[bool, str]:
     m = pat.search(text or "")
     return (m is not None, m.group(1).strip() if m else "")
-
 
 def _num(s: str) -> Optional[int]:
     """Convert to integer only, no decimals."""
@@ -83,7 +82,6 @@ def _num(s: str) -> Optional[int]:
         return int(float(s))
     except Exception:
         return None
-
 
 def _lines_to_list(block: str) -> List[str]:
     """
@@ -93,12 +91,12 @@ def _lines_to_list(block: str) -> List[str]:
     out: List[str] = []
     if not block:
         return out
-    
+
     for ln in block.splitlines():
         t = ln.strip()
         if not t:
             continue
-        
+
         # Remove leading bullets/numbers
         if t.startswith("-"):
             t = t.lstrip("- ").strip()
@@ -109,12 +107,11 @@ def _lines_to_list(block: str) -> List[str]:
             t = parts[-1].strip() if len(parts) > 1 else t
         elif re.match(r"^\d+\)", t):
             t = re.sub(r"^\d+\)\s*", "", t)
-        
+
         if t and len(t) > 2:
             out.append(t)
-    
-    return out
 
+    return out
 
 def _normalize_assessment(a: Optional[str]) -> Optional[str]:
     if a is None:
@@ -123,78 +120,68 @@ def _normalize_assessment(a: Optional[str]) -> Optional[str]:
     a = a.replace("NONCOMPLIANT", "NON-COMPLIANT")
     return a if a in ("COMPLIANT", "NON-COMPLIANT") else None
 
-
 def _extract_issues_from_text(text: str) -> List[str]:
     """
     ROBUST: Extract issues using MULTIPLE fallback methods.
     Guaranteed to find violations one way or another.
     """
     all_issues = []
-    
     if not text:
         print("[DEBUG] Text is empty")
         return []
-    
+
     print(f"[DEBUG] ============ ISSUE EXTRACTION START ============")
     print(f"[DEBUG] Text length: {len(text)} characters")
-    
+
     # METHOD 1: Look for explicit "Issues Found:" block
     print(f"[DEBUG] METHOD 1: Trying 'Issues Found:' pattern...")
-    
     issues_patterns = [
         r"Issues\s+Found\s*:\s*(.+?)(?:\n\s*(?:Recommendations|Observations|$))",
         r"Issues\s*:\s*(.+?)(?:\n\s*(?:Recommendations|Observations|$))",
         r"ISSUES\s*:\s*(.+?)(?:\n\s*(?:Recommendations|$))",
     ]
-    
+
     for pattern_str in issues_patterns:
         pattern = re.compile(pattern_str, re.I | re.S)
         m = pattern.search(text)
-        
         if m:
             block = m.group(1).strip()
             print(f"[DEBUG] Found matching pattern")
             print(f"[DEBUG] Block content (first 200 chars): {block[:200]}")
-            
             issues = _lines_to_list(block)
             if issues:
                 all_issues.extend(issues)
                 print(f"[DEBUG] ✓ Extracted {len(issues)} issues from Issues Found")
                 for i, issue in enumerate(issues, 1):
-                    print(f"[DEBUG]   {i}. {issue}")
-                break
-    
+                    print(f"[DEBUG] {i}. {issue}")
+            break
+
     # METHOD 2: Try "Observations:" section
     if not all_issues:
         print(f"[DEBUG] METHOD 2: No issues from 'Issues Found', trying 'Observations:'...")
-        
         obs_patterns = [
             r"Observations\s*:\s*(.+?)(?:\n\s*(?:Issues|Recommendations|$))",
             r"OBSERVATIONS\s*:\s*(.+?)(?:\n\s*(?:Issues|$))",
         ]
-        
+
         for pattern_str in obs_patterns:
             pattern = re.compile(pattern_str, re.I | re.S)
             m = pattern.search(text)
-            
             if m:
                 block = m.group(1).strip()
                 print(f"[DEBUG] Found Observations block")
                 print(f"[DEBUG] Block content (first 200 chars): {block[:200]}")
-                
                 obs_list = _lines_to_list(block)
-                
                 if obs_list:
                     all_issues.extend(obs_list)
                     print(f"[DEBUG] ✓ Extracted {len(obs_list)} observations")
                     for i, obs in enumerate(obs_list, 1):
-                        print(f"[DEBUG]   {i}. {obs}")
-                    break
-    
+                        print(f"[DEBUG] {i}. {obs}")
+                break
+
     # METHOD 3: Infer violations from category scores
     if not all_issues:
         print(f"[DEBUG] METHOD 3: No explicit issues found, inferring from category scores...")
-        
         category_scores = {
             "uniform": (_extract(_rx["uniform_score"], text), 3),
             "hairstyle": (_extract(_rx["hairstyle_score"], text), 2),
@@ -202,52 +189,45 @@ def _extract_issues_from_text(text: str) -> List[str]:
             "nails": (_extract(_rx["nails_score"], text), 1),
             "accessories": (_extract(_rx["accessories_score"], text), 2),
         }
-        
+
         for cat_name, (score_match, max_score) in category_scores.items():
             ok, val = score_match
             if ok:
                 score = _num(val)
                 print(f"[DEBUG] Category '{cat_name}': Score = {score}/{max_score}")
-                
                 if score is not None and score < max_score:
                     violation = f"{cat_name.capitalize()} violation (Score: {score}/{max_score})"
                     all_issues.append(violation)
                     print(f"[DEBUG] ✓ Inferred violation: {violation}")
-    
+
     # METHOD 4: Look for any category with score < max (last resort)
     if not all_issues:
         print(f"[DEBUG] METHOD 4: Last resort - scanning for any score < max...")
-        
         score_pattern = re.compile(r"(\w+)\s*:\s*([0-9]+)\s*/\s*([0-9]+)", re.I)
         matches = score_pattern.findall(text)
-        
+
         for cat_name, score_str, max_str in matches:
             try:
                 score = int(score_str)
                 max_score = int(max_str)
-                
                 print(f"[DEBUG] Found score: {cat_name} = {score}/{max_score}")
-                
                 if score < max_score:
                     violation = f"{cat_name.capitalize()} violation (Score: {score}/{max_score})"
                     all_issues.append(violation)
                     print(f"[DEBUG] ✓ Found violation: {violation}")
             except:
                 pass
-    
+
     print(f"[DEBUG] ============ FINAL RESULT ============")
     print(f"[DEBUG] Total issues extracted: {len(all_issues)}")
-    
     if all_issues:
         for i, issue in enumerate(all_issues, 1):
             print(f"[DEBUG] ISSUE {i}: {issue}")
     else:
-        print(f"[DEBUG] ⚠️  No issues found (may be COMPLIANT test)")
-    
+        print(f"[DEBUG] ⚠️ No issues found (may be COMPLIANT test)")
     print(f"[DEBUG] ============ EXTRACTION COMPLETE ============\n")
-    
-    return all_issues if all_issues else []
 
+    return all_issues if all_issues else []
 
 def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dict[str, Any]:
     """
@@ -263,7 +243,7 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
     # Extract category scores and check for NOT VISIBLE markers
     cats: Dict[str, int] = {}
     not_visible_flags: Dict[str, bool] = {}
-    
+
     category_configs = [
         ("uniform", "uniform_score", "uniform_not_visible", 3),
         ("hairstyle", "hairstyle_score", "hairstyle_not_visible", 2),
@@ -271,14 +251,14 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
         ("nails", "nails_score", "nails_not_visible", 1),
         ("accessories", "accessories_score", "accessories_not_visible", 2),
     ]
-    
+
     for cat_name, score_key, visible_key, max_val in category_configs:
         is_not_visible = _rx[visible_key].search(text or "") is not None
         not_visible_flags[cat_name] = is_not_visible
-        
+
         ok, val = _extract(_rx[score_key], text)
         extracted_score = _num(val) if ok else None
-        
+
         if is_not_visible:
             cats[cat_name] = max_val
         else:
@@ -310,7 +290,7 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
 
     # Extract issues
     issues = _extract_issues_from_text(text)
-    
+
     # Extract recommendations
     ok_r, block_r = _extract(_rx["reco_block"], text)
 
@@ -325,8 +305,8 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
         "_metadata": {"not_visible": not_visible_flags},
     }
 
-
 # ============= GCS utils used by grooming routes =============
+
 from gcs_utils import (  # noqa: E402
     upload_image_bytes,
     upload_grooming_result_text,
@@ -335,6 +315,7 @@ from gcs_utils import (  # noqa: E402
 )
 
 # ============= App setup =============
+
 app = FastAPI(title="Grooming Checks + Insights API", version="2.0.0")
 
 app.add_middleware(
@@ -345,22 +326,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 class GroomingRequest(BaseModel):
     imageBase64: str
     crewName: Optional[str] = None
     igaCode: Optional[str] = None
-    base: Optional[str] = None      # ⭐ NEW: Base location
+    base: Optional[str] = None  # ⭐ NEW: Base location
     terminal: Optional[str] = None  # ⭐ NEW: Terminal
     department: Optional[str] = None
-
 
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok", "time": datetime.now().isoformat()}
 
-
 # ============= Grooming (image) =============
+
 @app.post("/check-grooming")
 async def check_grooming_endpoint(payload: GroomingRequest):
     if not payload.imageBase64 or len(payload.imageBase64) < 10:
@@ -369,10 +348,10 @@ async def check_grooming_endpoint(payload: GroomingRequest):
     try:
         # ⭐ Log received data
         print(f"📥 Received photo assessment:")
-        print(f"  IGA Code: {payload.igaCode}")
-        print(f"  Name: {payload.crewName}")
-        print(f"  Base: {payload.base}")
-        print(f"  Terminal: {payload.terminal}")
+        print(f" IGA Code: {payload.igaCode}")
+        print(f" Name: {payload.crewName}")
+        print(f" Base: {payload.base}")
+        print(f" Terminal: {payload.terminal}")
 
         b64 = payload.imageBase64.split(",")[-1]
         img_bytes = base64.b64decode(b64)
@@ -381,57 +360,57 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         parsed = _parse_text_to_ui(report, payload.crewName, payload.igaCode)
 
         img_path = upload_image_bytes(img_bytes, payload.igaCode, "image", payload.crewName)
-        
+
         # ⭐ Pass base and terminal to GCS save function
         upload_grooming_result_text(
-            report, 
-            payload.crewName, 
-            payload.igaCode, 
-            img_path, 
+            report,
+            payload.crewName,
+            payload.igaCode,
+            img_path,
             parsed=parsed,
-            base=payload.base,          # ⭐ NEW
-            terminal=payload.terminal   # ⭐ NEW
+            base=payload.base,  # ⭐ NEW
+            terminal=payload.terminal  # ⭐ NEW
         )
-        
+
         append_event_to_crew_log(
             {
-                "type": "image", 
-                "parsed": parsed, 
+                "type": "image",
+                "parsed": parsed,
                 "image_path": img_path,
-                "base": payload.base,          # ⭐ NEW
-                "terminal": payload.terminal   # ⭐ NEW
+                "base": payload.base,  # ⭐ NEW
+                "terminal": payload.terminal  # ⭐ NEW
             },
             payload.crewName,
             payload.igaCode,
         )
-        
+
         create_ticket(
             {
-                "type": "image", 
-                "igaCode": payload.igaCode, 
-                "crewName": payload.crewName, 
+                "type": "image",
+                "igaCode": payload.igaCode,
+                "crewName": payload.crewName,
                 "image_path": img_path,
-                "base": payload.base,          # ⭐ NEW
-                "terminal": payload.terminal   # ⭐ NEW
+                "base": payload.base,  # ⭐ NEW
+                "terminal": payload.terminal  # ⭐ NEW
             }
         )
 
         print(f"✅ Photo assessment saved with base: {payload.base}")
-
         return {"status": "ok", "result": parsed}
+
     except Exception as e:
         import traceback
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
 
-
 # ============= Grooming (video) =============
+
 @app.post("/check-grooming-video")
 async def check_grooming_video(
     video: UploadFile = File(...),
     name: str = Form(...),
     iga_code: str = Form(...),
-    base: Optional[str] = Form(None),      # ⭐ NEW: Base location
+    base: Optional[str] = Form(None),  # ⭐ NEW: Base location
     terminal: Optional[str] = Form(None),  # ⭐ NEW: Terminal
 ):
     """
@@ -441,9 +420,8 @@ async def check_grooming_video(
     MAX_SIZE = 20 * 1024 * 1024  # 20 MB
     size = 0
     chunk_size = 1024 * 1024  # 1 MB chunks
-    
+
     await video.seek(0)
-    
     while True:
         chunk = await video.read(chunk_size)
         if not chunk:
@@ -451,21 +429,21 @@ async def check_grooming_video(
         size += len(chunk)
         if size > MAX_SIZE:
             return JSONResponse({"error": "Video size must be <= 20 MB"}, status_code=400)
-    
+
     await video.seek(0)
 
     try:
         # ⭐ Log received data
         print(f"📥 Received video assessment:")
-        print(f"  IGA Code: {iga_code}")
-        print(f"  Name: {name}")
-        print(f"  Base: {base}")
-        print(f"  Terminal: {terminal}")
+        print(f" IGA Code: {iga_code}")
+        print(f" Name: {name}")
+        print(f" Base: {base}")
+        print(f" Terminal: {terminal}")
 
         videos_dir = os.path.join("uploads", "videos")
         os.makedirs(videos_dir, exist_ok=True)
+
         video_path = os.path.join(videos_dir, video.filename)
-        
         with open(video_path, "wb") as f:
             shutil.copyfileobj(video.file, f)
 
@@ -474,65 +452,65 @@ async def check_grooming_video(
 
         video_bytes = open(video_path, 'rb').read()
         video_gcs_path = upload_image_bytes(video_bytes, iga_code, "video", name)
-        
+
         # ⭐ Pass base and terminal to GCS save function
         upload_grooming_result_text(
-            full_text, 
-            name, 
-            iga_code, 
+            full_text,
+            name,
+            iga_code,
             video_gcs_path,
             parsed=parsed,
-            base=base,          # ⭐ NEW
-            terminal=terminal   # ⭐ NEW
+            base=base,  # ⭐ NEW
+            terminal=terminal  # ⭐ NEW
         )
-        
+
         append_event_to_crew_log(
             {
-                "type": "video", 
-                "parsed": parsed, 
+                "type": "video",
+                "parsed": parsed,
                 "video_path": video_gcs_path,
-                "base": base,          # ⭐ NEW
-                "terminal": terminal   # ⭐ NEW
+                "base": base,  # ⭐ NEW
+                "terminal": terminal  # ⭐ NEW
             },
             name,
             iga_code,
         )
-        
+
         create_ticket(
             {
-                "type": "video", 
-                "igaCode": iga_code, 
-                "crewName": name, 
+                "type": "video",
+                "igaCode": iga_code,
+                "crewName": name,
                 "video_path": video_gcs_path,
-                "base": base,          # ⭐ NEW
-                "terminal": terminal   # ⭐ NEW
+                "base": base,  # ⭐ NEW
+                "terminal": terminal  # ⭐ NEW
             }
         )
 
         print(f"✅ Video assessment saved with base: {base}")
-
         return {"status": "ok", "result": parsed}
+
     except Exception as e:
         import traceback
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
 
-
 # ============= The 3 requested APIs =============
-from dashboard_service import get_insights, get_info, search_people  # noqa: E402
 
+from dashboard_service import get_insights, get_info, search_people  # noqa: E402
 
 def _resolve_range(dateFrom: Optional[_date], dateTo: Optional[_date], days: Optional[int]):
     today = datetime.utcnow().date()
+
     if days and int(days) > 0:
         d = int(days)
         _from = today - timedelta(days=d - 1)
         _to = today
         return _from, _to
+
     _from = dateFrom or (today - timedelta(days=6))
     _to = dateTo or today
     return _from, _to
-
 
 @app.get("/v1/insights")
 async def insights(
@@ -544,15 +522,12 @@ async def insights(
 ):
     """
     Get insights data with consistent pagination (20 records) and full date range trends.
-    
     When using preset date ranges (days=7, days=14) or custom date filters,
     recent tests will always show 20 records (not 25).
-    
     Trends data now includes ALL dates in the range, including dates with zero testing.
     """
     _from, _to = _resolve_range(dateFrom, dateTo, days)
     return get_insights(_from, _to, page, pageSize)
-
 
 @app.get("/v1/info")
 async def info_box(
@@ -562,7 +537,6 @@ async def info_box(
 ):
     _from, _to = _resolve_range(dateFrom, dateTo, days)
     return get_info(_from, _to)
-
 
 @app.get("/v1/search")
 async def search_endpoint(
@@ -575,7 +549,6 @@ async def search_endpoint(
 ):
     _from, _to = _resolve_range(dateFrom, dateTo, days)
     return search_people(_from, _to, q, page, pageSize)
-
 
 # ============= ⭐ NEW: Base-wise Insights APIs =============
 
@@ -591,27 +564,26 @@ async def insights_by_base(
     Returns top N bases by total test count.
     """
     _from, _to = _resolve_range(dateFrom, dateTo, days)
-    
     print(f"[BY-BASE] Fetching data from {_from} to {_to}")
-    
+
     # Load all records
     filters = DashboardFilters(date_from=_from, date_to=_to)
     records = _load_records(filters)
-    
+
     print(f"[BY-BASE] Loaded {len(records)} total records")
-    
+
     # Group by base
     base_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
-    
+
     for record in records:
         # ⭐ Read base from record (stored from frontend localStorage)
         base = record.get("base") or record.get("terminal") or "UNKNOWN"
-        
+
         if record["assessment"] == "COMPLIANT":
             base_stats[base]["compliant"] += 1
         else:
             base_stats[base]["nonCompliant"] += 1
-    
+
     # Convert to list and calculate totals
     result = []
     for base, stats in base_stats.items():
@@ -622,14 +594,14 @@ async def insights_by_base(
             "nonCompliant": stats["nonCompliant"],
             "total": total
         })
-    
+
     # Sort by total tests descending, take top N
     result.sort(key=lambda x: x["total"], reverse=True)
-    
+
     print(f"[BY-BASE] Returning {len(result[:topN])} bases")
     for base in result[:topN]:
-        print(f"[BY-BASE]   {base['base']}: {base['total']} tests ({base['compliant']} compliant)")
-    
+        print(f"[BY-BASE] {base['base']}: {base['total']} tests ({base['compliant']} compliant)")
+
     return {
         "meta": {
             "generatedAt": datetime.utcnow().isoformat() + "Z",
@@ -640,7 +612,6 @@ async def insights_by_base(
         },
         "bases": result[:topN]
     }
-
 
 @app.get("/v1/insights/by-base-with-crew")
 async def insights_by_base_with_crew(
@@ -654,28 +625,27 @@ async def insights_by_base_with_crew(
     Returns top N bases by total test count with crew details.
     """
     _from, _to = _resolve_range(dateFrom, dateTo, days)
-    
     print(f"[BY-BASE-CREW] Fetching data from {_from} to {_to}")
-    
+
     # Load all records
     filters = DashboardFilters(date_from=_from, date_to=_to)
     records = _load_records(filters)
-    
+
     print(f"[BY-BASE-CREW] Loaded {len(records)} total records")
-    
+
     # Group by base, then by crew
     base_stats = defaultdict(lambda: {
-        "compliant": 0, 
+        "compliant": 0,
         "nonCompliant": 0,
         "crew": defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
     })
-    
+
     for record in records:
         # ⭐ Read base from record
         base = record.get("base") or record.get("terminal") or "UNKNOWN"
         iga_code = record.get("iga_code")
         crew_name = record.get("crew_name")
-        
+
         # Base-level aggregation
         if record["assessment"] == "COMPLIANT":
             base_stats[base]["compliant"] += 1
@@ -683,12 +653,12 @@ async def insights_by_base_with_crew(
         else:
             base_stats[base]["nonCompliant"] += 1
             base_stats[base]["crew"][(iga_code, crew_name)]["nonCompliant"] += 1
-    
+
     # Build result with crew details
     result = []
     for base, stats in base_stats.items():
         total = stats["compliant"] + stats["nonCompliant"]
-        
+
         # Build crew list
         crew_list = []
         for (iga_code, crew_name), crew_stats in stats["crew"].items():
@@ -701,10 +671,10 @@ async def insights_by_base_with_crew(
                 "total": crew_total,
                 "passRate": round((crew_stats["compliant"] / crew_total * 100), 2) if crew_total > 0 else 0
             })
-        
+
         # Sort crew by total tests descending
         crew_list.sort(key=lambda x: x["total"], reverse=True)
-        
+
         result.append({
             "base": base,
             "compliant": stats["compliant"],
@@ -712,12 +682,12 @@ async def insights_by_base_with_crew(
             "total": total,
             "crewMembers": crew_list
         })
-    
+
     # Sort by total tests descending, take top N
     result.sort(key=lambda x: x["total"], reverse=True)
-    
+
     print(f"[BY-BASE-CREW] Returning {len(result[:topN])} bases with crew details")
-    
+
     return {
         "meta": {
             "generatedAt": datetime.utcnow().isoformat() + "Z",
@@ -729,8 +699,8 @@ async def insights_by_base_with_crew(
         "bases": result[:topN]
     }
 
-
 # ============= Individual Analysis - FINAL COMPLETE FIX =============
+
 @app.get("/v1/individual-analysis")
 async def individual_analysis(
     igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
@@ -740,14 +710,14 @@ async def individual_analysis(
 ):
     """
     Individual Analysis - Now with optional crewName!
-    
+
     KEY PRINCIPLES:
     - Load ALL records from GCS for date range
     - Filter by crew (if crewName provided)
     - Count violations from ALL records (COMPLIANT or NON-COMPLIANT)
     - If a category has ANY issues in ANY assessment, increment by 1 (not by issue count)
     - Show violations as count and percentage
-    
+
     UPDATED: crewName is now OPTIONAL
     - If crewName provided: Filter by both igaCode and crewName
     - If crewName is None/empty: Show data for igaCode across ALL crew members
@@ -783,6 +753,7 @@ async def individual_analysis(
 
         filters = DashboardFilters(date_from=start_date, date_to=end_date)
         all_records = _load_records(filters)
+
         print(f"[INDIVIDUAL-ANALYSIS] Loaded {len(all_records)} total records from GCS")
 
         # ============= FILTER BY IGA CODE AND OPTIONAL CREW NAME =============
@@ -830,18 +801,18 @@ async def individual_analysis(
         pass_rate = (compliant_count / total * 100) if total > 0 else 0
 
         print(f"[INDIVIDUAL-ANALYSIS] Summary: Total={total}, Compliant={compliant_count}, NC={noncompliant_count}, PassRate={pass_rate:.2f}%")
-        
+
         # ============= CRITICAL: CATEGORY BREAKDOWN =============
         print(f"\n[INDIVIDUAL-ANALYSIS] === CATEGORY BREAKDOWN CALCULATION ===")
-        
+
         # Count violations by category from ALL records (regardless of overall assessment status)
         category_violation_count = defaultdict(int)
-        
+
         for record in crew_records:
             issues = record.get("issues") or []
             print(f"[INDIVIDUAL-ANALYSIS] Processing record: {record.get('timestamp')}, Assessment: {record['assessment']}")
             print(f"[INDIVIDUAL-ANALYSIS] Issues: {issues}")
-            
+
             # ✅ FIX: Collect UNIQUE categories that have issues in THIS record
             cats_found = set()
             for issue in issues:
@@ -851,12 +822,12 @@ async def individual_analysis(
                     print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Category '{heading}'")
                 else:
                     print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Skipped (category: '{heading}')")
-            
+
             # ✅ FIX: Increment count by 1 for each UNIQUE category in this record
             for cat in cats_found:
                 category_violation_count[cat] += 1
                 print(f"[INDIVIDUAL-ANALYSIS] Category '{cat}' incremented to {category_violation_count[cat]}")
-        
+
         # Convert to final format: violations + percentage
         category_breakdown = {}
         for cat in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
@@ -867,12 +838,12 @@ async def individual_analysis(
                 "percentage": round(percentage, 2)
             }
             print(f"[INDIVIDUAL-ANALYSIS] {cat.upper()}: violations={violation_count}, total={total}, percentage={percentage:.2f}%")
-        
-        print(f"[INDIVIDUAL-ANALYSIS] === END CATEGORY BREAKDOWN ===\n")
 
+        print(f"[INDIVIDUAL-ANALYSIS] === END CATEGORY BREAKDOWN ===\n")
 
         # ============= BUILD DAILY TRENDS =============
         daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
+
         for record in crew_records:
             record_date = record["date"]
             if record["assessment"] == "COMPLIANT":
@@ -941,9 +912,8 @@ async def individual_analysis(
             status_code=500
         )
 
-
 # ============= Entrypoint =============
+
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=True)
