@@ -1,0 +1,789 @@
+import React, { useState, useEffect } from "react";
+import Layout from "../../components/Layout";
+import { Calendar } from "lucide-react";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
+
+interface LeaveRecord {
+  id: string;
+  iga_code: string;
+  employee_name: string;
+  base: string;
+  start_date: string;
+  end_date: string;
+  duration_days: number;
+  comment: string;
+  status: "pending" | "approved" | "rejected";
+  approved_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface Attendance {
+  name: string;
+  date: string;
+  base: string;
+  leaveFrom: string;
+  leaveTo: string;
+  igaCode: string;
+  status: "Pending" | "Approved" | "Rejected";
+  comment: string;
+  approvedBy: string | null;
+  id: string;
+  duration: number;
+}
+
+const AdminUrtiPage: React.FC = () => {
+  const [attendances, setAttendances] = useState<Attendance[]>([]);
+  const [selectedBase, setSelectedBase] = useState("All");
+  const [dateFilter, setDateFilter] = useState("All");
+  const [customFromDate, setCustomFromDate] = useState<Date | null>(null);
+  const [customToDate, setCustomToDate] = useState<Date | null>(null);
+  const [statusFilter, setStatusFilter] = useState("Pending");
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [appliedFilters, setAppliedFilters] = useState({
+    selectedBase: "All",
+    dateFilter: "All",
+    customFromDate: null as Date | null,
+    customToDate: null as Date | null,
+    statusFilter: "Pending",
+    searchKeyword: "",
+  });
+  const [filteredAttendances, setFilteredAttendances] = useState<Attendance[]>(
+    []
+  );
+  const [sortConfig, setSortConfig] = useState<{
+    key: 'date' | 'leaveFrom' | null;
+    direction: 'asc' | 'desc';
+  }>({ key: null, direction: 'asc' });
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [modal, setModal] = useState<{
+    show: boolean;
+    type: 'success' | 'error' | 'warning';
+    message: string;
+  }>({ show: false, type: 'success', message: '' });
+  const [showCommentModal, setShowCommentModal] = useState(false);
+  const [selectedComment, setSelectedComment] = useState("");
+
+  const handleLogout = () => {
+    localStorage.clear();
+    window.location.href = "/";
+  };
+
+  // Format API date (YYYY-MM-DD or ISO) to DD-MM-YYYY
+  const formatApiDateToDisplay = (dateString: string): string => {
+    const date = new Date(dateString);
+    const day = date.getDate().toString().padStart(2, "0");
+    const month = (date.getMonth() + 1).toString().padStart(2, "0");
+    const year = date.getFullYear();
+    return `${day}-${month}-${year}`;
+  };
+
+  // Format date to dd/mm/yy
+  const formatDateToDDMMYY = (dateString: string): string => {
+    const [day, month, year] = dateString.split("-");
+    const shortYear = year.slice(-2);
+    return `${day}/${month}/${shortYear}`;
+  };
+
+  // Convert dd-mm-yyyy string to Date object
+  const parseDate = (dateString: string): Date => {
+    const [day, month, year] = dateString.split("-");
+    return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+  };
+
+  // API function to approve/reject leave
+  const approveRejectLeave = async (
+    leaveId: string,
+    action: "approved" | "rejected",
+    comment: string
+  ) => {
+    try {
+      setActionLoading(leaveId);
+      const response = await fetch(
+        `${window.IFS_365_API_URL}/api/ApproveRejectLeave/${leaveId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            status: action === "approved" ? 1 : 0,
+            comment: comment,
+            approved_by: "Admin User",
+          }),
+        }
+      );
+
+      if (!response.ok) throw new Error("Failed to update leave status");
+
+      const result = await response.json();
+      
+      // Refresh data after status update
+      await fetchLeaveData();
+
+      return result;
+    } catch (error) {
+      console.error("Error updating leave status:", error);
+      throw error;
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // API function to fetch leave data
+  const fetchLeaveData = async () => {
+    try {
+      setIsLoadingData(true);
+      const params = new URLSearchParams();
+      
+      if (appliedFilters.selectedBase !== "All") {
+        params.append("base", appliedFilters.selectedBase);
+      }
+      if (appliedFilters.statusFilter !== "All") {
+        params.append("status", appliedFilters.statusFilter.toLowerCase());
+      }
+
+      const url = `${window.IFS_365_API_URL}/api/listLeaves${
+        params.toString() ? `?${params.toString()}` : ""
+      }`;
+
+      const response = await fetch(url);
+
+      if (!response.ok) throw new Error("Failed to fetch leave data");
+
+      const data: LeaveRecord[] = await response.json();
+
+      // Transform API data to match component interface
+      const transformedData: Attendance[] = data.map((record) => {
+        const igaCode = record.iga_code || '';
+        const formattedIgaCode = igaCode.startsWith('IGA') ? igaCode : `IGA${igaCode}`;
+        
+        return {
+          id: record.id,
+          name: record.employee_name,
+          date: formatApiDateToDisplay(record.created_at),
+          base: record.base,
+          leaveFrom: formatApiDateToDisplay(record.start_date),
+          leaveTo: formatApiDateToDisplay(record.end_date),
+          igaCode: formattedIgaCode,
+          status: (record.status.charAt(0).toUpperCase() +
+            record.status.slice(1)) as "Pending" | "Approved" | "Rejected",
+          comment: record.comment || "",
+          approvedBy: record.approved_by,
+          duration: record.duration_days,
+        };
+      });
+
+      setAttendances(transformedData);
+    } catch (error) {
+      console.error("Error fetching leave data:", error);
+    } finally {
+      setIsLoadingData(false);
+    }
+  };
+
+  const applyFiltersToData = () => {
+    const now = new Date();
+    let from: Date | null = null;
+    let to: Date | null = null;
+
+    if (appliedFilters.dateFilter === "Last Week") {
+      from = new Date(now);
+      from.setDate(now.getDate() - 7);
+    } else if (appliedFilters.dateFilter === "Last Month") {
+      from = new Date(now);
+      from.setMonth(now.getMonth() - 1);
+    } else if (appliedFilters.dateFilter === "Last 30 Days") {
+      from = new Date(now);
+      from.setDate(now.getDate() - 30);
+    } else if (appliedFilters.dateFilter === "Custom") {
+      from = appliedFilters.customFromDate;
+      to = appliedFilters.customToDate;
+    }
+
+    const keyword = appliedFilters.searchKeyword.trim().toLowerCase();
+
+    let filtered = attendances.filter((entry) => {
+      const entryDate = parseDate(entry.date);
+      const matchesFrom = !from || entryDate >= from;
+      const matchesTo = !to || entryDate <= to;
+      const matchesKeyword =
+        !keyword ||
+        entry.name.toLowerCase().includes(keyword) ||
+        entry.igaCode.toLowerCase().includes(keyword);
+
+      return matchesFrom && matchesTo && matchesKeyword;
+    });
+
+    if (sortConfig.key) {
+      filtered.sort((a, b) => {
+        const aDate = parseDate(sortConfig.key === 'date' ? a.date : a.leaveFrom);
+        const bDate = parseDate(sortConfig.key === 'date' ? b.date : b.leaveFrom);
+        return sortConfig.direction === 'asc' 
+          ? aDate.getTime() - bDate.getTime()
+          : bDate.getTime() - aDate.getTime();
+      });
+    }
+
+    setFilteredAttendances(filtered);
+  };
+
+  const handleSort = (key: 'date' | 'leaveFrom') => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const LoadingSpinner = () => (
+    <div className="flex flex-col items-center justify-center h-64 space-y-4">
+      <div className="relative">
+        <div className="w-16 h-16 border-4 border-indigo-primary/30 border-t-indigo-primary rounded-full animate-spin"></div>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="w-8 h-8 bg-indigo-gradient rounded-full animate-pulse"></div>
+        </div>
+      </div>
+      <div className="text-center">
+        <p className="text-indigo-primary font-semibold">Loading Leaves data...</p>
+        <p className="text-sm text-muted-foreground">Please wait a moment.</p>
+      </div>
+    </div>
+  );
+
+  const handleApplyFilters = () => {
+    setIsLoading(true);
+    setAppliedFilters({
+      selectedBase,
+      dateFilter,
+      customFromDate,
+      customToDate,
+      statusFilter,
+      searchKeyword,
+    });
+    setTimeout(() => setIsLoading(false), 500);
+  };
+
+  const handleClearFilters = () => {
+    setSelectedBase("All");
+    setDateFilter("All");
+    setCustomFromDate(null);
+    setCustomToDate(null);
+    setStatusFilter("Pending");
+    setSearchKeyword("");
+    setAppliedFilters({
+      selectedBase: "All",
+      dateFilter: "All",
+      customFromDate: null,
+      customToDate: null,
+      statusFilter: "Pending",
+      searchKeyword: "",
+    });
+  };
+
+  const showModal = (type: 'success' | 'error' | 'warning', message: string) => {
+    setModal({ show: true, type, message });
+    setTimeout(() => setModal({ show: false, type: 'success', message: '' }));
+  };
+
+  const handleViewComment = (comment: string) => {
+    setSelectedComment(comment);
+    setShowCommentModal(true);
+  };
+
+  const handleStatusUpdate = async (
+    index: number,
+    newStatus: Attendance["status"]
+  ) => {
+    const leave = filteredAttendances[index];
+    if (!leave.comment.trim()) {
+      showModal('warning', 'Please add a comment before approving/rejecting');
+      return;
+    }
+    try {
+      await approveRejectLeave(
+        leave.id,
+        newStatus.toLowerCase() as "approved" | "rejected",
+        leave.comment
+      );
+      showModal('success', `Leave request has been ${newStatus.toLowerCase()} successfully!`);
+    } catch (error) {
+      console.error("Failed to update status:", error);
+      showModal('error', 'Failed to update leave status. Please try again.');
+    }
+  };
+
+  const updateComment = (index: number, newComment: string) => {
+    const updated = [...filteredAttendances];
+    updated[index].comment = newComment;
+    setAttendances((prev) =>
+      prev.map((entry) =>
+        entry.id === updated[index].id
+          ? { ...entry, comment: newComment }
+          : entry
+      )
+    );
+    setFilteredAttendances(updated);
+  };
+
+  // Check if comment should be locked (status is not Pending)
+  const isCommentLocked = (status: Attendance["status"]) => {
+    return status !== "Pending";
+  };
+
+  // Custom colors matching your UI
+  const oliveFrom = "rgb(139,170,21)";
+  const oliveTo = "rgb(111,134,18)";
+  const orangeFrom = "rgb(224,107,20)";
+  const orangeTo = "rgb(181,84,15)";
+
+  const getBadgeClasses = (status: Attendance["status"]) => {
+    const base =
+      "inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border transition-all duration-200";
+
+    if (status === "Approved")
+      return `${base} bg-green-100 text-green-800 border-green-400`;
+    if (status === "Rejected")
+      return `${base} bg-red-100 text-red-800 border-red-200`;
+    return `${base} bg-yellow-100 text-yellow-800 border-yellow-200`;
+  };
+
+  useEffect(() => {
+    fetchLeaveData();
+  }, [appliedFilters.selectedBase, appliedFilters.statusFilter]);
+
+  useEffect(() => applyFiltersToData(), [attendances, appliedFilters, sortConfig]);
+  useEffect(
+    () =>
+      setAppliedFilters((prev) => ({
+        ...prev,
+        searchKeyword,
+      })),
+    [searchKeyword]
+  );
+
+  return (
+    <Layout userRole="Admin" onLogout={handleLogout}>
+      {/* Modal Popup */}
+      {modal.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/30" />
+          <div className="relative bg-white rounded-lg shadow-lg p-8 max-w-lg w-full mx-4 border-2 border-indigo-primary min-h-[200px] flex flex-col justify-between">
+            <button
+              onClick={() => setModal({ ...modal, show: false })}
+              className="absolute top-3 right-3 text-gray-400 hover:text-gray-600"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <p className="text-gray-800 text-center text-lg mb-8 mt-4">{modal.message}</p>
+            <div className="flex justify-center">
+              <button
+                onClick={() => setModal({ ...modal, show: false })}
+                className="px-6 py-2 bg-indigo-primary text-white rounded-lg hover:bg-indigo-primary/90 transition-colors"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comment Modal */}
+      {showCommentModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center p-6 border-b flex-shrink-0">
+              <h2 className="text-xl font-bold text-gray-900">Comment</h2>
+              <button
+                onClick={() => setShowCommentModal(false)}
+                className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <p className="text-gray-700 whitespace-pre-wrap break-words">{selectedComment}</p>
+            </div>
+            <div className="flex justify-end p-6 border-t flex-shrink-0">
+              <button
+                onClick={() => setShowCommentModal(false)}
+                className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {/* Header Card */}
+        <div className="card-glass shadow-indigo border border-indigo-100">
+          <div className="p-1">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-indigo-gradient rounded-xl flex items-center justify-center shadow-indigo">
+                  <Calendar className="h-6 w-6 text-white"></Calendar>
+                </div>
+
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900 mb-1">
+                    URTI Leave Management
+                  </h1>
+                  <p className=" text-gray-600">
+                    Manage and review URTI leave requests
+                  </p>
+                </div>
+              </div>
+
+              {/* Search Bar */}
+             
+            </div>
+          </div>
+        </div>
+
+        {/* Filters + Stats using your glass utility */}
+        <div className="flex flex-wrap items-end gap-3 lg:gap-4 glass rounded-2xl shadow-indigo animate-fade-in-up animate-stagger-2 p-3">
+          {/* filters */}
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="w-36">
+              <label className="block text-xs font-medium text-indigo-primary mb-1">
+                Base
+              </label>
+              <select
+                value={selectedBase}
+                onChange={(e) => setSelectedBase(e.target.value)}
+                className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+              >
+                <option value="All">All Bases</option>
+                <option value="DEL">DEL</option>
+                <option value="BOM">BOM</option>
+                <option value="VJA">VJA</option>
+                <option value="BLR">BLR</option>
+                <option value="HYD">HYD</option>
+                <option value="AMD">AMD</option>
+              </select>
+            </div>
+            <div className="w-36">
+              <label className="block text-xs font-medium text-indigo-primary mb-1">
+                Date Applied
+              </label>
+              <select
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+              >
+                <option value="All">All Dates</option>
+                <option value="Last Week">Last Week</option>
+                <option value="Last Month">Last Month</option>
+                <option value="Last 30 Days">Last 30 Days</option>
+                <option value="Custom">Custom</option>
+              </select>
+            </div>
+            <div className="w-32">
+              <label className="block text-xs font-medium text-indigo-primary mb-1">
+                Status
+              </label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+              >
+                <option value="All">All Status</option>
+                <option value="Pending">Pending</option>
+                <option value="Approved">Approved</option>
+                <option value="Rejected">Rejected</option>
+              </select>
+            </div>
+            <button
+              onClick={handleApplyFilters}
+              disabled={isLoading}
+              className="btn-indigo disabled:opacity-50"
+            >
+              {isLoading ? "Applying…" : "Apply Filters"}
+            </button>
+            <button
+              onClick={handleClearFilters}
+              className="h-10 px-4 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors"
+            >
+              Clear All
+            </button>
+          </div>
+
+          {/* Stats */}
+          <div className="flex gap-3 ml-auto">
+            <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+              <div className="text-xs font-bold text-amber-600">Pending</div>
+              <div className="text-lg font-extrabold text-amber-600">
+                {filteredAttendances.filter((a) => a.status === "Pending").length}
+              </div>
+            </div>
+            <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+              <div className="text-xs font-bold text-[rgb(139,170,21)]">
+                Approved
+              </div>
+              <div className="text-lg font-extrabold text-[rgb(139,170,21)]">
+                {filteredAttendances.filter((a) => a.status === "Approved").length}
+              </div>
+            </div>
+            <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+              <div className="text-xs font-bold text-[rgb(224,107,20)]">
+                Rejected
+              </div>
+              <div className="text-lg font-extrabold text-[rgb(224,107,20)]">
+                {filteredAttendances.filter((a) => a.status === "Rejected").length}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Custom date range */}
+        {dateFilter === "Custom" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 card-glass animate-slide-down relative z-50">
+            <div className="relative z-50">
+              <label className="block text-xs font-medium text-indigo-primary mb-1">
+                From <span className="text-xs font-normal text-gray-500">(DD/MM/YYYY)</span>
+              </label>
+              <DatePicker
+                selected={customFromDate}
+                onChange={(date: Date | null) => setCustomFromDate(date)}
+                dateFormat="dd/MM/yyyy"
+                placeholderText="Select date"
+                className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+                wrapperClassName="w-full"
+                popperClassName="z-50"
+              />
+            </div>
+            <div className="relative z-50">
+              <label className="block text-xs font-medium text-indigo-primary mb-1">
+                To <span className="text-xs font-normal text-gray-500">(DD/MM/YYYY)</span>
+              </label>
+              <DatePicker
+                selected={customToDate}
+                onChange={(date: Date | null) => setCustomToDate(date)}
+                dateFormat="dd/MM/yyyy"
+                placeholderText="Select date"
+                minDate={customFromDate || undefined}
+                className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+                wrapperClassName="w-full"
+                popperClassName="z-50"
+              />
+            </div>
+          </div>
+        )}
+
+
+         {/* Search bar */}
+         <div className="w-full lg:w-[full]">
+                <div
+                  className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300 ${
+                    searchKeyword.trim() !== ""
+                      ? "shadow-[0_0_12px_4px_rgba(0,0,153,0.4)]"
+                      : "shadow-[0_0_8px_2px_rgba(0,0,153,0.2)]"
+                  }`}
+                >
+                  <div className="relative bg-white rounded-full">
+                    <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
+                      <svg
+                        className="w-5 h-5 text-gray-400"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                        />
+                      </svg>
+                    </div>
+                    <input
+                      value={searchKeyword}
+                      onChange={(e) => setSearchKeyword(e.target.value)}
+                      placeholder="Search by IGA code or employee name"
+                      className="w-full pl-12 pr-12 py-3 text-sm bg-transparent rounded-full focus:outline-none"
+                    />
+                    {searchKeyword && (
+                      <button
+                        onClick={() => setSearchKeyword("")}
+                        className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-red-500 transition-colors duration-200"
+                      >
+                        <svg
+                          className="h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+        {/* Table using your glass utility */}
+        <div className="glass rounded-2xl shadow-indigo-lg overflow-hidden animate-fade-in-up animate-stagger-3">
+          {isLoadingData ? (
+            <LoadingSpinner/>
+          ) : (
+            <div className="overflow-x-auto scrollbar-thin">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-indigo-gradient text-white">
+                    <th className="px-6 py-4 text-left font-semibold">IGA Code</th>
+                    <th className="px-6 py-4 text-left font-semibold">Employee Name</th>
+                    <th 
+                      className="px-6 py-4 text-left font-semibold cursor-pointer hover:bg-white/10 transition-colors select-none"
+                      onClick={() => handleSort('date')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Date Applied
+                        <span className="text-xs">
+                          {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+                        </span>
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 text-left font-semibold">Base</th>
+                    <th 
+                      className="px-6 py-4 text-left font-semibold cursor-pointer hover:bg-white/10 transition-colors select-none"
+                      onClick={() => handleSort('leaveFrom')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Leave Period
+                        <span className="text-xs">
+                          {sortConfig.key === 'leaveFrom' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+                        </span>
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 text-left font-semibold">Status</th>
+                    <th className="px-6 py-4 text-left font-semibold">Comment</th>
+                    <th className="px-6 py-4 text-left font-semibold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-indigo-primary/10">
+                  {filteredAttendances.map((e, idx) => (
+                    <tr
+                      key={e.id}
+                      className={`hover:bg-indigo-primary/5 transition-colors animate-fadeInUp delay-[${
+                        idx * 50
+                      }ms]`}
+                    >
+                      <td className="px-6 py-3">
+                        <span className="font-mono text-sm bg-indigo-primary/10 text-indigo-primary px-2 py-1 rounded-md border border-indigo-primary/20">
+                          {e.igaCode}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3">{e.name}</td>
+                      <td className="px-6 py-3 font-medium text-sm">
+                        {formatDateToDDMMYY(e.date)}
+                      </td>
+                      <td className="px-6 py-3">
+                        <div>
+                          <span className="px-3 py-1 rounded-full text-xs font-medium bg-indigo-primary/10 text-indigo-primary border border-indigo-primary/20">
+                            {e.base}
+                          </span>
+                          <div className="text-xs mt-1">
+                            {e.approvedBy || "N/A"}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-3 font-medium text-sm">
+                        {formatDateToDDMMYY(e.leaveFrom)} to{" "}
+                        {formatDateToDDMMYY(e.leaveTo)} ({e.duration} days)
+                      </td>
+                      <td className="px-6 py-3">
+                        <span className={getBadgeClasses(e.status)}>
+                          {e.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3">
+                        {isCommentLocked(e.status) ? (
+                          e.comment ? (
+                            <button
+                              onClick={() => handleViewComment(e.comment)}
+                              className="text-indigo-primary hover:text-blue-800 underline text-sm"
+                            >
+                              View Comment
+                            </button>
+                          ) : (
+                            <span className="text-gray-400 text-sm">No comment</span>
+                          )
+                        ) : (
+                          <div>
+                            <input
+                              value={e.comment}
+                              onChange={(ev) => updateComment(idx, ev.target.value)}
+                              maxLength={100}
+                              className="w-full px-3 py-2 border-2 rounded-lg text-sm transition-all border-indigo-primary/20 focus:ring-indigo-primary/50 focus:border-indigo-primary bg-white"
+                              placeholder="Add comment…"
+                            />
+                            {e.comment.length > 100 && (
+                              <p className="text-xs text-red-500 mt-1">Character limit exceeded</p>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-6 py-3">
+                        <div className="flex gap-2 justify-center">
+                          {e.status === "Pending" && (
+                            <button
+                              onClick={() =>
+                                handleStatusUpdate(idx, "Approved")
+                              }
+                              disabled={actionLoading === e.id}
+                              className="px-4 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-50 hover:brightness-110 transition-all animate-scale-hover bg-gradient-to-r from-[rgb(139,170,21)] to-[rgb(111,134,18)]"
+                            >
+                              {actionLoading === e.id ? "..." : "Approve"}
+                            </button>
+                          )}
+                          {e.status === "Pending" && (
+                            <button
+                              onClick={() =>
+                                handleStatusUpdate(idx, "Rejected")
+                              }
+                              disabled={actionLoading === e.id}
+                              className="px-4 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-50 hover:brightness-110 transition-all animate-scale-hover bg-gradient-to-r from-[rgb(224,107,20)] to-[rgb(181,84,15)]"
+                            >
+                              {actionLoading === e.id ? "..." : "Reject"}
+                            </button>
+                          )}
+                          {(e.status === "Approved" ||
+                            e.status === "Rejected") && (
+                            <span className="px-4 py-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg">
+                              {e.status === "Approved"
+                                ? "Approved"
+                                : "Rejected"}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {!filteredAttendances.length && !isLoadingData && (
+                <div className="py-10 text-center text-indigo-primary/70 animate-fade-in-up">
+                  No records found
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </Layout>
+  );
+};
+
+export default AdminUrtiPage;
