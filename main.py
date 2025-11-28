@@ -830,33 +830,33 @@ async def individual_analysis(
         pass_rate = (compliant_count / total * 100) if total > 0 else 0
 
         print(f"[INDIVIDUAL-ANALYSIS] Summary: Total={total}, Compliant={compliant_count}, NC={noncompliant_count}, PassRate={pass_rate:.2f}%")
-
+        
         # ============= CRITICAL: CATEGORY BREAKDOWN =============
         print(f"\n[INDIVIDUAL-ANALYSIS] === CATEGORY BREAKDOWN CALCULATION ===")
-
+        
         # Count violations by category from ALL records (regardless of overall assessment status)
         category_violation_count = defaultdict(int)
-
+        
         for record in crew_records:
             issues = record.get("issues") or []
             print(f"[INDIVIDUAL-ANALYSIS] Processing record: {record.get('timestamp')}, Assessment: {record['assessment']}")
             print(f"[INDIVIDUAL-ANALYSIS] Issues: {issues}")
-
-            # Collect unique categories that have issues in THIS record
+            
+            # ✅ FIX: Collect UNIQUE categories that have issues in THIS record
             cats_found = set()
             for issue in issues:
                 heading = _issue_heading(issue)
                 if heading in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
-                    cats_found.add(heading)
+                    cats_found.add(heading)  # ← Add to set (no duplicates)
                     print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Category '{heading}'")
                 else:
                     print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Skipped (category: '{heading}')")
-
-            # Increment count by 1 for each unique category in this record
+            
+            # ✅ FIX: Increment count by 1 for each UNIQUE category in this record
             for cat in cats_found:
                 category_violation_count[cat] += 1
                 print(f"[INDIVIDUAL-ANALYSIS] Category '{cat}' incremented to {category_violation_count[cat]}")
-
+        
         # Convert to final format: violations + percentage
         category_breakdown = {}
         for cat in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
@@ -867,8 +867,9 @@ async def individual_analysis(
                 "percentage": round(percentage, 2)
             }
             print(f"[INDIVIDUAL-ANALYSIS] {cat.upper()}: violations={violation_count}, total={total}, percentage={percentage:.2f}%")
-
+        
         print(f"[INDIVIDUAL-ANALYSIS] === END CATEGORY BREAKDOWN ===\n")
+
 
         # ============= BUILD DAILY TRENDS =============
         daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
