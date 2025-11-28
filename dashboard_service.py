@@ -2,6 +2,7 @@
 Dashboard service for grooming analytics and insights.
 
 CRITICAL FIX v2: Consolidates BOTH new AND old category formats.
+
 - NEW format: Already mapped to 5 categories
 - OLD format: Granular categories like "uniform violation", "subject-standard mismatch"
   are NOW consolidated to 5 main categories
@@ -10,6 +11,7 @@ This ensures individual-analysis works with historical data.
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
@@ -24,6 +26,7 @@ PASS_THRESHOLD = float(os.getenv("GROOMING_PASS_THRESHOLD", "7.0"))
 from gcs_utils import _list_by_prefix, _download_json, GCS_BASE_FOLDER
 
 # ---------- Small helpers ----------
+
 def _yyyymmdd(d: date) -> str:
     return d.strftime("%Y%m%d")
 
@@ -104,10 +107,10 @@ def _parse_result_text(text: str) -> Dict[str, Any]:
 
     return {"assessment": assessment, "score": score, "issues": issues}
 
-
 # =========================================================================
 # CRITICAL FIX v2: Enhanced _issue_heading() - NOW CONSOLIDATES OLD FORMATS TOO
 # =========================================================================
+
 def _issue_heading(s: str) -> str:
     """
     Map ANY grooming issue to ONE of the 5 MAIN categories:
@@ -116,34 +119,34 @@ def _issue_heading(s: str) -> str:
     - Makeup
     - Nails
     - Accessories
-    
+
     FIXED: Now consolidates BOTH new AND old category formats.
     Old granular categories are now properly mapped.
     """
     s = (s or "").strip().lower()
-    
+
     # Remove common prefixes/noise
     s = s.replace(",", "").replace(":", "")
-    
+
     # ===== UNIFORM =====
     # Maps: uniform, tunic, scarf, badge, stockings, AND OLD granular categories
     uniform_keywords = [
-        "uniform", "tunic", "scarf", "badge", "name badge", 
+        "uniform", "tunic", "scarf", "badge", "name badge",
         "stockings", "attire", "dress", "clothing",
-        "subject-standard mismatch",      # OLD: Maps to Uniform
-        "items not visible",              # OLD: Maps to Uniform
-        "incomplete view",                # OLD: Maps to Uniform
-        "image quality",                  # OLD: Maps to Uniform
-        "uniform violation",              # OLD: Maps to Uniform
-        "total non-compliance"            # OLD: Maps to Uniform
+        "subject-standard mismatch",  # OLD: Maps to Uniform
+        "items not visible",  # OLD: Maps to Uniform
+        "incomplete view",  # OLD: Maps to Uniform
+        "image quality",  # OLD: Maps to Uniform
+        "uniform violation",  # OLD: Maps to Uniform
+        "total non-compliance"  # OLD: Maps to Uniform
     ]
     for kw in uniform_keywords:
         if kw in s:
             return "uniform"
-    
+
     # ===== HAIRSTYLE =====
     hairstyle_keywords = [
-        "hair", "hairstyle", "hair style", "bun", "braid", 
+        "hair", "hairstyle", "hair style", "bun", "braid",
         "ponytail", "chignon", "curl", "hair color", "highlights",
         "beard", "mustache", "moustache", "facial hair",  # Include facial hair
         "grooming non-compliance"  # Sometimes refers to hairstyle
@@ -151,13 +154,13 @@ def _issue_heading(s: str) -> str:
     for kw in hairstyle_keywords:
         if kw in s:
             return "hairstyle"
-    
+
     # ===== ACCESSORIES =====
     # Includes: earrings, rings, watch, bangles, religious items, nose pins
     accessories_keywords = [
-        "accessor", "earring", "ring", "watch", "bangle", 
+        "accessor", "earring", "ring", "watch", "bangle",
         "bracelet", "jewelry", "jewellery", "stud",
-        "nose pin", "piercing", "religious thread", 
+        "nose pin", "piercing", "religious thread",
         "prohibited accessor",  # Catch prohibited items
         "earbud",  # Sometimes classified as accessory
         "prohibited accessories"  # NEW: OLD format support
@@ -165,17 +168,17 @@ def _issue_heading(s: str) -> str:
     for kw in accessories_keywords:
         if kw in s:
             return "accessories"
-    
+
     # ===== MAKEUP =====
     makeup_keywords = [
         "makeup", "make-up", "make up", "foundation", "base",
-        "eyeshadow", "eye shadow", "liner", "eyeliner", 
+        "eyeshadow", "eye shadow", "liner", "eyeliner",
         "mascara", "lipstick", "lip", "cosmetic", "lip color"
     ]
     for kw in makeup_keywords:
         if kw in s:
             return "makeup"
-    
+
     # ===== NAILS =====
     nails_keywords = [
         "nail", "manicure", "nail polish", "nail color"
@@ -183,18 +186,17 @@ def _issue_heading(s: str) -> str:
     for kw in nails_keywords:
         if kw in s:
             return "nails"
-    
+
     # Default fallback
     return "other"
-
 
 @dataclass
 class Filters:
     date_from: date
     date_to: date
 
-
 # ---------- Read records from GCS ----------
+
 def _load_records(filters: Filters) -> List[Dict[str, Any]]:
     """
     Read grooming result records from GCS and build normalized rows.
@@ -205,12 +207,13 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
     for d in _daterange(filters.date_from, filters.date_to):
         date_prefix = f"{GCS_BASE_FOLDER}/{_yyyymmdd(d)}/results/"
         print(f"📁 Checking date prefix: {date_prefix}")
-        
+
         # Get all blobs under the date/results/ path (includes IGA subfolders)
         all_blobs = _list_by_prefix(date_prefix)
         json_blobs = [blob for blob in all_blobs if blob.name.endswith(".json")]
+
         print(f"📊 Found {len(json_blobs)} JSON files for {d}")
-        
+
         for blob in json_blobs:
             # Load one result JSON
             try:
@@ -221,12 +224,12 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
 
             # Handle both old and new data formats
             # New format has direct fields, old format may have parsed blob or raw text
-            
+
             # Try direct fields first (new format)
             assessment = (doc.get("assessment") or "").strip().upper()
             score = doc.get("score")
             issues = doc.get("issues") or []
-            
+
             # If no direct assessment, try parsed blob
             if not assessment or assessment not in ("COMPLIANT", "NON-COMPLIANT"):
                 parsed_blob = doc.get("parsed") if isinstance(doc.get("parsed"), dict) else {}
@@ -234,7 +237,7 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                     assessment = (parsed_blob.get("assessment") or "").strip().upper()
                     score = parsed_blob.get("score") or score
                     issues = parsed_blob.get("issues") or issues
-            
+
             # Final fallback: parse raw text
             if not assessment or assessment not in ("COMPLIANT", "NON-COMPLIANT"):
                 p = _parse_result_text(doc.get("raw_text") or doc.get("result_text", ""))
@@ -257,10 +260,10 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                     else:
                         ts = datetime.fromisoformat(ts_str)
-                        # Make timezone-aware if naive
-                        if ts.tzinfo is None:
-                            from datetime import timezone
-                            ts = ts.replace(tzinfo=timezone.utc)
+                    # Make timezone-aware if naive
+                    if ts.tzinfo is None:
+                        from datetime import timezone
+                        ts = ts.replace(tzinfo=timezone.utc)
                 else:
                     ts = None
             except Exception:
@@ -280,19 +283,21 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                 "terminal": doc.get("terminal") or "UNKNOWN",
                 "department": doc.get("department"),
             }
+
             records.append(record)
             print(f"✅ Loaded record: {record['iga_code']} - {record['assessment']} - {len(record['issues'])} issues")
 
     # Most recent first - use timezone-aware datetime.min
     from datetime import timezone
     min_datetime = datetime.min.replace(tzinfo=timezone.utc)
+
     records.sort(key=lambda r: (r["timestamp"] or min_datetime), reverse=True)
+
     print(f"✅ Total records loaded: {len(records)}")
     return records
 
-
-
 # ---------- Core aggregations ----------
+
 def _looks_like_iga(iga: str) -> bool:
     if not iga:
         return False
@@ -300,11 +305,11 @@ def _looks_like_iga(iga: str) -> bool:
     # adjust if your real pattern differs:
     return bool(re.fullmatch(r"IGA\d{4,6}", iga))
 
-
 def _overview(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     total = len(records)
     comp = sum(1 for r in records if r["assessment"] == "COMPLIANT")
     nonc = total - comp
+
     return {
         "total": total,
         "compliant": comp,
@@ -314,12 +319,11 @@ def _overview(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "base": None  # explicitly include base
     }
 
-
 def _daily_graph(records: List[Dict[str, Any]], start_date: date = None, end_date: date = None) -> List[Dict[str, Any]]:
     """
     Generate daily graph data for ALL dates in range (including zero-testing dates).
     Returns compliant=0, nonCompliant=0 for dates with no records.
-    
+
     Args:
         records: List of assessment records
         start_date: Start of date range (optional - if None, only return dates with data)
@@ -327,7 +331,7 @@ def _daily_graph(records: List[Dict[str, Any]], start_date: date = None, end_dat
     """
     daily_compliant: Dict[date, int] = defaultdict(int)
     daily_noncomp: Dict[date, int] = defaultdict(int)
-    
+
     # Build counts from records
     for r in records:
         d = r["date"]
@@ -335,7 +339,7 @@ def _daily_graph(records: List[Dict[str, Any]], start_date: date = None, end_dat
             daily_compliant[d] += 1
         else:
             daily_noncomp[d] += 1
-    
+
     # Determine date range to return
     if start_date is None or end_date is None:
         # Fallback: only days with data
@@ -344,7 +348,7 @@ def _daily_graph(records: List[Dict[str, Any]], start_date: date = None, end_dat
         # NEW: Include ALL dates in range (including zero-testing dates)
         # This ensures graph data matches UI visualization
         all_days = [d for d in _daterange(start_date, end_date)]
-    
+
     return [{
         "date": d.isoformat(),
         "compliant": daily_compliant.get(d, 0),
@@ -352,23 +356,22 @@ def _daily_graph(records: List[Dict[str, Any]], start_date: date = None, end_dat
         "base": None
     } for d in all_days]
 
-
 def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
     """
-    CRITICAL FIX v2: Returns ONLY 5 MAIN CATEGORIES.
+    CRITICAL FIX v3: Returns ONLY 5 MAIN CATEGORIES.
     Maps ALL issues (both new and old formats) to 5 categories.
     ✅ FIXED: Now counts each category only ONCE per record (not once per issue)
     """
     VALID_CATEGORIES = {"uniform", "hairstyle", "makeup", "nails", "accessories"}
     headings: List[str] = []
-    
+
     for r in records:
         if r["assessment"] == "NON-COMPLIANT":
             # ✅ FIX: Use set to track UNIQUE categories in this record
             categories_in_record = set()
             for raw in r.get("issues", []):
                 s = raw
-                head = _issue_heading(s)
+                head = _issue_heading(s)  # ← Uses FIXED function that handles old formats
                 # Only count valid categories
                 if head in VALID_CATEGORIES:
                     categories_in_record.add(head)  # ← Add to set (no duplicates)
@@ -376,7 +379,7 @@ def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[
             # Add each unique category from this record once
             for cat in categories_in_record:
                 headings.append(cat)
-    
+
     total_nc = sum(1 for r in records if r["assessment"] == "NON-COMPLIANT")
     counts = Counter(headings)
 
@@ -392,29 +395,36 @@ def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[
 
     return result[:top_n]
 
-
 def _top_non_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int = 5):
     per: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
         "crewName": "", "total": 0, "nonCompliant": 0, "sumScore": 0.0, "scored": 0, "lastSeen": None
     })
+
     for r in records:
         iga = (r["iga_code"] or "").strip()
         if not _looks_like_iga(iga):
             continue
+
         x = per[iga]
         x["crewName"] = r["crew_name"] or x["crewName"]
         x["total"] += 1
+
         if r["assessment"] == "NON-COMPLIANT":
             x["nonCompliant"] += 1
+
         if isinstance(r["score"], (int, float)):
-            x["sumScore"] += r["score"]; x["scored"] += 1
+            x["sumScore"] += r["score"]
+            x["scored"] += 1
+
         ts = r.get("timestamp")
         if ts and (x["lastSeen"] is None or ts > x["lastSeen"]):
             x["lastSeen"] = ts
+
     rows = []
     for iga, x in per.items():
         if x["total"] < min_tests or x["nonCompliant"] == 0:
             continue
+
         rows.append({
             "crewId": iga,
             "crewName": x["crewName"],
@@ -425,32 +435,40 @@ def _top_non_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: i
             "lastSeen": x["lastSeen"].isoformat() if x["lastSeen"] else None,
             "base": None
         })
+
     rows.sort(key=lambda r: (r["nonCompliant"], r["nonCompliantRate"], r["totalTests"], r["lastSeen"] or datetime.min), reverse=True)
     return rows[:top_n]
-
 
 def _top_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int = 5):
     per: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
         "crewName": "", "total": 0, "compliant": 0, "sumScore": 0.0, "scored": 0, "lastSeen": None
     })
+
     for r in records:
         iga = (r["iga_code"] or "").strip()
         if not _looks_like_iga(iga):
             continue
+
         x = per[iga]
         x["crewName"] = r["crew_name"] or x["crewName"]
         x["total"] += 1
+
         if r["assessment"] == "COMPLIANT":
             x["compliant"] += 1
+
         if isinstance(r["score"], (int, float)):
-            x["sumScore"] += r["score"]; x["scored"] += 1
+            x["sumScore"] += r["score"]
+            x["scored"] += 1
+
         ts = r.get("timestamp")
         if ts and (x["lastSeen"] is None or ts > x["lastSeen"]):
             x["lastSeen"] = ts
+
     rows = []
     for iga, x in per.items():
         if x["total"] < min_tests or x["compliant"] == 0:
             continue
+
         rows.append({
             "crewId": iga,
             "crewName": x["crewName"],
@@ -461,23 +479,25 @@ def _top_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int =
             "lastSeen": x["lastSeen"].isoformat() if x["lastSeen"] else None,
             "base": None
         })
+
     rows.sort(key=lambda r: (r["compliant"], r["compliantRate"], r["totalTests"], r["lastSeen"] or datetime.min), reverse=True)
     return rows[:top_n]
 
-
 # ========== shared helpers ==========
+
 def _safe_page_size(ps: int, default: int = 25, maximum: int = 200) -> int:
     try:
         n = int(ps)
-        if n <= 0: return default
+        if n <= 0:
+            return default
         return min(n, maximum)
     except Exception:
         return default
 
-
 def _compute_recent_tests(records: List[Dict[str, Any]], page: int, page_size: int):
     start = max(0, (page - 1) * page_size)
     end = start + page_size
+
     items = []
     for r in records[start:end]:
         ts = r.get("timestamp")
@@ -497,15 +517,15 @@ def _compute_recent_tests(records: List[Dict[str, Any]], page: int, page_size: i
             "testId": f"T-{int(ts.timestamp()) if ts else 0}",
             "crewId": r.get("iga_code"),
             "crewName": r.get("crew_name"),
-            "base": r.get("base"),              # remains null until you start saving it
+            "base": r.get("base"),  # remains null until you start saving it
             "score": score if isinstance(score, (int, float)) else 0,
-            "assessment": assessment,           # always COMPLIANT / NON-COMPLIANT
-            "status": assessment,               # same as assessment for clarity
-            "passFail": pass_fail,              # optional compatibility field
+            "assessment": assessment,  # always COMPLIANT / NON-COMPLIANT
+            "status": assessment,  # same as assessment for clarity
+            "passFail": pass_fail,  # optional compatibility field
             "takenAt": ts.isoformat() if ts else None,
         })
-    return {"items": items, "page": page, "pageSize": page_size, "total": len(records)}
 
+    return {"items": items, "page": page, "pageSize": page_size, "total": len(records)}
 
 # ============= PUBLIC FUNCTIONS (APIs) =============
 
@@ -513,22 +533,23 @@ def get_insights(date_from: date, date_to: date, page: int, page_size: int) -> D
     """
     MAIN API: grooming vs non-grooming, categories, daily graph (compliant/nonCompliant),
     top 5 groomed & non-groomed, and recent tests. Includes base=null fields.
-    
-    FIXED: 
+
+    FIXED:
     - Recent tests now always shows 20 records (consistent with preset filters)
     - Daily graph includes ALL dates in range (even zero-testing dates)
     - Data now matches graph UI visualization
     """
     records = _load_records(Filters(date_from=date_from, date_to=date_to))
-    
+
     # FIXED: Always use 20 for recent tests (consistent across all filter types)
     # This ensures 1-week, 2-week, and custom date filters all show same 20 records
     effective_page_size = min(_safe_page_size(page_size, default=20, maximum=20), 20)
-    
+
     meta = {
         "generatedAt": datetime.utcnow().isoformat() + "Z",
         "filters": {"dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat()},
     }
+
     return {
         "meta": meta,
         "overview": _overview(records),
@@ -541,14 +562,15 @@ def get_insights(date_from: date, date_to: date, page: int, page_size: int) -> D
         "recentTests": _compute_recent_tests(records, page, page_size=effective_page_size),  # USE 20
     }
 
-
 def get_info(date_from: date, date_to: date) -> Dict[str, Any]:
     """
     GENERAL INFO BOX: cards-like basic info with base=null.
     """
     records = _load_records(Filters(date_from=date_from, date_to=date_to))
     k = _overview(records)
+
     avg_vals = [r["score"] for r in records if isinstance(r["score"], (int, float))]
+
     return {
         "meta": {
             "generatedAt": datetime.utcnow().isoformat() + "Z",
@@ -565,31 +587,38 @@ def get_info(date_from: date, date_to: date) -> Dict[str, Any]:
         }
     }
 
-
 def search_people(date_from: date, date_to: date, query: str, page: int, page_size: int) -> Dict[str, Any]:
     """
     SEARCH by IGA code or name (case-insensitive), aggregated per person.
     """
     records = _load_records(Filters(date_from=date_from, date_to=date_to))
     q = (query or "").strip().lower()
+
     per: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
         "crewName": "", "total": 0, "compliant": 0, "nonCompliant": 0,
         "sumScore": 0.0, "scored": 0, "lastSeen": None
     })
+
     for r in records:
         iga = (r["iga_code"] or "")
         name = (r["crew_name"] or "")
+
         if q and (q not in iga.lower()) and (q not in name.lower()):
             continue
+
         x = per[iga]
         x["crewName"] = name or x["crewName"]
         x["total"] += 1
+
         if r["assessment"] == "COMPLIANT":
             x["compliant"] += 1
         else:
             x["nonCompliant"] += 1
+
         if isinstance(r["score"], (int, float)):
-            x["sumScore"] += r["score"]; x["scored"] += 1
+            x["sumScore"] += r["score"]
+            x["scored"] += 1
+
         ts = r.get("timestamp")
         if ts and (x["lastSeen"] is None or ts > x["lastSeen"]):
             x["lastSeen"] = ts
@@ -607,11 +636,13 @@ def search_people(date_from: date, date_to: date, query: str, page: int, page_si
             "lastSeen": x["lastSeen"].isoformat() if x["lastSeen"] else None,
             "base": None
         })
+
     rows.sort(key=lambda r: (r["lastSeen"] or "", r["totalTests"]), reverse=True)
 
     total = len(rows)
     start = max(0, (page - 1) * _safe_page_size(page_size))
     end = start + _safe_page_size(page_size)
+
     return {
         "query": query,
         "page": page,
@@ -619,4 +650,3 @@ def search_people(date_from: date, date_to: date, query: str, page: int, page_si
         "total": total,
         "results": rows[start:end]
     }
-
