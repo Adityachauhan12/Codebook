@@ -103,7 +103,7 @@ const AdminUrtiPage: React.FC = () => {
     try {
       setActionLoading(leaveId);
       const response = await fetch(
-        `${window.IFS_365_API_URL}/api/ApproveRejectLeave/${leaveId}`,
+        `${window.IFS365API_URL}api/ApproveRejectLeave/${leaveId}`,
         {
           method: "PATCH",
           headers: {
@@ -112,7 +112,6 @@ const AdminUrtiPage: React.FC = () => {
           body: JSON.stringify({
             status: action === "approved" ? 1 : 0,
             comment: comment,
-            approved_by: "Admin User",
           }),
         }
       );
@@ -146,7 +145,7 @@ const AdminUrtiPage: React.FC = () => {
         params.append("status", appliedFilters.statusFilter.toLowerCase());
       }
 
-      const url = `${window.IFS_365_API_URL}/api/listLeaves${
+      const url = `${window.IFS365API_URL}api/listLeaves${
         params.toString() ? `?${params.toString()}` : ""
       }`;
 
@@ -293,24 +292,82 @@ const AdminUrtiPage: React.FC = () => {
     setShowCommentModal(true);
   };
 
-  const handleStatusUpdate = async (
-    index: number,
-    newStatus: Attendance["status"]
-  ) => {
-    const leave = filteredAttendances[index];
-    if (!leave.comment.trim()) {
-      showModal('warning', 'Please add a comment before approving/rejecting');
-      return;
-    }
+  const handleStatusUpdate = async (index: number, newStatus: 'Approved' | 'Rejected') => {
     try {
-      await approveRejectLeave(
-        leave.id,
-        newStatus.toLowerCase() as "approved" | "rejected",
-        leave.comment
+      const leave = filteredAttendances[index];
+
+      if (!leave.comment?.trim()) {
+        showModal('warning', 'Please add a comment before approving/rejecting');
+        return;
+      }
+
+      // ===== CHANGE FOR APPROVE: Extract ONLY iga_code from localStorage =====
+      let approverInfo, rejectorInfo, approvedBy, rejectedBy;
+      
+      if (newStatus === 'Approved') {
+        approverInfo = JSON.parse(localStorage.getItem('userinfo') || '{}');
+        approvedBy = approverInfo.iga_code || 'Unknown';  // <- ONLY IGA_CODE
+        
+        const updatedLeaves = [...attendances];
+        const updatedIndex = updatedLeaves.findIndex(l => l.id === leave.id);
+        
+        if (updatedIndex !== -1) {
+          updatedLeaves[updatedIndex].status = 'Approved' as any;
+          updatedLeaves[updatedIndex].approvedBy = approvedBy;  // <- Store ONLY iga_code
+          updatedLeaves[updatedIndex].rejectedBy = null;
+          
+          setAttendances(updatedLeaves);
+        }
+      }
+      // ===== END CHANGE FOR APPROVE =====
+
+      // ===== CHANGE FOR REJECT: Extract ONLY iga_code from localStorage =====
+      if (newStatus === 'Rejected') {
+        rejectorInfo = JSON.parse(localStorage.getItem('userinfo') || '{}');
+        rejectedBy = rejectorInfo.iga_code || 'Unknown';  // <- ONLY IGA_CODE
+        
+        const updatedLeaves = [...attendances];
+        const updatedIndex = updatedLeaves.findIndex(l => l.id === leave.id);
+        
+        if (updatedIndex !== -1) {
+          updatedLeaves[updatedIndex].status = 'Rejected' as any;
+          updatedLeaves[updatedIndex].rejectedBy = rejectedBy;  // <- Store ONLY iga_code
+          updatedLeaves[updatedIndex].approvedBy = null;
+          
+          setAttendances(updatedLeaves);
+        }
+      }
+      // ===== END CHANGE FOR REJECT =====
+
+      // Make API call with the updated leave record
+      const response = await fetch(
+        window.IFS365API_URL + `api/ApproveRejectLeave/${leave.id}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            status: newStatus === 'Approved' ? 1 : 0,
+            comment: leave.comment,
+            approvedby: newStatus === 'Approved' 
+              ? (approverInfo?.iga_code || 'Unknown')  // <- ONLY IGA_CODE
+              : null,
+            rejectedby: newStatus === 'Rejected'
+              ? (rejectorInfo?.iga_code || 'Unknown')  // <- ONLY IGA_CODE
+              : null,
+          })
+        }
       );
-      showModal('success', `Leave request has been ${newStatus.toLowerCase()} successfully!`);
+
+      if (response.ok) {
+        showModal(
+          'success',
+          `Leave request has been ${newStatus.toLowerCase()} successfully!`
+        );
+      } else {
+        throw new Error('Failed to update leave status');
+      }
     } catch (error) {
-      console.error("Failed to update status:", error);
+      console.error('Error updating status:', error);
       showModal('error', 'Failed to update leave status. Please try again.');
     }
   };
