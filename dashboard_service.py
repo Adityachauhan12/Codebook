@@ -357,23 +357,29 @@ def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[
     """
     CRITICAL FIX v2: Returns ONLY 5 MAIN CATEGORIES.
     Maps ALL issues (both new and old formats) to 5 categories.
+    ✅ FIXED: Now counts each category only ONCE per record (not once per issue)
     """
     VALID_CATEGORIES = {"uniform", "hairstyle", "makeup", "nails", "accessories"}
-    
     headings: List[str] = []
+    
     for r in records:
         if r["assessment"] == "NON-COMPLIANT":
+            # ✅ FIX: Use set to track UNIQUE categories in this record
+            categories_in_record = set()
             for raw in r.get("issues", []):
                 s = raw
-                head = _issue_heading(s)  # ← Uses FIXED function that handles old formats
-                
+                head = _issue_heading(s)
                 # Only count valid categories
                 if head in VALID_CATEGORIES:
-                    headings.append(head)
+                    categories_in_record.add(head)  # ← Add to set (no duplicates)
+            
+            # Add each unique category from this record once
+            for cat in categories_in_record:
+                headings.append(cat)
     
     total_nc = sum(1 for r in records if r["assessment"] == "NON-COMPLIANT")
     counts = Counter(headings)
-    
+
     # Return ALL 5 categories sorted by count
     result = []
     for cat in sorted(counts.keys(), key=lambda c: counts[c], reverse=True):
@@ -383,7 +389,7 @@ def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[
             "share": round((counts[cat] / total_nc), 3) if total_nc else 0.0,
             "base": None
         })
-    
+
     return result[:top_n]
 
 
@@ -613,3 +619,4 @@ def search_people(date_from: date, date_to: date, query: str, page: int, page_si
         "total": total,
         "results": rows[start:end]
     }
+
