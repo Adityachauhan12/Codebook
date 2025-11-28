@@ -540,8 +540,16 @@ async def insights(
     dateTo: Optional[_date] = Query(None),
     days: Optional[int] = Query(None, description="custom duration in days; e.g., 7 for last 7 days"),
     page: int = 1,
-    pageSize: int = 25,
+    pageSize: int = 20,  # ← CHANGED TO 20 (consistent with preset filters)
 ):
+    """
+    Get insights data with consistent pagination (20 records) and full date range trends.
+    
+    When using preset date ranges (days=7, days=14) or custom date filters,
+    recent tests will always show 20 records (not 25).
+    
+    Trends data now includes ALL dates in the range, including dates with zero testing.
+    """
     _from, _to = _resolve_range(dateFrom, dateTo, days)
     return get_insights(_from, _to, page, pageSize)
 
@@ -726,19 +734,23 @@ async def insights_by_base_with_crew(
 @app.get("/v1/individual-analysis")
 async def individual_analysis(
     igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
-    crewName: str = Query(..., description="Crew name (e.g., Lavanya Singh)"),
+    crewName: str = Query(None, description="Crew name (e.g., Lavanya Singh) - Optional"),
     dateFrom: str = Query(..., description="Start date in YYYY-MM-DD format"),
     dateTo: str = Query(..., description="End date in YYYY-MM-DD format"),
 ):
     """
-    FINAL COMPLETE FIX: Freshly recalculate from ALL GCS records.
-
+    Individual Analysis - Now with optional crewName!
+    
     KEY PRINCIPLES:
     - Load ALL records from GCS for date range
-    - Filter by crew
+    - Filter by crew (if crewName provided)
     - Count violations from ALL records (COMPLIANT or NON-COMPLIANT)
     - If a category has ANY issues in ANY assessment, increment by 1 (not by issue count)
     - Show violations as count and percentage
+    
+    UPDATED: crewName is now OPTIONAL
+    - If crewName provided: Filter by both igaCode and crewName
+    - If crewName is None/empty: Show data for igaCode across ALL crew members
     """
     try:
         # ============= PARSE & VALIDATE DATES =============
@@ -766,24 +778,30 @@ async def individual_analysis(
         # ============= LOAD FRESH RECORDS FROM GCS =============
         print(f"\n[INDIVIDUAL-ANALYSIS] Starting fresh load from GCS")
         print(f"[INDIVIDUAL-ANALYSIS] Date range: {start_date} to {end_date}")
-        print(f"[INDIVIDUAL-ANALYSIS] Crew: {igaCode} / {crewName}")
+        print(f"[INDIVIDUAL-ANALYSIS] IGA Code: {igaCode}")
+        print(f"[INDIVIDUAL-ANALYSIS] Crew Name: {crewName} (Optional)")
 
         filters = DashboardFilters(date_from=start_date, date_to=end_date)
         all_records = _load_records(filters)
-
         print(f"[INDIVIDUAL-ANALYSIS] Loaded {len(all_records)} total records from GCS")
 
-        # ============= FILTER BY CREW =============
+        # ============= FILTER BY IGA CODE AND OPTIONAL CREW NAME =============
         iga_search = igaCode.strip().upper()
-        crew_search = crewName.strip().upper()
+        crew_search = (crewName or "").strip().upper()  # Empty string if crewName is None
 
         crew_records = []
         for record in all_records:
             record_iga = (record.get("iga_code") or "").strip().upper()
             record_crew = (record.get("crew_name") or "").strip().upper()
 
-            if record_iga == iga_search and record_crew == crew_search:
-                crew_records.append(record)
+            # If crewName provided, filter by both
+            if crew_search:
+                if record_iga == iga_search and record_crew == crew_search:
+                    crew_records.append(record)
+            else:
+                # If crewName not provided, match only igaCode
+                if record_iga == iga_search:
+                    crew_records.append(record)
 
         print(f"[INDIVIDUAL-ANALYSIS] Filtered to {len(crew_records)} crew records")
 
@@ -795,7 +813,7 @@ async def individual_analysis(
                     "debug": {
                         "searchedFor": {
                             "igaCode": igaCode,
-                            "crewName": crewName,
+                            "crewName": crewName or "(not specified - all crew members)",
                             "dateRange": f"{dateFrom} to {dateTo}"
                         },
                         "totalRecordsInRange": len(all_records),
@@ -821,9 +839,8 @@ async def individual_analysis(
 
         for record in crew_records:
             issues = record.get("issues") or []
-
             print(f"[INDIVIDUAL-ANALYSIS] Processing record: {record.get('timestamp')}, Assessment: {record['assessment']}")
-            print(f"[INDIVIDUAL-ANALYSIS]   Issues: {issues}")
+            print(f"[INDIVIDUAL-ANALYSIS] Issues: {issues}")
 
             # Collect unique categories that have issues in THIS record
             cats_found = set()
@@ -831,37 +848,32 @@ async def individual_analysis(
                 heading = _issue_heading(issue)
                 if heading in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
                     cats_found.add(heading)
-                    print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Category '{heading}'")
+                    print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Category '{heading}'")
                 else:
-                    print(f"[INDIVIDUAL-ANALYSIS]   Issue '{issue}' → Skipped (category: '{heading}')")
-            
+                    print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Skipped (category: '{heading}')")
+
             # Increment count by 1 for each unique category in this record
             for cat in cats_found:
                 category_violation_count[cat] += 1
-                print(f"[INDIVIDUAL-ANALYSIS]   Category '{cat}' incremented to {category_violation_count[cat]}")
+                print(f"[INDIVIDUAL-ANALYSIS] Category '{cat}' incremented to {category_violation_count[cat]}")
 
         # Convert to final format: violations + percentage
         category_breakdown = {}
-
         for cat in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
             violation_count = category_violation_count.get(cat, 0)
             percentage = (violation_count / total * 100) if total > 0 else 0
-
             category_breakdown[cat] = {
                 "violations": violation_count,
                 "percentage": round(percentage, 2)
             }
-
             print(f"[INDIVIDUAL-ANALYSIS] {cat.upper()}: violations={violation_count}, total={total}, percentage={percentage:.2f}%")
 
         print(f"[INDIVIDUAL-ANALYSIS] === END CATEGORY BREAKDOWN ===\n")
 
         # ============= BUILD DAILY TRENDS =============
         daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
-
         for record in crew_records:
             record_date = record["date"]
-
             if record["assessment"] == "COMPLIANT":
                 daily_stats[record_date]["compliant"] += 1
             else:
@@ -873,20 +885,18 @@ async def individual_analysis(
         while current_date <= end_date:
             date_key = current_date.isoformat()
             stats = daily_stats.get(current_date, {"compliant": 0, "nonCompliant": 0})
-
             trend_list.append({
                 "date": date_key,
                 "compliant": stats["compliant"],
                 "nonCompliant": stats["nonCompliant"]
             })
-
             current_date += timedelta(days=1)
 
         # ============= BUILD RESPONSE =============
         response = {
             "crew": {
                 "igaCode": igaCode,
-                "name": crewName
+                "name": crewName if crewName else "(All crew members with this IGA code)"
             },
             "dateRange": {
                 "from": dateFrom,
@@ -915,14 +925,12 @@ async def individual_analysis(
         }
 
         print(f"[INDIVIDUAL-ANALYSIS] Returning response with {len(crew_records)} records\n")
-
         return response
 
     except Exception as e:
         import traceback
         print(f"[ERROR] individual_analysis: {str(e)}")
         print(traceback.format_exc())
-
         return JSONResponse(
             {
                 "error": "Internal server error",
