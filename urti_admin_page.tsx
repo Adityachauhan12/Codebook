@@ -1,5 +1,3 @@
-Property 'rejectedBy' does not exist on type 'Attendance'.ts(2339)
-
 import React, { useState, useEffect } from "react";
 import Layout from "../../components/Layout";
 import { Calendar } from "lucide-react";
@@ -17,6 +15,7 @@ interface LeaveRecord {
   comment: string;
   status: "pending" | "approved" | "rejected";
   approved_by: string | null;
+  rejected_by: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -31,6 +30,7 @@ interface Attendance {
   status: "Pending" | "Approved" | "Rejected";
   comment: string;
   approvedBy: string | null;
+  rejectedBy: string | null;
   id: string;
   duration: number;
 }
@@ -105,7 +105,7 @@ const AdminUrtiPage: React.FC = () => {
     try {
       setActionLoading(leaveId);
       const response = await fetch(
-        `${window.IFS_365_API_URL}api/ApproveRejectLeave/${leaveId}`,
+        `${window.IFS365API_URL}api/ApproveRejectLeave/${leaveId}`,
         {
           method: "PATCH",
           headers: {
@@ -147,7 +147,7 @@ const AdminUrtiPage: React.FC = () => {
         params.append("status", appliedFilters.statusFilter.toLowerCase());
       }
 
-      const url = `${window.IFS_365_API_URL}api/listLeaves${
+      const url = `${window.IFS365API_URL}api/listLeaves${
         params.toString() ? `?${params.toString()}` : ""
       }`;
 
@@ -174,6 +174,7 @@ const AdminUrtiPage: React.FC = () => {
             record.status.slice(1)) as "Pending" | "Approved" | "Rejected",
           comment: record.comment || "",
           approvedBy: record.approved_by,
+          rejectedBy: record.rejected_by,
           duration: record.duration_days,
         };
       });
@@ -343,7 +344,7 @@ const AdminUrtiPage: React.FC = () => {
 
       // Make API call with the updated leave record
       const response = await fetch(
-        window.IFS_365_API_URL + `api/ApproveRejectLeave/${leave.id}`,
+        window.IFS365API_URL + `api/ApproveRejectLeave/${leave.id}`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
