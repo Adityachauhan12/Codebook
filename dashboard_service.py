@@ -315,17 +315,36 @@ def _overview(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _daily_graph(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _daily_graph(records: List[Dict[str, Any]], start_date: date = None, end_date: date = None) -> List[Dict[str, Any]]:
+    """
+    Generate daily graph data for ALL dates in range (including zero-testing dates).
+    Returns compliant=0, nonCompliant=0 for dates with no records.
+    
+    Args:
+        records: List of assessment records
+        start_date: Start of date range (optional - if None, only return dates with data)
+        end_date: End of date range (optional - if None, only return dates with data)
+    """
     daily_compliant: Dict[date, int] = defaultdict(int)
     daily_noncomp: Dict[date, int] = defaultdict(int)
+    
+    # Build counts from records
     for r in records:
         d = r["date"]
         if r["assessment"] == "COMPLIANT":
             daily_compliant[d] += 1
         else:
             daily_noncomp[d] += 1
-
-    all_days = sorted(set(list(daily_compliant.keys()) + list(daily_noncomp.keys())))
+    
+    # Determine date range to return
+    if start_date is None or end_date is None:
+        # Fallback: only days with data
+        all_days = sorted(set(list(daily_compliant.keys()) + list(daily_noncomp.keys())))
+    else:
+        # NEW: Include ALL dates in range (including zero-testing dates)
+        # This ensures graph data matches UI visualization
+        all_days = [d for d in _daterange(start_date, end_date)]
+    
     return [{
         "date": d.isoformat(),
         "compliant": daily_compliant.get(d, 0),
@@ -488,8 +507,18 @@ def get_insights(date_from: date, date_to: date, page: int, page_size: int) -> D
     """
     MAIN API: grooming vs non-grooming, categories, daily graph (compliant/nonCompliant),
     top 5 groomed & non-groomed, and recent tests. Includes base=null fields.
+    
+    FIXED: 
+    - Recent tests now always shows 20 records (consistent with preset filters)
+    - Daily graph includes ALL dates in range (even zero-testing dates)
+    - Data now matches graph UI visualization
     """
     records = _load_records(Filters(date_from=date_from, date_to=date_to))
+    
+    # FIXED: Always use 20 for recent tests (consistent across all filter types)
+    # This ensures 1-week, 2-week, and custom date filters all show same 20 records
+    effective_page_size = min(_safe_page_size(page_size, default=20, maximum=20), 20)
+    
     meta = {
         "generatedAt": datetime.utcnow().isoformat() + "Z",
         "filters": {"dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat()},
@@ -497,13 +526,13 @@ def get_insights(date_from: date, date_to: date, page: int, page_size: int) -> D
     return {
         "meta": meta,
         "overview": _overview(records),
-        "trends": {"daily": _daily_graph(records)},
+        "trends": {"daily": _daily_graph(records, start_date=date_from, end_date=date_to)},  # PASS date range
         "categories": _category_breakdown(records),
         "top": {
             "groomed": _top_groomed(records, min_tests=3, top_n=5),
             "nonGroomed": _top_non_groomed(records, min_tests=3, top_n=5)
         },
-        "recentTests": _compute_recent_tests(records, page, page_size=_safe_page_size(page_size)),
+        "recentTests": _compute_recent_tests(records, page, page_size=effective_page_size),  # USE 20
     }
 
 
