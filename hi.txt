@@ -1,208 +1,32 @@
-@app.get("/v1/individual-analysis")
-async def individual_analysis(
-    igaCode: str = Query(..., description="IGA code (e.g., IGA6781)"),
-    crewName: str = Query(None, description="Crew name (e.g., Lavanya Singh) - Optional"),
-    dateFrom: str = Query(..., description="Start date in YYYY-MM-DD format"),
-    dateTo: str = Query(..., description="End date in YYYY-MM-DD format"),
-):
-    """
-    Individual Analysis - Now with optional crewName!
-    
-    KEY PRINCIPLES:
-    - Load ALL records from GCS for date range
-    - Filter by crew (if crewName provided)
-    - Count violations from ALL records (COMPLIANT or NON-COMPLIANT)
-    - If a category has ANY issues in ANY assessment, increment by 1 (not by issue count)
-    - Show violations as count and percentage
-    
-    UPDATED: crewName is now OPTIONAL
-    - If crewName provided: Filter by both igaCode and crewName
-    - If crewName is None/empty: Show data for igaCode across ALL crew members
-    """
-    try:
-        # ============= PARSE & VALIDATE DATES =============
-        try:
-            start_date = datetime.strptime(dateFrom, "%Y-%m-%d").date()
-            end_date = datetime.strptime(dateTo, "%Y-%m-%d").date()
-        except ValueError as e:
-            return JSONResponse(
-                {
-                    "error": "Invalid date format",
-                    "details": f"Dates must be in YYYY-MM-DD format: {str(e)}"
-                },
-                status_code=400
-            )
+{iga_code: "105", employee_name: "KORDE, RAKESH", base: "PNQ", start_date: "2025-11-28",…}
+base
+: 
+"PNQ"
+comment
+: 
+""
+employee_name
+: 
+"KORDE, RAKESH"
+end_date
+: 
+"2025-11-30"
+iga_code
+: 
+"105"
+start_date
+: 
+"2025-11-28"
 
-        if start_date > end_date:
-            return JSONResponse(
-                {
-                    "error": "Invalid date range",
-                    "details": "dateFrom cannot be after dateTo"
-                },
-                status_code=400
-            )
 
-        # ============= LOAD FRESH RECORDS FROM GCS =============
-        print(f"\n[INDIVIDUAL-ANALYSIS] Starting fresh load from GCS")
-        print(f"[INDIVIDUAL-ANALYSIS] Date range: {start_date} to {end_date}")
-        print(f"[INDIVIDUAL-ANALYSIS] IGA Code: {igaCode}")
-        print(f"[INDIVIDUAL-ANALYSIS] Crew Name: {crewName} (Optional)")
 
-        filters = DashboardFilters(date_from=start_date, date_to=end_date)
-        all_records = _load_records(filters)
-        print(f"[INDIVIDUAL-ANALYSIS] Loaded {len(all_records)} total records from GCS")
 
-        # ============= FILTER BY IGA CODE AND OPTIONAL CREW NAME =============
-        iga_search = igaCode.strip().upper()
-        crew_search = (crewName or "").strip().upper()  # Empty string if crewName is None
 
-        crew_records = []
-        for record in all_records:
-            record_iga = (record.get("iga_code") or "").strip().upper()
-            record_crew = (record.get("crew_name") or "").strip().upper()
 
-            # If crewName provided, filter by both
-            if crew_search:
-                if record_iga == iga_search and record_crew == crew_search:
-                    crew_records.append(record)
-            else:
-                # If crewName not provided, match only igaCode
-                if record_iga == iga_search:
-                    crew_records.append(record)
 
-        print(f"[INDIVIDUAL-ANALYSIS] Filtered to {len(crew_records)} crew records")
 
-        if not crew_records:
-            print(f"[INDIVIDUAL-ANALYSIS] No records found for {iga_search} / {crew_search}")
-            return JSONResponse(
-                {
-                    "error": "No assessments found for this crew in given date range",
-                    "debug": {
-                        "searchedFor": {
-                            "igaCode": igaCode,
-                            "crewName": crewName or "(not specified - all crew members)",
-                            "dateRange": f"{dateFrom} to {dateTo}"
-                        },
-                        "totalRecordsInRange": len(all_records),
-                        "matchingRecords": 0,
-                    }
-                },
-                status_code=404
-            )
 
-        # ============= CALCULATE SUMMARY STATISTICS =============
-        total = len(crew_records)
-        compliant_count = sum(1 for r in crew_records if r["assessment"] == "COMPLIANT")
-        noncompliant_count = total - compliant_count
-        pass_rate = (compliant_count / total * 100) if total > 0 else 0
 
-        print(f"[INDIVIDUAL-ANALYSIS] Summary: Total={total}, Compliant={compliant_count}, NC={noncompliant_count}, PassRate={pass_rate:.2f}%")
-
-        # ============= CRITICAL: CATEGORY BREAKDOWN =============
-        print(f"\n[INDIVIDUAL-ANALYSIS] === CATEGORY BREAKDOWN CALCULATION ===")
-
-        # Count violations by category from ALL records (regardless of overall assessment status)
-        category_violation_count = defaultdict(int)
-
-        for record in crew_records:
-            issues = record.get("issues") or []
-            print(f"[INDIVIDUAL-ANALYSIS] Processing record: {record.get('timestamp')}, Assessment: {record['assessment']}")
-            print(f"[INDIVIDUAL-ANALYSIS] Issues: {issues}")
-
-            # Collect unique categories that have issues in THIS record
-            cats_found = set()
-            for issue in issues:
-                heading = _issue_heading(issue)
-                if heading in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
-                    cats_found.add(heading)
-                    print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Category '{heading}'")
-                else:
-                    print(f"[INDIVIDUAL-ANALYSIS] Issue '{issue}' → Skipped (category: '{heading}')")
-
-            # Increment count by 1 for each unique category in this record
-            for cat in cats_found:
-                category_violation_count[cat] += 1
-                print(f"[INDIVIDUAL-ANALYSIS] Category '{cat}' incremented to {category_violation_count[cat]}")
-
-        # Convert to final format: violations + percentage
-        category_breakdown = {}
-        for cat in ["uniform", "hairstyle", "makeup", "nails", "accessories"]:
-            violation_count = category_violation_count.get(cat, 0)
-            percentage = (violation_count / total * 100) if total > 0 else 0
-            category_breakdown[cat] = {
-                "violations": violation_count,
-                "percentage": round(percentage, 2)
-            }
-            print(f"[INDIVIDUAL-ANALYSIS] {cat.upper()}: violations={violation_count}, total={total}, percentage={percentage:.2f}%")
-
-        print(f"[INDIVIDUAL-ANALYSIS] === END CATEGORY BREAKDOWN ===\n")
-
-        # ============= BUILD DAILY TRENDS =============
-        daily_stats = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
-        for record in crew_records:
-            record_date = record["date"]
-            if record["assessment"] == "COMPLIANT":
-                daily_stats[record_date]["compliant"] += 1
-            else:
-                daily_stats[record_date]["nonCompliant"] += 1
-
-        # Build trend array
-        trend_list = []
-        current_date = start_date
-        while current_date <= end_date:
-            date_key = current_date.isoformat()
-            stats = daily_stats.get(current_date, {"compliant": 0, "nonCompliant": 0})
-            trend_list.append({
-                "date": date_key,
-                "compliant": stats["compliant"],
-                "nonCompliant": stats["nonCompliant"]
-            })
-            current_date += timedelta(days=1)
-
-        # ============= BUILD RESPONSE =============
-        response = {
-            "crew": {
-                "igaCode": igaCode,
-                "name": crewName if crewName else "(All crew members with this IGA code)"
-            },
-            "dateRange": {
-                "from": dateFrom,
-                "to": dateTo,
-                "daysAnalyzed": (end_date - start_date).days + 1
-            },
-            "summary": {
-                "totalAssessments": total,
-                "compliant": compliant_count,
-                "nonCompliant": noncompliant_count,
-                "passRate": f"{pass_rate:.2f}",
-                "passRatePercentage": f"{pass_rate:.2f}%"
-            },
-            "nonComplianceByCategory": category_breakdown,
-            "trend": trend_list,
-            "recentAssessments": [
-                {
-                    "timestamp": r["timestamp"].isoformat() if r["timestamp"] else None,
-                    "date": r["date"].isoformat(),
-                    "score": r["score"],
-                    "assessment": r["assessment"],
-                    "issues": r["issues"]
-                }
-                for r in crew_records[:10]
-            ]
-        }
-
-        print(f"[INDIVIDUAL-ANALYSIS] Returning response with {len(crew_records)} records\n")
-        return response
-
-    except Exception as e:
-        import traceback
-        print(f"[ERROR] individual_analysis: {str(e)}")
-        print(traceback.format_exc())
-        return JSONResponse(
-            {
-                "error": "Internal server error",
-                "details": str(e),
-                "type": type(e).__name__
-            },
-            status_code=500
-        )
+detail
+: 
+"400 Unparseable query parameter `start_date` in type `TYPE_DATE`, Invalid date: '2025-11-28T00:00:00' value: '2025-11-28T00:00:00'; reason: invalid, message: Unparseable query parameter `start_date` in type `TYPE_DATE`, Invalid date: '2025-11-28T00:00:00' value: '2025-11-28T00:00:00'\n\nLocation: asia-south1\nJob ID: f0582a60-0531-42d8-9044-5d6933f1d8ae\n
