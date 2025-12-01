@@ -70,7 +70,7 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
  
         logger.info(f"Upserting leave record with ID: {record['id']}")
  
-        # ✅ UPDATED MERGE SQL - Added created_by, approved_by, rejected_by
+        # ✅ UPDATED MERGE SQL - Added status_updated_by
 
         merge_sql = f"""
 
@@ -100,9 +100,7 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
 
                 @created_by as created_by,
 
-                @approved_by as approved_by,
-
-                @rejected_by as rejected_by,
+                @status_updated_by as status_updated_by,
 
                 @created_at as created_at,
 
@@ -120,9 +118,7 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
 
                 created_by = COALESCE(target.created_by, source.created_by),
 
-                approved_by = source.approved_by,
-
-                rejected_by = source.rejected_by,
+                status_updated_by = source.status_updated_by,
 
                 comment = COALESCE(source.comment, target.comment),
 
@@ -132,19 +128,17 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
 
             INSERT (id, iga_code, employee_name, base, start_date, end_date,
 
-                    duration_days, comment, status, created_by, approved_by, rejected_by, created_at, updated_at)
+                    duration_days, comment, status, created_by, status_updated_by, created_at, updated_at)
 
             VALUES (source.id, source.iga_code, source.employee_name, source.base,
 
                     source.start_date, source.end_date, source.duration_days,
 
-                    source.comment, source.status, source.created_by, source.approved_by, 
-
-                    source.rejected_by, source.created_at, source.updated_at)
+                    source.comment, source.status, source.created_by, source.status_updated_by, source.created_at, source.updated_at)
 
         """
  
-        # ✅ UPDATED Query Parameters - Added created_by, approved_by, rejected_by
+        # ✅ UPDATED Query Parameters - Added status_updated_by
 
         job_config = bigquery.QueryJobConfig(
 
@@ -170,9 +164,7 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
 
                 bigquery.ScalarQueryParameter("created_by", "STRING", record.get("created_by")),  # ✅ NEW
 
-                bigquery.ScalarQueryParameter("approved_by", "STRING", record.get("approved_by")),  # ✅ NEW
-
-                bigquery.ScalarQueryParameter("rejected_by", "STRING", record.get("rejected_by")),  # ✅ NEW
+                bigquery.ScalarQueryParameter("status_updated_by", "STRING", record.get("status_updated_by")),  # ✅ NEW
 
                 bigquery.ScalarQueryParameter("created_at", "TIMESTAMP", record["created_at"]),
 
@@ -265,11 +257,9 @@ def create_leave(request: LeaveRequest):
 
         "status": "pending",
 
-        "created_by": request.iga_code,  # ✅ NEW - Who created the leave (employee themselves)
+        "created_by": {"name": request.employee_name, "iga_code": request.iga_code},  # ✅ NEW - Employee who created
 
-        "approved_by": None,              # ✅ NEW
-
-        "rejected_by": None               # ✅ NEW
+        "status_updated_by": None  # ✅ NEW - Will store {"name": "Admin Name", "iga_code": "6781"} when status changes
 
     }
 
@@ -291,7 +281,9 @@ def create_leave(request: LeaveRequest):
 
             "status": "pending",
 
-            "created_by": request.iga_code  # ✅ NEW
+            "created_by": {"name": request.employee_name, "iga_code": request.iga_code},  # ✅ NEW
+
+            "status_updated_by": None  # ✅ NEW
 
         }
 
@@ -514,9 +506,7 @@ def approve_or_reject_leave(leave_id: str, action: AdminAction):
 
             "created_by": existing_record.get("created_by"),  # ✅ Preserve creator
 
-            "approved_by": action.approved_by if status == "approved" else None,  # ✅ NEW
-
-            "rejected_by": action.approved_by if status == "rejected" else None,  # ✅ NEW (reuse approved_by as the admin who took action)
+            "status_updated_by": action.status_updated_by,  # ✅ NEW - {"name": "Test Admin", "iga_code": "6781"}
 
             "created_at": existing_record["created_at"]
 
@@ -534,9 +524,7 @@ def approve_or_reject_leave(leave_id: str, action: AdminAction):
 
             "status": status,
 
-            "approved_by": updated_record.get("approved_by"),  # ✅ NEW
-
-            "rejected_by": updated_record.get("rejected_by")   # ✅ NEW
+            "status_updated_by": updated_record.get("status_updated_by")  # ✅ NEW
 
         }
 
