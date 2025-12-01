@@ -99,10 +99,7 @@ function FlightopsUrtiPage() {
       setIsLoadingLeaves(true);
       try {
         // Get base from localStorage or use default
-        const userInfo = JSON.parse(localStorage.getItem('userinfo') || '{}');
-        console.log('UserInfo in fetchLeaves:', userInfo);
-        console.log('All localStorage keys:', Object.keys(localStorage));
-        console.log('UserInfo keys and values:', Object.entries(userInfo));
+        const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
         const userBase = userInfo.user_base === 'CORP' ? 'DEL' : (userInfo.user_base || 'DEL');
 
         const response = await fetch(
@@ -291,31 +288,29 @@ function FlightopsUrtiPage() {
       };
 
       // ✅ Get logged-in user info for created_by
-      const userInfo = JSON.parse(localStorage.getItem("userinfo") || "{}");
-      console.log('UserInfo from localStorage:', userInfo);
-      console.log('UserInfo keys:', Object.keys(userInfo));
-      console.log('UserInfo iga_code:', userInfo.iga_code);
-      console.log('UserInfo first_name:', userInfo.first_name);
-      console.log('UserInfo last_name:', userInfo.last_name);
-      
-      // Extract user's IGA code from localStorage
-      const appliedBy = userInfo.iga_code || userInfo.first_name || userInfo.last_name || 'Unknown';
-      console.log('Applied by:', appliedBy);
-
-      const requestBody = {
-        igacode: selectedCrewData.id?.toString(),
-        employeename: selectedCrewData.name || formData.selectedEmployee,
-        base: selectedCrewData.base,
-        startdate: formatDateForAPI(formData.leaveFrom),    // Fixed format
-        enddate: formatDateForAPI(formData.leaveTo),        // Fixed format
-        comment: '',
-        applied_by: appliedBy,                                   // <- ONLY IGA_CODE
-        approved_by: null,                                       // <- Initialize as null
-        rejected_by: null                                        // <- Initialize as null
+      const userInfo = JSON.parse(localStorage.getItem("userInfo") || "{}");
+      const fullName = `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() || "Unknown";
+      const creator = {
+        name: fullName,
+        iga_code: userInfo.iga_code ?? userInfo.igaCode ?? "ADMIN"
       };
 
+      const requestBody = {
+        iga_code: selectedCrewData.id?.toString() || "",
+        employee_name: selectedCrewData.name || formData.selectedEmployee,
+        base: selectedCrewData.base ?? "",
+        start_date: formatDateForAPI(formData.leaveFrom),
+        end_date: formatDateForAPI(formData.leaveTo),
+        comment: "",
+        applied_by: creator.iga_code,
+        applied_by_name: creator.name,
+        approved_by: null,
+        rejected_by: null
+      };
 
-      const response = await fetch(window.IFS_365_API_URL + 'api/createLeave', {
+      console.log('Request body:', requestBody);
+
+      const response = await fetch(`${window.IFS_365_API_URL}/api/createLeave`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody)
