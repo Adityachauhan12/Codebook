@@ -99,7 +99,10 @@ function FlightopsUrtiPage() {
       setIsLoadingLeaves(true);
       try {
         // Get base from localStorage or use default
-        const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
+        const userInfo = JSON.parse(localStorage.getItem('userinfo') || '{}');
+        console.log('UserInfo in fetchLeaves:', userInfo);
+        console.log('All localStorage keys:', Object.keys(localStorage));
+        console.log('UserInfo keys and values:', Object.entries(userInfo));
         const userBase = userInfo.user_base === 'CORP' ? 'DEL' : (userInfo.user_base || 'DEL');
 
         const response = await fetch(
@@ -289,25 +292,26 @@ function FlightopsUrtiPage() {
 
       // ✅ Get logged-in user info for created_by
       const userInfo = JSON.parse(localStorage.getItem("userinfo") || "{}");
-      const creator = {
-        name: userInfo.name ?? "Unknown",
-        iga_code: userInfo.iga_code ?? userInfo.igaCode ?? "ADMIN"
-      };
+      console.log('UserInfo from localStorage:', userInfo);
+      
+      // Extract user's IGA code from localStorage (based on screenshot: iga_code: "6781")
+      const appliedBy = userInfo.iga_code || 'Unknown';
+      console.log('Applied by:', appliedBy);
 
       const requestBody = {
-        igacode: selectedCrewData.id?.toString() || "",
+        igacode: selectedCrewData.id?.toString(),
         employeename: selectedCrewData.name || formData.selectedEmployee,
-        base: selectedCrewData.base ?? "",
-        startdate: formatDateForAPI(formData.leaveFrom),
-        enddate: formatDateForAPI(formData.leaveTo),
-        comment: "",
-        applied_by: creator.iga_code,
-        approved_by: null,
-        rejected_by: null
+        base: selectedCrewData.base,
+        startdate: formatDateForAPI(formData.leaveFrom),    // Fixed format
+        enddate: formatDateForAPI(formData.leaveTo),        // Fixed format
+        comment: '',
+        applied_by: appliedBy,                                   // <- ONLY IGA_CODE
+        approved_by: null,                                       // <- Initialize as null
+        rejected_by: null                                        // <- Initialize as null
       };
 
 
-      const response = await fetch(`${window.IFS365API_URL}api/createLeave`, {
+      const response = await fetch(window.IFS_365_API_URL + 'api/createLeave', {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody)
