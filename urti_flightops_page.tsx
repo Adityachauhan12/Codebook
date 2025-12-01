@@ -268,6 +268,8 @@ function FlightopsUrtiPage() {
   };
 
   const handleAddLeave = async () => {
+    // console.log('🔵 Step 1: handleAddLeave called');
+
     if (!validateForm()) {
       return;
     }
@@ -278,36 +280,26 @@ function FlightopsUrtiPage() {
     setIsSubmitting(true);
 
     try {
-      // ===== CHANGE #1: Extract ONLY iga_code from localStorage =====
-      const userInfo = JSON.parse(localStorage.getItem('userinfo') || '{}');
-      const appliedBy = userInfo.iga_code || 'Unknown';  // <- ONLY IGA_CODE now
-      // ===== END CHANGE #1 =====
-
-      const formatDateForPayload = (date: Date): string => {
+      const formatDateForAPI = (date: Date): string => {
         const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
+        const month = (date.getMonth() + 1).toString().padStart(2, "0");
+        const day = date.getDate().toString().padStart(2, "0");
         return `${year}-${month}-${day}`;
       };
 
-      // ===== CHANGE #2: Create payload with ONLY iga_code in applied_by =====
       const requestBody = {
-        igacode: selectedCrewData.id?.toString(),
-        employeename: selectedCrewData.name || formData.selectedEmployee,
-        base: selectedCrewData.base,
-        startdate: formatDateForPayload(formData.leaveFrom),    // Fixed format
-        enddate: formatDateForPayload(formData.leaveTo),        // Fixed format
-        comment: '',
-        applied_by: appliedBy,                                   // <- ONLY IGA_CODE
-        approved_by: null,                                       // <- Initialize as null
-        rejected_by: null                                        // <- Initialize as null
+        iga_code: selectedCrewData.id?.toString() || "",
+        employee_name: selectedCrewData.name || formData.selectedEmployee,
+        base: selectedCrewData.base || "",
+        start_date: formatDateForAPI(formData.leaveFrom),
+        end_date: formatDateForAPI(formData.leaveTo),
+        comment: "",
       };
-      // ===== END CHANGE #2 =====
 
 
-      const response = await fetch(window.IFS365API_URL + 'api/createLeave', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(`${window.IFS_365_API_URL}/api/createLeave`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody)
       });
 
