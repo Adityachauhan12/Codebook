@@ -4,6 +4,7 @@ import { Calendar } from "lucide-react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 
+
 interface LeaveRecord {
   id: string;
   iga_code: string;
@@ -15,10 +16,12 @@ interface LeaveRecord {
   comment: string;
   status: "pending" | "approved" | "rejected";
   approved_by: string | null;
+  created_by: string | null;
   rejected_by: string | null;
   created_at: string;
   updated_at: string;
 }
+
 
 interface Attendance {
   name: string;
@@ -30,10 +33,27 @@ interface Attendance {
   status: "Pending" | "Approved" | "Rejected";
   comment: string;
   approvedBy: string | null;
-  rejectedBy: string | null;
   id: string;
   duration: number;
+  createdBy?: {name: string, iga_code: string} | null;  // ✅ NEW
+  statusUpdatedBy?: {name: string, iga_code: string} | null;  // ✅ NEW
 }
+
+
+// ✅ NEW FUNCTION - Get IGA code from localStorage
+const getIGAFromLocalStorage = (): string => {
+  try {
+    const userinfo = localStorage.getItem('userinfo');
+    if (userinfo) {
+      const user = JSON.parse(userinfo);
+      return user.iga_code || user.igaCode || user.IGA || 'ADMIN';
+    }
+  } catch (error) {
+    console.error('Error reading IGA from localStorage:', error);
+  }
+  return 'ADMIN';
+};
+
 
 const AdminUrtiPage: React.FC = () => {
   const [attendances, setAttendances] = useState<Attendance[]>([]);
@@ -69,10 +89,12 @@ const AdminUrtiPage: React.FC = () => {
   const [showCommentModal, setShowCommentModal] = useState(false);
   const [selectedComment, setSelectedComment] = useState("");
 
+
   const handleLogout = () => {
     localStorage.clear();
     window.location.href = "/";
   };
+
 
   // Format API date (YYYY-MM-DD or ISO) to DD-MM-YYYY
   const formatApiDateToDisplay = (dateString: string): string => {
@@ -83,6 +105,7 @@ const AdminUrtiPage: React.FC = () => {
     return `${day}-${month}-${year}`;
   };
 
+
   // Format date to dd/mm/yy
   const formatDateToDDMMYY = (dateString: string): string => {
     const [day, month, year] = dateString.split("-");
@@ -90,11 +113,13 @@ const AdminUrtiPage: React.FC = () => {
     return `${day}/${month}/${shortYear}`;
   };
 
+
   // Convert dd-mm-yyyy string to Date object
   const parseDate = (dateString: string): Date => {
     const [day, month, year] = dateString.split("-");
     return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
   };
+
 
   // API function to approve/reject leave
   const approveRejectLeave = async (
@@ -104,8 +129,14 @@ const AdminUrtiPage: React.FC = () => {
   ) => {
     try {
       setActionLoading(leaveId);
+
+      // ✅ NEW - Get admin info from localStorage
+      const userinfo = localStorage.getItem('userinfo');
+      const user = userinfo ? JSON.parse(userinfo) : {};
+      const igaCode = getIGAFromLocalStorage();
+
       const response = await fetch(
-        `${window.IFS365API_URL}api/ApproveRejectLeave/${leaveId}`,
+        `${window.IFS_365_API_URL}/api/ApproveRejectLeave/${leaveId}`,
         {
           method: "PATCH",
           headers: {
@@ -114,6 +145,10 @@ const AdminUrtiPage: React.FC = () => {
           body: JSON.stringify({
             status: action === "approved" ? 1 : 0,
             comment: comment,
+            status_updated_by: {
+              name: user.name || 'Admin',
+              iga_code: igaCode
+            }  // ✅ NEW - Admin's complete info
           }),
         }
       );
@@ -121,25 +156,26 @@ const AdminUrtiPage: React.FC = () => {
       if (!response.ok) throw new Error("Failed to update leave status");
 
       const result = await response.json();
-      
+
       // Refresh data after status update
       await fetchLeaveData();
 
       return result;
     } catch (error) {
-      console.error("Error updating leave status:", error);
+      console.error("Error approving/rejecting leave:", error);
       throw error;
     } finally {
       setActionLoading(null);
     }
   };
 
+
   // API function to fetch leave data
   const fetchLeaveData = async () => {
     try {
       setIsLoadingData(true);
       const params = new URLSearchParams();
-      
+
       if (appliedFilters.selectedBase !== "All") {
         params.append("base", appliedFilters.selectedBase);
       }
@@ -147,9 +183,8 @@ const AdminUrtiPage: React.FC = () => {
         params.append("status", appliedFilters.statusFilter.toLowerCase());
       }
 
-      const url = `${window.IFS365API_URL}api/listLeaves${
-        params.toString() ? `?${params.toString()}` : ""
-      }`;
+      const url = `${window.IFS_365_API_URL}/api/listLeaves${params.toString() ? `?${params.toString()}` : ""
+        }`;
 
       const response = await fetch(url);
 
@@ -157,25 +192,27 @@ const AdminUrtiPage: React.FC = () => {
 
       const data: LeaveRecord[] = await response.json();
 
+      // ✅ FIX #1: Changed leaves to data
       // Transform API data to match component interface
-      const transformedData: Attendance[] = data.map((record) => {
-        const igaCode = record.iga_code || '';
+      const transformedData = data.map((leave: any) => {
+        const igaCode = leave.iga_code || '';
         const formattedIgaCode = igaCode.startsWith('IGA') ? igaCode : `IGA${igaCode}`;
-        
+
         return {
-          id: record.id,
-          name: record.employee_name,
-          date: formatApiDateToDisplay(record.created_at),
-          base: record.base,
-          leaveFrom: formatApiDateToDisplay(record.start_date),
-          leaveTo: formatApiDateToDisplay(record.end_date),
+          id: leave.id,
+          name: leave.employee_name,
+          date: formatApiDateToDisplay(leave.created_at),
+          base: leave.base,
+          leaveFrom: formatApiDateToDisplay(leave.start_date),
+          leaveTo: formatApiDateToDisplay(leave.end_date),
           igaCode: formattedIgaCode,
-          status: (record.status.charAt(0).toUpperCase() +
-            record.status.slice(1)) as "Pending" | "Approved" | "Rejected",
-          comment: record.comment || "",
-          approvedBy: record.approved_by,
-          rejectedBy: record.rejected_by,
-          duration: record.duration_days,
+          status: (leave.status.charAt(0).toUpperCase() +
+            leave.status.slice(1)) as "Pending" | "Approved" | "Rejected",
+          comment: leave.comment || "",
+          approvedBy: leave.approved_by || null,
+          duration: leave.duration_days,
+          createdBy: leave.created_by || null,  // ✅ NEW
+          statusUpdatedBy: leave.status_updated_by || null,  // ✅ NEW
         };
       });
 
@@ -186,6 +223,7 @@ const AdminUrtiPage: React.FC = () => {
       setIsLoadingData(false);
     }
   };
+
 
   const applyFiltersToData = () => {
     const now = new Date();
@@ -224,7 +262,7 @@ const AdminUrtiPage: React.FC = () => {
       filtered.sort((a, b) => {
         const aDate = parseDate(sortConfig.key === 'date' ? a.date : a.leaveFrom);
         const bDate = parseDate(sortConfig.key === 'date' ? b.date : b.leaveFrom);
-        return sortConfig.direction === 'asc' 
+        return sortConfig.direction === 'asc'
           ? aDate.getTime() - bDate.getTime()
           : bDate.getTime() - aDate.getTime();
       });
@@ -287,7 +325,7 @@ const AdminUrtiPage: React.FC = () => {
 
   const showModal = (type: 'success' | 'error' | 'warning', message: string) => {
     setModal({ show: true, type, message });
-    setTimeout(() => setModal({ show: false, type: 'success', message: '' }));
+    setTimeout(() => setModal({ show: false, type: 'success', message: '' }), 3000);
   };
 
   const handleViewComment = (comment: string) => {
@@ -295,82 +333,24 @@ const AdminUrtiPage: React.FC = () => {
     setShowCommentModal(true);
   };
 
-  const handleStatusUpdate = async (index: number, newStatus: 'Approved' | 'Rejected') => {
+  const handleStatusUpdate = async (
+    index: number,
+    newStatus: Attendance["status"]
+  ) => {
+    const leave = filteredAttendances[index];
+    if (!leave.comment.trim()) {
+      showModal('warning', 'Please add a comment before approving/rejecting');
+      return;
+    }
     try {
-      const leave = filteredAttendances[index];
-
-      if (!leave.comment?.trim()) {
-        showModal('warning', 'Please add a comment before approving/rejecting');
-        return;
-      }
-
-      // ===== CHANGE FOR APPROVE: Extract ONLY iga_code from localStorage =====
-      let approverInfo, rejectorInfo, approvedBy, rejectedBy;
-      
-      if (newStatus === 'Approved') {
-        approverInfo = JSON.parse(localStorage.getItem('userinfo') || '{}');
-        approvedBy = approverInfo.iga_code || 'Unknown';  // <- ONLY IGA_CODE
-        
-        const updatedLeaves = [...attendances];
-        const updatedIndex = updatedLeaves.findIndex(l => l.id === leave.id);
-        
-        if (updatedIndex !== -1) {
-          updatedLeaves[updatedIndex].status = 'Approved' as any;
-          updatedLeaves[updatedIndex].approvedBy = approvedBy;  // <- Store ONLY iga_code
-          updatedLeaves[updatedIndex].rejectedBy = null;
-          
-          setAttendances(updatedLeaves);
-        }
-      }
-      // ===== END CHANGE FOR APPROVE =====
-
-      // ===== CHANGE FOR REJECT: Extract ONLY iga_code from localStorage =====
-      if (newStatus === 'Rejected') {
-        rejectorInfo = JSON.parse(localStorage.getItem('userinfo') || '{}');
-        rejectedBy = rejectorInfo.iga_code || 'Unknown';  // <- ONLY IGA_CODE
-        
-        const updatedLeaves = [...attendances];
-        const updatedIndex = updatedLeaves.findIndex(l => l.id === leave.id);
-        
-        if (updatedIndex !== -1) {
-          updatedLeaves[updatedIndex].status = 'Rejected' as any;
-          updatedLeaves[updatedIndex].rejectedBy = rejectedBy;  // <- Store ONLY iga_code
-          updatedLeaves[updatedIndex].approvedBy = null;
-          
-          setAttendances(updatedLeaves);
-        }
-      }
-      // ===== END CHANGE FOR REJECT =====
-
-      // Make API call with the updated leave record
-      const response = await fetch(
-        window.IFS365API_URL + `api/ApproveRejectLeave/${leave.id}`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            status: newStatus === 'Approved' ? 1 : 0,
-            comment: leave.comment,
-            approvedby: newStatus === 'Approved' 
-              ? (approverInfo?.iga_code || 'Unknown')  // <- ONLY IGA_CODE
-              : null,
-            rejectedby: newStatus === 'Rejected'
-              ? (rejectorInfo?.iga_code || 'Unknown')  // <- ONLY IGA_CODE
-              : null,
-          })
-        }
+      await approveRejectLeave(
+        leave.id,
+        newStatus.toLowerCase() as "approved" | "rejected",
+        leave.comment
       );
-
-      if (response.ok) {
-        showModal(
-          'success',
-          `Leave request has been ${newStatus.toLowerCase()} successfully!`
-        );
-      } else {
-        throw new Error('Failed to update leave status');
-      }
+      showModal('success', `Leave request has been ${newStatus.toLowerCase()} successfully!`);
     } catch (error) {
-      console.error('Error updating status:', error);
+      console.error("Failed to update status:", error);
       showModal('error', 'Failed to update leave status. Please try again.');
     }
   };
@@ -392,12 +372,6 @@ const AdminUrtiPage: React.FC = () => {
   const isCommentLocked = (status: Attendance["status"]) => {
     return status !== "Pending";
   };
-
-  // Custom colors matching your UI
-  const oliveFrom = "rgb(139,170,21)";
-  const oliveTo = "rgb(111,134,18)";
-  const orangeFrom = "rgb(224,107,20)";
-  const orangeTo = "rgb(181,84,15)";
 
   const getBadgeClasses = (status: Attendance["status"]) => {
     const base =
@@ -494,14 +468,11 @@ const AdminUrtiPage: React.FC = () => {
                   <h1 className="text-3xl font-bold text-gray-900 mb-1">
                     URTI Leave Management
                   </h1>
-                  <p className=" text-gray-600">
+                  <p className="text-gray-600">
                     Manage and review URTI leave requests
                   </p>
                 </div>
               </div>
-
-              {/* Search Bar */}
-             
             </div>
           </div>
         </div>
@@ -636,137 +607,142 @@ const AdminUrtiPage: React.FC = () => {
           </div>
         )}
 
-
-         {/* Search bar */}
-         <div className="w-full lg:w-[full]">
-                <div
-                  className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300 ${
-                    searchKeyword.trim() !== ""
-                      ? "shadow-[0_0_12px_4px_rgba(0,0,153,0.4)]"
-                      : "shadow-[0_0_8px_2px_rgba(0,0,153,0.2)]"
-                  }`}
+        {/* Search bar */}
+        <div className="w-full">
+          <div
+            className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300 ${searchKeyword.trim() !== ""
+                ? "shadow-[0_0_12px_4px_rgba(0,0,153,0.4)]"
+                : "shadow-[0_0_8px_2px_rgba(0,0,153,0.2)]"
+              }`}
+          >
+            <div className="relative bg-white rounded-full">
+              <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
+                <svg
+                  className="w-5 h-5 text-gray-400"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
                 >
-                  <div className="relative bg-white rounded-full">
-                    <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
-                      <svg
-                        className="w-5 h-5 text-gray-400"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                        />
-                      </svg>
-                    </div>
-                    <input
-                      value={searchKeyword}
-                      onChange={(e) => setSearchKeyword(e.target.value)}
-                      placeholder="Search by IGA code or employee name"
-                      className="w-full pl-12 pr-12 py-3 text-sm bg-transparent rounded-full focus:outline-none"
-                    />
-                    {searchKeyword && (
-                      <button
-                        onClick={() => setSearchKeyword("")}
-                        className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-red-500 transition-colors duration-200"
-                      >
-                        <svg
-                          className="h-4 w-4"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
-                </div>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
+                </svg>
               </div>
+              <input
+                value={searchKeyword}
+                onChange={(e) => setSearchKeyword(e.target.value)}
+                placeholder="Search by IGA code or employee name"
+                className="w-full pl-12 pr-12 py-3 text-sm bg-transparent rounded-full focus:outline-none"
+              />
+              {searchKeyword && (
+                <button
+                  onClick={() => setSearchKeyword("")}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-red-500 transition-colors duration-200"
+                >
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
 
         {/* Table using your glass utility */}
         <div className="glass rounded-2xl shadow-indigo-lg overflow-hidden animate-fade-in-up animate-stagger-3">
           {isLoadingData ? (
-            <LoadingSpinner/>
+            <LoadingSpinner />
           ) : (
             <div className="overflow-x-auto scrollbar-thin">
               <table className="w-full">
                 <thead>
-                  <tr className="bg-indigo-gradient text-white">
-                    <th className="px-6 py-4 text-left font-semibold">IGA Code</th>
-                    <th className="px-6 py-4 text-left font-semibold">Employee Name</th>
-                    <th 
-                      className="px-6 py-4 text-left font-semibold cursor-pointer hover:bg-white/10 transition-colors select-none"
-                      onClick={() => handleSort('date')}
-                    >
-                      <div className="flex items-center gap-1">
-                        Date Applied
-                        <span className="text-xs">
-                          {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                        </span>
-                      </div>
+                  <tr>
+                    <th className="px-4 py-3 text-left">IGA Code</th>
+                    <th className="px-4 py-3 text-left">Employee Name</th>
+                    <th className="px-4 py-3 text-left cursor-pointer" onClick={() => handleSort('date')}>
+                      Date Applied {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
                     </th>
-                    <th className="px-6 py-4 text-left font-semibold">Base</th>
-                    <th 
-                      className="px-6 py-4 text-left font-semibold cursor-pointer hover:bg-white/10 transition-colors select-none"
-                      onClick={() => handleSort('leaveFrom')}
-                    >
-                      <div className="flex items-center gap-1">
-                        Leave Period
-                        <span className="text-xs">
-                          {sortConfig.key === 'leaveFrom' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                        </span>
-                      </div>
+                    <th className="px-4 py-3 text-left">Base</th>
+                    <th className="px-4 py-3 text-left cursor-pointer" onClick={() => handleSort('leaveFrom')}>
+                      Leave Period {sortConfig.key === 'leaveFrom' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
                     </th>
-                    <th className="px-6 py-4 text-left font-semibold">Status</th>
-                    <th className="px-6 py-4 text-left font-semibold">Comment</th>
-                    <th className="px-6 py-4 text-left font-semibold">Actions</th>
+                    <th className="px-4 py-3 text-left">Created By</th>  {/* ✅ NEW */}
+                    <th className="px-4 py-3 text-left">Status Updated By</th>  {/* ✅ NEW */}
+                    <th className="px-4 py-3 text-left">Status</th>
+                    <th className="px-4 py-3 text-left">Comment</th>
+                    <th className="px-4 py-3 text-left">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-indigo-primary/10">
                   {filteredAttendances.map((e, idx) => (
                     <tr
                       key={e.id}
-                      className={`hover:bg-indigo-primary/5 transition-colors animate-fadeInUp delay-[${
-                        idx * 50
-                      }ms]`}
+                      className={`hover:bg-indigo-primary/5 transition-colors animate-fadeInUp delay-[${idx * 50}ms]`}
                     >
+                      {/* 1. IGA Code */}
                       <td className="px-6 py-3">
                         <span className="font-mono text-sm bg-indigo-primary/10 text-indigo-primary px-2 py-1 rounded-md border border-indigo-primary/20">
                           {e.igaCode}
                         </span>
                       </td>
+
+                      {/* 2. Employee Name */}
                       <td className="px-6 py-3">{e.name}</td>
+
+                      {/* 3. Date Applied */}
                       <td className="px-6 py-3 font-medium text-sm">
                         {formatDateToDDMMYY(e.date)}
                       </td>
+
+                      {/* 4. Base */}
                       <td className="px-6 py-3">
-                        <div>
-                          <span className="px-3 py-1 rounded-full text-xs font-medium bg-indigo-primary/10 text-indigo-primary border border-indigo-primary/20">
-                            {e.base}
-                          </span>
-                          <div className="text-xs mt-1">
-                            {e.approvedBy || "N/A"}
-                          </div>
-                        </div>
+                        <span className="px-3 py-1 rounded-full text-xs font-medium bg-indigo-primary/10 text-indigo-primary border border-indigo-primary/20">
+                          {e.base}
+                        </span>
                       </td>
+
+                      {/* 5. Leave Period */}
                       <td className="px-6 py-3 font-medium text-sm">
-                        {formatDateToDDMMYY(e.leaveFrom)} to{" "}
-                        {formatDateToDDMMYY(e.leaveTo)} ({e.duration} days)
+                        {formatDateToDDMMYY(e.leaveFrom)} to {formatDateToDDMMYY(e.leaveTo)} ({e.duration} days)
                       </td>
+
+                      {/* 6. Created By - ✅ NEW */}
+                      <td className="px-6 py-3 text-sm">
+                        {e.createdBy ? 
+                          `${e.createdBy.name} (${e.createdBy.iga_code})` : 
+                          'N/A'
+                        }
+                      </td>
+
+                      {/* 7. Status Updated By - ✅ NEW */}
+                      <td className="px-6 py-3 text-sm">
+                        {e.statusUpdatedBy ? 
+                          `${e.statusUpdatedBy.name} (${e.statusUpdatedBy.iga_code})` : 
+                          'N/A'
+                        }
+                      </td>
+
+                      {/* 8. Status */}
                       <td className="px-6 py-3">
                         <span className={getBadgeClasses(e.status)}>
                           {e.status}
                         </span>
                       </td>
+
+                      {/* 9. Comment */}
                       <td className="px-6 py-3">
                         {isCommentLocked(e.status) ? (
                           e.comment ? (
@@ -794,6 +770,8 @@ const AdminUrtiPage: React.FC = () => {
                           </div>
                         )}
                       </td>
+
+                      {/* 10. Actions */}
                       <td className="px-6 py-3">
                         <div className="flex gap-2 justify-center">
                           {e.status === "Pending" && (
@@ -820,12 +798,12 @@ const AdminUrtiPage: React.FC = () => {
                           )}
                           {(e.status === "Approved" ||
                             e.status === "Rejected") && (
-                            <span className="px-4 py-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg">
-                              {e.status === "Approved"
-                                ? "Approved"
-                                : "Rejected"}
-                            </span>
-                          )}
+                              <span className="px-4 py-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg">
+                                {e.status === "Approved"
+                                  ? "Approved"
+                                  : "Rejected"}
+                              </span>
+                            )}
                         </div>
                       </td>
                     </tr>
