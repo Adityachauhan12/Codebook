@@ -1,1 +1,70 @@
- /api/createLeave /api/ApproveRejectLeave/{leave_id} Database schema 
+
+const handleAddLeave = async () => {
+  if (!validateForm()) {
+    return;
+  }
+  if (!selectedCrewData || !formData.leaveFrom || !formData.leaveTo) {
+    return;
+  }
+
+  setIsSubmitting(true);
+
+  try {
+    const formatDateForAPI = (date: Date): string => {
+      const year = date.getFullYear();
+      const month = (date.getMonth() + 1).toString().padStart(2, "0");
+      const day = date.getDate().toString().padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+
+    // ✅ Get logged-in user info for created_by
+    const userInfo = JSON.parse(localStorage.getItem("userinfo") || "{}");
+    const creator = {
+      name: userInfo.name ?? "Unknown",
+      iga_code: userInfo.iga_code ?? userInfo.igaCode ?? "ADMIN"
+   : selectedCrewData.base ?? "",
+      start_date: formatDateForAPI(formData.leaveFrom),
+      end_date: formatDateForAPI(formData.leaveTo),
+      comment: "",
+      created_by: creator // ✅ Added this
+    };
+
+    const response = await fetch(`${window.IFS_365_API_URL}/api/createLeave`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (response.ok) {
+      const duration = calculateDays(formData.leaveFrom, formData.leaveTo);
+      const igaId = selectedCrewData.id?.toString() ?? "";
+      const formattedIgaCode = igaId.startsWith("IGA") ? igaId : `IGA${igaId}`;
+
+      const newLeave: Leave = {
+        name: selectedCrewData.name ?? formData.selectedEmployee,
+        date: formatDate(new Date()),
+        igaCode: formattedIgaCode,
+        comment: "",
+        status: "Pending",
+        leaveFrom: formatDate(formData.leaveFrom),
+        leaveTo: formatDate(formData.leaveTo),
+        duration: duration
+      };
+
+      setLeaves([newLeave, ...leaves]);
+      setFormData({ selectedEmployee: "", leaveFrom: null, leaveTo: null });
+      setErrors({});
+      setModalSearchKeyword("");
+      setSelectedCrewData(null);
+      setShowForm(false);
+    } else {
+      const errorData = await response.json().catch(() => ({}));
+      alert(`Failed to create leave: ${errorData.message ?? response.statusText}`);
+    }
+  } catch (error) {
+    console.error("❌ Exception occurred:", error);
+    alert("Failed to create leave. Please try again.");
+  } finally {
+    setIsSubmitting(false);
+  }
+};
