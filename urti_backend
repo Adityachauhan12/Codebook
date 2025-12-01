@@ -1,16 +1,31 @@
 from datetime import datetime
-
-from typing import Dict, Any, List
-
+from typing import Dict, Any, List, Optional
 import uuid
-
+import json
 from google.cloud import bigquery
-
 import os
-
 from logger_config import get_logger
-
 from tools import mcp_tool_call
+from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Query
+
+app = FastAPI()
+
+# Pydantic Models
+class LeaveRequest(BaseModel):
+    iga_code: str
+    employee_name: str
+    base: str
+    start_date: str
+    end_date: str
+    comment: str
+
+class AdminAction(BaseModel):
+    status: int  # 1 for approved, 0 for rejected
+    comment: Optional[str] = None
+    approved_by: Optional[str] = None
+    rejected_by: Optional[str] = None
+    status_updated_by: Optional[Dict[str, str]] = None  # {"name": "Admin Name", "iga_code": "123"}
 
 logger = get_logger("urti_leaves")
  
@@ -162,9 +177,9 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
 
                 bigquery.ScalarQueryParameter("status", "STRING", record["status"]),
 
-                bigquery.ScalarQueryParameter("created_by", "STRING", record.get("created_by")),  # ✅ NEW
+                bigquery.ScalarQueryParameter("created_by", "STRING", json.dumps(record.get("created_by")) if record.get("created_by") else None),  # ✅ NEW
 
-                bigquery.ScalarQueryParameter("status_updated_by", "STRING", record.get("status_updated_by")),  # ✅ NEW
+                bigquery.ScalarQueryParameter("status_updated_by", "STRING", json.dumps(record.get("status_updated_by")) if record.get("status_updated_by") else None),  # ✅ NEW
 
                 bigquery.ScalarQueryParameter("created_at", "TIMESTAMP", record["created_at"]),
 
@@ -346,7 +361,18 @@ def list_leaves(
 
         logger.info(f"Found {len(leaves)} leave records")
 
-        # ✅ Response already includes created_by, approved_by, rejected_by from BigQuery
+        # ✅ Parse JSON strings back to objects
+        for leave in leaves:
+            if leave.get('created_by') and isinstance(leave['created_by'], str):
+                try:
+                    leave['created_by'] = json.loads(leave['created_by'])
+                except:
+                    leave['created_by'] = None
+            if leave.get('status_updated_by') and isinstance(leave['status_updated_by'], str):
+                try:
+                    leave['status_updated_by'] = json.loads(leave['status_updated_by'])
+                except:
+                    leave['status_updated_by'] = None
 
         return leaves
 
@@ -433,7 +459,18 @@ def list_leaves_analytics(
 
         logger.info(f"Found {len(leaves)} leave records (analytics)")
 
-        # ✅ Response already includes created_by, approved_by, rejected_by from BigQuery
+        # ✅ Parse JSON strings back to objects
+        for leave in leaves:
+            if leave.get('created_by') and isinstance(leave['created_by'], str):
+                try:
+                    leave['created_by'] = json.loads(leave['created_by'])
+                except:
+                    leave['created_by'] = None
+            if leave.get('status_updated_by') and isinstance(leave['status_updated_by'], str):
+                try:
+                    leave['status_updated_by'] = json.loads(leave['status_updated_by'])
+                except:
+                    leave['status_updated_by'] = None
 
         return leaves
 
@@ -549,7 +586,18 @@ def get_employee_leaves(iga_code: str):
 
         logger.info(f"Found {len(leaves)} leaves for employee {iga_code}")
 
-        # ✅ Response includes created_by, approved_by, rejected_by from BigQuery
+        # ✅ Parse JSON strings back to objects
+        for leave in leaves:
+            if leave.get('created_by') and isinstance(leave['created_by'], str):
+                try:
+                    leave['created_by'] = json.loads(leave['created_by'])
+                except:
+                    leave['created_by'] = None
+            if leave.get('status_updated_by') and isinstance(leave['status_updated_by'], str):
+                try:
+                    leave['status_updated_by'] = json.loads(leave['status_updated_by'])
+                except:
+                    leave['status_updated_by'] = None
 
         return leaves
 
