@@ -426,21 +426,24 @@ def _top_non_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: i
 
     rows = []
     for iga, x in per.items():
-        if x["total"] < min_tests or x["nonCompliant"] == 0:
+        if x["total"] < min_tests:
             continue
 
+        avg_score = round(x["sumScore"]/x["scored"], 2) if x["scored"] else 0
+        
         rows.append({
             "crewId": iga,
             "crewName": x["crewName"],
             "nonCompliant": x["nonCompliant"],
             "totalTests": x["total"],
             "nonCompliantRate": round(x["nonCompliant"]/x["total"], 3),
-            "avgScore": round(x["sumScore"]/x["scored"], 2) if x["scored"] else None,
+            "avgScore": avg_score,
             "lastSeen": x["lastSeen"].isoformat() if x["lastSeen"] else None,
             "base": None
         })
 
-    rows.sort(key=lambda r: (r["nonCompliant"], r["nonCompliantRate"], r["totalTests"], r["lastSeen"] or datetime.min), reverse=True)
+    # Sort by average score (lowest first) - worst performers at top
+    rows.sort(key=lambda r: r["avgScore"])
     return rows[:top_n]
 
 def _top_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int = 5):
@@ -470,21 +473,24 @@ def _top_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int =
 
     rows = []
     for iga, x in per.items():
-        if x["total"] < min_tests or x["compliant"] == 0:
+        if x["total"] < min_tests:
             continue
 
+        avg_score = round(x["sumScore"]/x["scored"], 2) if x["scored"] else 0
+        
         rows.append({
             "crewId": iga,
             "crewName": x["crewName"],
             "compliant": x["compliant"],
             "totalTests": x["total"],
             "compliantRate": round(x["compliant"]/x["total"], 3),
-            "avgScore": round(x["sumScore"]/x["scored"], 2) if x["scored"] else None,
+            "avgScore": avg_score,
             "lastSeen": x["lastSeen"].isoformat() if x["lastSeen"] else None,
             "base": None
         })
 
-    rows.sort(key=lambda r: (r["compliant"], r["compliantRate"], r["totalTests"], r["lastSeen"] or datetime.min), reverse=True)
+    # Sort by average score (highest first) - Lavanya with lowest score will be at bottom
+    rows.sort(key=lambda r: r["avgScore"], reverse=True)
     return rows[:top_n]
 
 # ========== shared helpers ==========
