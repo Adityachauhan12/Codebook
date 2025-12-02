@@ -269,6 +269,9 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
             except Exception:
                 ts = None
 
+            # Extract assessment mode from document
+            assessment_mode = doc.get("assessment_mode", "image")  # default to image for backward compatibility
+
             # Build normalized record
             record = {
                 "timestamp": ts,
@@ -278,6 +281,7 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                 "score": score if isinstance(score, (int, float)) else score,
                 "assessment": assessment,
                 "issues": issues or [],
+                "assessment_mode": assessment_mode,  # track whether it was video or image assessment
                 # ⭐ NEW: Read base and terminal from saved records
                 "base": doc.get("base") or "UNKNOWN",
                 "terminal": doc.get("terminal") or "UNKNOWN",
@@ -649,4 +653,86 @@ def search_people(date_from: date, date_to: date, query: str, page: int, page_si
         "pageSize": _safe_page_size(page_size),
         "total": total,
         "results": rows[start:end]
+    }
+
+def get_individual_analysis_data(iga_code: str, crew_name: Optional[str], date_from: date, date_to: date) -> Dict[str, Any]:
+    """
+    Get individual grooming analysis data for the grooming page including video assessments.
+    """
+    records = _load_records(Filters(date_from=date_from, date_to=date_to))
+    
+    # Filter records for the specific crew member
+    crew_records = [r for r in records if (r["iga_code"] or "").strip().upper() == iga_code.strip().upper()]
+    
+    # Calculate summary statistics
+    total_assessments = len(crew_records)
+    compliant_count = sum(1 for r in crew_records if r["assessment"] == "COMPLIANT")
+    non_compliant_count = total_assessments - compliant_count
+    
+    # Calculate pass rate
+    pass_rate = round((compliant_count / total_assessments) * 100, 1) if total_assessments > 0 else 0.0
+    
+    # Count assessment modes
+    video_count = sum(1 for r in crew_records if r.get("assessment_mode") == "video")
+    image_count = sum(1 for r in crew_records if r.get("assessment_mode") == "image" or not r.get("assessment_mode"))
+    
+    # Calculate non-compliance by category
+    non_compliant_records = [r for r in crew_records if r["assessment"] == "NON-COMPLIANT"]
+    category_violations = defaultdict(int)
+    
+    for record in non_compliant_records:
+        for issue in record.get("issues", []):
+            category = _issue_heading(issue)
+            if category and category != "other":
+                category_violations[category] += 1
+    
+    # Calculate percentages for categories
+    non_compliance_by_category = {}
+    for category, violations in category_violations.items():
+        percentage = (violations / len(non_compliant_records)) * 100 if non_compliant_records else 0
+        non_compliance_by_category[category] = {
+            "violations": violations,
+            "percentage": round(percentage, 1)
+        }
+    
+    # Generate trend data (daily breakdown)
+    daily_data = defaultdict(lambda: {"compliant": 0, "nonCompliant": 0})
+    for record in crew_records:
+        record_date = record["date"].isoformat() if record["date"] else None
+        if record_date:
+            if record["assessment"] == "COMPLIANT":
+                daily_data[record_date]["compliant"] += 1
+            else:
+                daily_data[record_date]["nonCompliant"] += 1
+    
+    trend = []
+    for date_str in sorted(daily_data.keys()):
+        trend.append({
+            "date": date_str,
+            "compliant": daily_data[date_str]["compliant"],
+            "nonCompliant": daily_data[date_str]["nonCompliant"]
+        })
+    
+    return {
+        "summary": {
+            "totalAssessments": total_assessments,
+            "compliant": compliant_count,
+            "nonCompliant": non_compliant_count,
+            "passRate": f"{pass_rate}%",
+            "passRatePercentage": f"{pass_rate}%",
+            "recentAssessments": total_assessments,
+            "videoAssessments": video_count,
+            "imageAssessments": image_count
+        },
+        "nonComplianceByCategory": non_compliance_by_category,
+        "trend": trend,
+        "meta": {
+            "generatedAt": datetime.utcnow().isoformat() + "Z",
+            "filters": {
+                "dateFrom": date_from.isoformat(),
+                "dateTo": date_to.isoformat(),
+                "igaCode": iga_code,
+                "crewName": crew_name
+            }
+        }
     }
