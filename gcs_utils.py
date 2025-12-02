@@ -94,6 +94,7 @@ def upload_grooming_result_text(
     iga_code: str,
     media_path: str,
     parsed: Optional[Dict] = None,
+    assessment_mode: str = "image",  # "image" or "video"
     base: Optional[str] = None,      # ⭐ NEW: Base location
     terminal: Optional[str] = None   # ⭐ NEW: Terminal
 ) -> str:
@@ -120,6 +121,7 @@ def upload_grooming_result_text(
         "date": datetime.utcnow().date().isoformat(),
         "crew_name": crew_name,
         "iga_code": iga_code,
+        "assessment_mode": assessment_mode,  # Track video vs image assessment
         "base": base or "UNKNOWN",          # ⭐ NEW
         "terminal": terminal or "UNKNOWN",  # ⭐ NEW
         "media_path": media_path,
