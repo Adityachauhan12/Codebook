@@ -346,9 +346,12 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         return JSONResponse({"error": "Invalid image"}, status_code=400)
 
     try:
+        # ⭐ Normalize IGA code to ensure proper format
+        normalized_iga = _normalize_iga_code(payload.igaCode)
+        
         # ⭐ Log received data
         print(f"📥 Received photo assessment:")
-        print(f" IGA Code: {payload.igaCode}")
+        print(f" IGA Code: {payload.igaCode} → {normalized_iga}")
         print(f" Name: {payload.crewName}")
         print(f" Base: {payload.base}")
         print(f" Terminal: {payload.terminal}")
@@ -357,15 +360,15 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         img_bytes = base64.b64decode(b64)
 
         report = run_grooming_analysis(b64)
-        parsed = _parse_text_to_ui(report, payload.crewName, payload.igaCode)
+        parsed = _parse_text_to_ui(report, payload.crewName, normalized_iga)
 
-        img_path = upload_image_bytes(img_bytes, payload.igaCode, "image", payload.crewName)
+        img_path = upload_image_bytes(img_bytes, normalized_iga, "image", payload.crewName)
 
         # ⭐ Pass base and terminal to GCS save function
         upload_grooming_result_text(
             report,
             payload.crewName,
-            payload.igaCode,
+            normalized_iga,
             img_path,
             parsed=parsed,
             assessment_mode="image",  # Track as image assessment
@@ -382,13 +385,13 @@ async def check_grooming_endpoint(payload: GroomingRequest):
                 "terminal": payload.terminal  # ⭐ NEW
             },
             payload.crewName,
-            payload.igaCode,
+            normalized_iga,
         )
 
         create_ticket(
             {
                 "type": "image",
-                "igaCode": payload.igaCode,
+                "igaCode": normalized_iga,
                 "crewName": payload.crewName,
                 "image_path": img_path,
                 "base": payload.base,  # ⭐ NEW
@@ -405,6 +408,24 @@ async def check_grooming_endpoint(payload: GroomingRequest):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 # ============= Grooming (video) =============
+
+def _normalize_iga_code(iga_code: str) -> str:
+    """Ensure IGA code has proper IGA prefix format."""
+    if not iga_code:
+        return iga_code
+    
+    iga_clean = iga_code.strip().upper()
+    
+    # If it's just numbers, add IGA prefix
+    if iga_clean.isdigit():
+        return f"IGA{iga_clean}"
+    
+    # If it already starts with IGA, return as-is
+    if iga_clean.startswith("IGA"):
+        return iga_clean
+    
+    # Otherwise, add IGA prefix
+    return f"IGA{iga_clean}"
 
 @app.post("/check-grooming-video")
 async def check_grooming_video(
@@ -434,9 +455,12 @@ async def check_grooming_video(
     await video.seek(0)
 
     try:
+        # ⭐ Normalize IGA code to ensure proper format
+        normalized_iga = _normalize_iga_code(iga_code)
+        
         # ⭐ Log received data
         print(f"📥 Received video assessment:")
-        print(f" IGA Code: {iga_code}")
+        print(f" IGA Code: {iga_code} → {normalized_iga}")
         print(f" Name: {name}")
         print(f" Base: {base}")
         print(f" Terminal: {terminal}")
@@ -448,17 +472,17 @@ async def check_grooming_video(
         with open(video_path, "wb") as f:
             shutil.copyfileobj(video.file, f)
 
-        full_text = check_grooming_from_video(video_path, name, iga_code)
-        parsed = _parse_text_to_ui(full_text, name, iga_code)
+        full_text = check_grooming_from_video(video_path, name, normalized_iga)
+        parsed = _parse_text_to_ui(full_text, name, normalized_iga)
 
         video_bytes = open(video_path, 'rb').read()
-        video_gcs_path = upload_image_bytes(video_bytes, iga_code, "video", name)
+        video_gcs_path = upload_image_bytes(video_bytes, normalized_iga, "video", name)
 
         # ⭐ Pass base and terminal to GCS save function
         upload_grooming_result_text(
             full_text,
             name,
-            iga_code,
+            normalized_iga,
             video_gcs_path,
             parsed=parsed,
             assessment_mode="video",  # Track as video assessment
@@ -475,13 +499,13 @@ async def check_grooming_video(
                 "terminal": terminal  # ⭐ NEW
             },
             name,
-            iga_code,
+            normalized_iga,
         )
 
         create_ticket(
             {
                 "type": "video",
-                "igaCode": iga_code,
+                "igaCode": normalized_iga,
                 "crewName": name,
                 "video_path": video_gcs_path,
                 "base": base,  # ⭐ NEW
