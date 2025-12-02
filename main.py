@@ -368,6 +368,7 @@ async def check_grooming_endpoint(payload: GroomingRequest):
             payload.igaCode,
             img_path,
             parsed=parsed,
+            assessment_mode="image",  # Track as image assessment
             base=payload.base,  # ⭐ NEW
             terminal=payload.terminal  # ⭐ NEW
         )
@@ -460,6 +461,7 @@ async def check_grooming_video(
             iga_code,
             video_gcs_path,
             parsed=parsed,
+            assessment_mode="video",  # Track as video assessment
             base=base,  # ⭐ NEW
             terminal=terminal  # ⭐ NEW
         )
@@ -917,3 +919,4 @@ async def individual_analysis(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=True)
+
