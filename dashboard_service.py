@@ -138,7 +138,10 @@ def _issue_heading(s: str) -> str:
         "incomplete view",  # OLD: Maps to Uniform
         "image quality",  # OLD: Maps to Uniform
         "uniform violation",  # OLD: Maps to Uniform
-        "total non-compliance"  # OLD: Maps to Uniform
+        "total non-compliance",  # OLD: Maps to Uniform
+        "**uniform**",  # NEW: Handle markdown formatting
+        "indigo uniform",  # NEW: Specific uniform mentions
+        "approved uniform"  # NEW: Uniform compliance
     ]
     for kw in uniform_keywords:
         if kw in s:
@@ -149,7 +152,10 @@ def _issue_heading(s: str) -> str:
         "hair", "hairstyle", "hair style", "bun", "braid",
         "ponytail", "chignon", "curl", "hair color", "highlights",
         "beard", "mustache", "moustache", "facial hair",  # Include facial hair
-        "grooming non-compliance"  # Sometimes refers to hairstyle
+        "grooming non-compliance",  # Sometimes refers to hairstyle
+        "**hairstyle**",  # NEW: Handle markdown formatting
+        "bob cut", "bob", "approved style",  # NEW: Specific hairstyle mentions
+        "secured style", "hair worn down"  # NEW: Hair styling issues
     ]
     for kw in hairstyle_keywords:
         if kw in s:
@@ -163,7 +169,10 @@ def _issue_heading(s: str) -> str:
         "nose pin", "piercing", "religious thread",
         "prohibited accessor",  # Catch prohibited items
         "earbud",  # Sometimes classified as accessory
-        "prohibited accessories"  # NEW: OLD format support
+        "prohibited accessories",  # NEW: OLD format support
+        "**accessories**",  # NEW: Handle markdown formatting
+        "necklace", "mandatory watch", "seconds hand",  # NEW: Specific accessories
+        "non-standard necklace"  # NEW: Accessory violations
     ]
     for kw in accessories_keywords:
         if kw in s:
@@ -173,7 +182,9 @@ def _issue_heading(s: str) -> str:
     makeup_keywords = [
         "makeup", "make-up", "make up", "foundation", "base",
         "eyeshadow", "eye shadow", "liner", "eyeliner",
-        "mascara", "lipstick", "lip", "cosmetic", "lip color"
+        "mascara", "lipstick", "lip", "cosmetic", "lip color",
+        "**makeup**",  # NEW: Handle markdown formatting
+        "non-compliant", "shades"  # NEW: When combined with makeup context
     ]
     for kw in makeup_keywords:
         if kw in s:
@@ -181,14 +192,25 @@ def _issue_heading(s: str) -> str:
 
     # ===== NAILS =====
     nails_keywords = [
-        "nail", "manicure", "nail polish", "nail color"
+        "nail", "manicure", "nail polish", "nail color",
+        "**nails**"  # NEW: Handle markdown formatting
     ]
     for kw in nails_keywords:
         if kw in s:
             return "nails"
 
+    # ===== SPECIAL CASES =====
+    # Handle generic assessment issues - map to uniform as default category
+    generic_keywords = [
+        "assessment criteria", "gender-specific", "male crew member",
+        "female standards", "does not comply", "criteria are"
+    ]
+    for kw in generic_keywords:
+        if kw in s:
+            return "uniform"  # Map generic issues to uniform category
+
     # Default fallback
-    return "other"
+    return "uniform"  # Changed from "other" to "uniform" to ensure categorization
 
 @dataclass
 class Filters:
@@ -250,6 +272,17 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                 if isinstance(score, (int, float)):
                     assessment = "COMPLIANT" if score >= PASS_THRESHOLD else "NON-COMPLIANT"
                 else:
+                    assessment = "NON-COMPLIANT"
+            
+            # CRITICAL FIX: If record has issues but is marked COMPLIANT, check if it should be NON-COMPLIANT
+            if assessment == "COMPLIANT" and issues:
+                # Filter out "not visible" issues - these don't make it non-compliant
+                real_issues = [issue for issue in issues if not any(phrase in issue.lower() for phrase in [
+                    "not visible", "cannot be assessed", "could not be assessed", "not visible for assessment"
+                ])]
+                
+                if real_issues:
+                    print(f"⚠️ Correcting assessment: Found {len(real_issues)} real issues, changing COMPLIANT → NON-COMPLIANT")
                     assessment = "NON-COMPLIANT"
 
             # Parse timestamp safely and make timezone-aware
@@ -388,14 +421,35 @@ def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[
         issues = r.get("issues", [])
         print(f"📋 [RECORD-{i+1}] Issues: {issues}")
         
+        # Filter out non-grooming issues (technical/assessment issues)
+        grooming_issues = []
+        for issue in issues:
+            issue_lower = issue.lower()
+            # Skip technical/assessment issues that don't relate to actual grooming defects
+            if any(phrase in issue_lower for phrase in [
+                "gender-specific", "male crew member", "female standards", "assessment criteria",
+                "light not adequate", "lighting", "image quality", "not visible", "cannot be assessed",
+                "could not be assessed", "incomplete view", "visibility", "camera", "angle"
+            ]):
+                print(f"📋 [RECORD-{i+1}] Skipping technical issue: '{issue}'")
+                continue
+            grooming_issues.append(issue)
+        
+        if not grooming_issues:
+            print(f"📋 [RECORD-{i+1}] No actual grooming defects found - skipping record")
+            continue
+        
+        print(f"📋 [RECORD-{i+1}] Processing {len(grooming_issues)} grooming defects")
+        
         # ✅ FIX: Use set to track UNIQUE categories in this record
         categories_in_record = set()
-        for raw in issues:
-            head = _issue_heading(raw)  # ← Uses FIXED function that handles old formats
+        
+        for raw in grooming_issues:
+            head = _issue_heading(raw)
             print(f"📋 [RECORD-{i+1}] Issue '{raw}' → Category '{head}'")
             # Only count valid categories
             if head in VALID_CATEGORIES:
-                categories_in_record.add(head)  # ← Add to set (no duplicates)
+                categories_in_record.add(head)
                 print(f"📋 [RECORD-{i+1}] ✅ Added category '{head}'")
             else:
                 print(f"📋 [RECORD-{i+1}] ❌ Skipped category '{head}' (not in valid set)")
