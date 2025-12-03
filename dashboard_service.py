@@ -274,15 +274,10 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
                 else:
                     assessment = "NON-COMPLIANT"
             
-            # CRITICAL FIX: If record has issues but is marked COMPLIANT, check if it should be NON-COMPLIANT
+            # Fix misclassified assessments with real grooming issues
             if assessment == "COMPLIANT" and issues:
-                # Filter out "not visible" issues - these don't make it non-compliant
-                real_issues = [issue for issue in issues if not any(phrase in issue.lower() for phrase in [
-                    "not visible", "cannot be assessed", "could not be assessed", "not visible for assessment"
-                ])]
-                
-                if real_issues:
-                    print(f"⚠️ Correcting assessment: Found {len(real_issues)} real issues, changing COMPLIANT → NON-COMPLIANT")
+                real_issues = [i for i in issues if not any(p in i.lower() for p in ["not visible", "cannot be assessed"])]
+                if real_issues and isinstance(score, (int, float)) and score < 7:
                     assessment = "NON-COMPLIANT"
 
             # Parse timestamp safely and make timezone-aware
@@ -403,81 +398,34 @@ def _daily_graph(records: List[Dict[str, Any]], start_date: date = None, end_dat
     } for d in all_days]
 
 def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
-    """
-    CRITICAL FIX v3: Returns ONLY 5 MAIN CATEGORIES.
-    Maps ALL issues (both new and old formats) to 5 categories.
-    ✅ FIXED: Now counts each category only ONCE per record (not once per issue)
-    """
     VALID_CATEGORIES = {"uniform", "hairstyle", "makeup", "nails", "accessories"}
-    headings: List[str] = []
+    SKIP_PHRASES = ["gender-specific", "male crew member", "female standards", "assessment criteria", 
+                   "light not adequate", "lighting", "image quality", "not visible", "cannot be assessed", 
+                   "could not be assessed", "incomplete view", "visibility", "camera", "angle"]
     
-    print(f"\n🔍 [CATEGORY-BREAKDOWN] Processing {len(records)} total records")
-    
-    non_compliant_records = [r for r in records if r["assessment"] == "NON-COMPLIANT"]
-    print(f"🔍 [CATEGORY-BREAKDOWN] Found {len(non_compliant_records)} NON-COMPLIANT records")
-
-    for i, r in enumerate(non_compliant_records):
-        print(f"\n📋 [RECORD-{i+1}] IGA: {r.get('iga_code')}, Assessment: {r['assessment']}")
-        issues = r.get("issues", [])
-        print(f"📋 [RECORD-{i+1}] Issues: {issues}")
-        
-        # Filter out non-grooming issues (technical/assessment issues)
-        grooming_issues = []
-        for issue in issues:
-            issue_lower = issue.lower()
-            # Skip technical/assessment issues that don't relate to actual grooming defects
-            if any(phrase in issue_lower for phrase in [
-                "gender-specific", "male crew member", "female standards", "assessment criteria",
-                "light not adequate", "lighting", "image quality", "not visible", "cannot be assessed",
-                "could not be assessed", "incomplete view", "visibility", "camera", "angle"
-            ]):
-                print(f"📋 [RECORD-{i+1}] Skipping technical issue: '{issue}'")
-                continue
-            grooming_issues.append(issue)
+    headings = []
+    for r in records:
+        if r["assessment"] != "NON-COMPLIANT":
+            continue
+            
+        # Filter to actual grooming defects only
+        grooming_issues = [issue for issue in r.get("issues", []) 
+                          if not any(phrase in issue.lower() for phrase in SKIP_PHRASES)]
         
         if not grooming_issues:
-            print(f"📋 [RECORD-{i+1}] No actual grooming defects found - skipping record")
             continue
+            
+        # Get unique categories for this record
+        categories = {_issue_heading(issue) for issue in grooming_issues}
+        categories = {cat for cat in categories if cat in VALID_CATEGORIES}
         
-        print(f"📋 [RECORD-{i+1}] Processing {len(grooming_issues)} grooming defects")
-        
-        # ✅ FIX: Use set to track UNIQUE categories in this record
-        categories_in_record = set()
-        
-        for raw in grooming_issues:
-            head = _issue_heading(raw)
-            print(f"📋 [RECORD-{i+1}] Issue '{raw}' → Category '{head}'")
-            # Only count valid categories
-            if head in VALID_CATEGORIES:
-                categories_in_record.add(head)
-                print(f"📋 [RECORD-{i+1}] ✅ Added category '{head}'")
-            else:
-                print(f"📋 [RECORD-{i+1}] ❌ Skipped category '{head}' (not in valid set)")
-        
-        print(f"📋 [RECORD-{i+1}] Final categories for this record: {categories_in_record}")
-        
-        # Add each unique category from this record once
-        for cat in categories_in_record:
-            headings.append(cat)
-
-    total_nc = len(non_compliant_records)
+        headings.extend(categories)
+    
     counts = Counter(headings)
-    
-    print(f"\n📊 [CATEGORY-BREAKDOWN] Final category counts: {dict(counts)}")
-    print(f"📊 [CATEGORY-BREAKDOWN] Total NC records: {total_nc}")
-
-    # Return ALL 5 categories sorted by count
-    result = []
-    for cat in sorted(counts.keys(), key=lambda c: counts[c], reverse=True):
-        result.append({
-            "category": cat,
-            "nonCompliantCount": counts[cat],
-            "share": round((counts[cat] / total_nc), 3) if total_nc else 0.0,
-            "base": None
-        })
-    
-    print(f"📊 [CATEGORY-BREAKDOWN] Returning {len(result)} categories: {[r['category'] for r in result]}\n")
-    return result[:top_n]
+    return [{"category": cat, "nonCompliantCount": counts[cat], 
+             "share": round(counts[cat] / len([r for r in records if r["assessment"] == "NON-COMPLIANT"]), 3) if counts[cat] else 0.0, 
+             "base": None} 
+            for cat in sorted(counts.keys(), key=lambda c: counts[c], reverse=True)][:top_n]
 
 def _top_non_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int = 5):
     per: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
@@ -768,6 +716,10 @@ def get_individual_analysis_data(iga_code: str, crew_name: Optional[str], date_f
     
     for record in non_compliant_records:
         for issue in record.get("issues", []):
+            # Skip "not visible" issues for nails category
+            if "nail" in issue.lower() and any(phrase in issue.lower() for phrase in ["not visible", "cannot be assessed", "could not be assessed"]):
+                continue
+            
             category = _issue_heading(issue)
             if category and category != "other":
                 category_violations[category] += 1
