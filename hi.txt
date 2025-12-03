@@ -1,2 +1,22 @@
-{"status":"ok","result":{"person":{"name":"Simran Chibber","iga_code":"IGA1001"},"assessment":"NON-COMPLIANT","score":2,"scores":{"uniform":0,"hairstyle":0,"makeup":2,"nails":0,"accessories":0},"details":{"uniform":"Crew member is in casual attire (blue jacket), not the official IndiGo uniform.","hairstyle":"Hair is worn long and down, which is not an approved style.","makeup":"Appears compliant with approved lip color and eyeliner for skin tone.","nails":"Visible and painted a dark reddish/burgundy color, which is non-compliant.","accessories":"Multiple violations are visible including a non-compliant watch, a nose pin, excess rings, and a hair tie worn as a bracelet."},"issues":["**Uniform:** Not worn. Assessment is based on casual attire, which is non-compliant.","**Hairstyle:** Hair is worn down, which is a prohibited style.","**Nails:** Nail color is dark red/burgundy; only Pearl White or French Manicure is permitted.","**Accessories:** Nose pin is worn (prohibited).","**Accessories:** Two rings are worn on one hand (max one per hand).","**Accessories:** Watch is gold-toned (not an approved color).","**Accessories:** A hair tie is worn on the wrist (not a compliant bangle).","**Accessories:** Earrings not visible for assessment."],"recommendations":["**Uniform:** The official, clean, and well-fitted IndiGo uniform must be worn while on duty.","**Hairstyle:** Please adhere to approved
- hairstyles such as a Chignon or Braid Roll. Hair must be tied up neatly.","**Nails:** Please use only the approved nail colors: Pearl White or a French Manicure.","**Accessories:** Remove the nose pin. Adhere to the one-ring-per-hand rule. Wear only an approved watch (silver, rose-gold, black, or dark blue). Do not wear hair ties on the wrist.","**Accessories:** Ensure compliant earrings (pearl or diamond studs) are worn and visible."],"_metadata":{"not_visible":{"uniform":false,"hairstyle":false,"makeup":false,"nails":false,"accessories":false}}}}
+2025-12-03 14:54:49.020 IST
+[DEBUG] ISSUE 2: Nails, watch, rings, and bangles were not visible for assessment.
+2025-12-03 14:54:49.020 IST
+[DEBUG] ============ EXTRACTION COMPLETE ============
+2025-12-03 14:54:49.020 IST
+💾 Saving to GCS with base: DEL, terminal: T3
+2025-12-03 14:54:49.020 IST
+📁 GCS path: Grooming-Results/20251203/results/IGA6781/grooming_result_IGA6781_092448.json
+2025-12-03 14:54:49.020 IST
+📊 Assessment: COMPLIANT, Score: 9
+2025-12-03 14:54:49.020 IST
+✅ Successfully saved assessment to GCS: Grooming-Results/20251203/results/IGA6781/grooming_result_IGA6781_092448.json
+2025-12-03 14:54:49.020 IST
+🔍 Record contains: 2 issues
+2025-12-03 14:54:49.020 IST
+✅ Appended to crew log: Grooming-Results/crew_logs/IGA6781.jsonl
+2025-12-03 14:54:49.020 IST
+✅ Created ticket: Grooming-Results/tickets/GROOM_20251203092448.json
+2025-12-03 14:54:49.020 IST
+✅ Video assessment saved with base: DEL
+2025-12-03 14:54:49.020 IST
+INFO: 169.254.
