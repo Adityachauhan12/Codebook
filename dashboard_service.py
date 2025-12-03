@@ -290,6 +290,8 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
 
             records.append(record)
             print(f"✅ Loaded record: {record['iga_code']} - {record['assessment']} - {len(record['issues'])} issues")
+            if record['issues']:
+                print(f"   Issues: {record['issues'][:3]}{'...' if len(record['issues']) > 3 else ''}")
 
     # Most recent first - use timezone-aware datetime.min
     from datetime import timezone
@@ -298,6 +300,13 @@ def _load_records(filters: Filters) -> List[Dict[str, Any]]:
     records.sort(key=lambda r: (r["timestamp"] or min_datetime), reverse=True)
 
     print(f"✅ Total records loaded: {len(records)}")
+    
+    # Debug: Show sample of issues from loaded records
+    nc_records_with_issues = [r for r in records if r['assessment'] == 'NON-COMPLIANT' and r['issues']]
+    print(f"🔍 Found {len(nc_records_with_issues)} NON-COMPLIANT records with issues")
+    for i, r in enumerate(nc_records_with_issues[:3]):  # Show first 3
+        print(f"   Sample {i+1}: {r['iga_code']} has {len(r['issues'])} issues: {r['issues'][:2]}")
+    
     return records
 
 # ---------- Core aggregations ----------
@@ -368,24 +377,40 @@ def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[
     """
     VALID_CATEGORIES = {"uniform", "hairstyle", "makeup", "nails", "accessories"}
     headings: List[str] = []
+    
+    print(f"\n🔍 [CATEGORY-BREAKDOWN] Processing {len(records)} total records")
+    
+    non_compliant_records = [r for r in records if r["assessment"] == "NON-COMPLIANT"]
+    print(f"🔍 [CATEGORY-BREAKDOWN] Found {len(non_compliant_records)} NON-COMPLIANT records")
 
-    for r in records:
-        if r["assessment"] == "NON-COMPLIANT":
-            # ✅ FIX: Use set to track UNIQUE categories in this record
-            categories_in_record = set()
-            for raw in r.get("issues", []):
-                s = raw
-                head = _issue_heading(s)  # ← Uses FIXED function that handles old formats
-                # Only count valid categories
-                if head in VALID_CATEGORIES:
-                    categories_in_record.add(head)  # ← Add to set (no duplicates)
-            
-            # Add each unique category from this record once
-            for cat in categories_in_record:
-                headings.append(cat)
+    for i, r in enumerate(non_compliant_records):
+        print(f"\n📋 [RECORD-{i+1}] IGA: {r.get('iga_code')}, Assessment: {r['assessment']}")
+        issues = r.get("issues", [])
+        print(f"📋 [RECORD-{i+1}] Issues: {issues}")
+        
+        # ✅ FIX: Use set to track UNIQUE categories in this record
+        categories_in_record = set()
+        for raw in issues:
+            head = _issue_heading(raw)  # ← Uses FIXED function that handles old formats
+            print(f"📋 [RECORD-{i+1}] Issue '{raw}' → Category '{head}'")
+            # Only count valid categories
+            if head in VALID_CATEGORIES:
+                categories_in_record.add(head)  # ← Add to set (no duplicates)
+                print(f"📋 [RECORD-{i+1}] ✅ Added category '{head}'")
+            else:
+                print(f"📋 [RECORD-{i+1}] ❌ Skipped category '{head}' (not in valid set)")
+        
+        print(f"📋 [RECORD-{i+1}] Final categories for this record: {categories_in_record}")
+        
+        # Add each unique category from this record once
+        for cat in categories_in_record:
+            headings.append(cat)
 
-    total_nc = sum(1 for r in records if r["assessment"] == "NON-COMPLIANT")
+    total_nc = len(non_compliant_records)
     counts = Counter(headings)
+    
+    print(f"\n📊 [CATEGORY-BREAKDOWN] Final category counts: {dict(counts)}")
+    print(f"📊 [CATEGORY-BREAKDOWN] Total NC records: {total_nc}")
 
     # Return ALL 5 categories sorted by count
     result = []
@@ -396,7 +421,8 @@ def _category_breakdown(records: List[Dict[str, Any]], top_n: int = 10) -> List[
             "share": round((counts[cat] / total_nc), 3) if total_nc else 0.0,
             "base": None
         })
-
+    
+    print(f"📊 [CATEGORY-BREAKDOWN] Returning {len(result)} categories: {[r['category'] for r in result]}\n")
     return result[:top_n]
 
 def _top_non_groomed(records: List[Dict[str, Any]], min_tests: int = 3, top_n: int = 5):
