@@ -1,107 +1,200 @@
+Waiting for application shutdown.
 
-{
-insertId: "692fd72d000deae0084bf929"
-labels: {9}
-logName: "projects/prj-ifs-dev/logs/run.googleapis.com%2Fstdout"
-payload: "textPayload"
-receiveLocation: "asia-south1"
-receiveTimestamp: "2025-12-03T06:22:38.248014728Z"
-resource: {2}
-severity: "DEFAULT"
-textPayload: "✅ Successfully saved assessment to GCS: Grooming-Results/20251203/results/IGA94030/grooming_result_IGA94030_062237.json"
-timestamp: "2025-12-03T06:22:37.912096Z"
-{
-insertId: "692fd72d000deae508bc1c8a"
-labels: {9}
-logName: "projects/prj-ifs-dev/logs/run.googleapis.com%2Fstdout"
-payload: "textPayload"
-receiveLocation: "asia-south1"
-receiveTimestamp: "2025-12-03T06:22:38.248014728Z"
-resource: {2}
-severity: "DEFAULT"
-textPayload: "🔍 Record contains: 3 issues"
-timestamp: "2025-12-03T06:22:37.912101Z"
-traceSampled: fals
+2025-12-03 11:51:33.613
+INFO:     Application shutdown complete.
+2025-12-03 11:51:33.613
+INFO:     Finished server process [1]
+2025-12-03 11:51:59.690
 
+OPTIONS
 
-DEFAULT 2025-12-03T06:23:46.873696Z ✅ Loaded record: IGA1001 - COMPLIANT - 2 issues
-DEFAULT 2025-12-03T06:23:46.873701Z Issues: ['Nails were not visible for assessment.', 'Watch, rings, and bangles were not visible for assessment.']
-DEFAULT 2025-12-03T06:23:46.873705Z ✅ Loaded record: IGA1001 - NON-COMPLIANT - 5 issues
-DEFAULT 2025-12-03T06:23:46.873711Z Issues: ['**Uniform:** Not wearing the approved IndiGo uniform.', '**Hairstyle:** Hair worn down is a violation of grooming standards which require a secured, approved style.', '**Makeup:** Eyeliner and lipstick shades are non-compliant.']...
-DEFAULT 2025-12-03T06:23:46.873715Z ✅ Loaded record: IGA94030 - COMPLIANT - 3 issues
-DEFAULT 2025-12-03T06:23:46.873720Z Issues: ['Hairstyle is not an approved style (short bob is not listed).', 'Mandatory watch is not visible/worn.', 'Nails: Not visible for assessment.']
-DEFAULT 2025-12-03T06:23:46.873725Z ✅ Loaded record: IGA94030 - NON-COMPLIANT - 2 issues
-DEFAULT 2025-12-03T06:23:46.873730Z Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.873734Z ✅ Loaded record: IGA94030 - NON-COMPLIANT - 2 issues
-DEFAULT 2025-12-03T06:23:46.873739Z Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.873743Z ✅ Loaded record: IGA94030 - COMPLIANT - 3 issues
-DEFAULT 2025-12-03T06:23:46.873749Z Issues: ['Hairstyle is a non-approved bob cut, which is a direct violation of the listed standards.', 'A mandatory watch with a seconds hand is not visible/worn.', 'Nails were not visible for assessment.']
-DEFAULT 2025-12-03T06:23:46.873753Z ✅ Total records loaded: 74
-DEFAULT 2025-12-03T06:23:46.873759Z 🔍 Found 39 NON-COMPLIANT records with issues
-DEFAULT 2025-12-03T06:23:46.873766Z Sample 1: IGA94030 has 2 issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.873772Z Sample 2: IGA94030 has 2 issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.873777Z Sample 3: IGA1001 has 5 issues: ['**Uniform:** Not wearing the approved IndiGo uniform.', '**Hairstyle:** Hair worn down is a violation of grooming standards which require a secured, approved style.']
-DEFAULT 2025-12-03T06:23:46.873784Z 🔍 [CATEGORY-BREAKDOWN] Processing 74 total records
-DEFAULT 2025-12-03T06:23:46.873788Z 🔍 [CATEGORY-BREAKDOWN] Found 44 NON-COMPLIANT records
-DEFAULT 2025-12-03T06:23:46.873795Z 📋 [RECORD-1] IGA: IGA94030, Assessment: NON-COMPLIANT
-DEFAULT 2025-12-03T06:23:46.873800Z 📋 [RECORD-1] Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.873805Z 📋 [RECORD-1] Issue 'Assessment criteria are gender-specific (female only)' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.873812Z 📋 [RECORD-1] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.873817Z 📋 [RECORD-1] Issue 'Male crew member does not comply with female standards' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.873822Z 📋 [RECORD-1] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.873826Z 📋 [RECORD-1] Final categories for this record: set()
-DEFAULT 2025-12-03T06:23:46.873832Z 📋 [RECORD-2] IGA: IGA94030, Assessment: NON-COMPLIANT
-DEFAULT 2025-12-03T06:23:46.873838Z 📋 [RECORD-2] Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.873842Z 📋 [RECORD-2] Issue 'Assessment criteria are gender-specific (female only)' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.873847Z 📋 [RECORD-2] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.873852Z 📋 [RECORD-2] Issue 'Male crew member does not comply with female standards' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.873858Z 📋 [RECORD-2] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.873865Z 📋 [RECORD-2] Final categories for this record: set()
-DEFAULT 2025-12-03T06:23:46.873871Z 📋 [RECORD-3] IGA: IGA1001, Assessment: NON-COMPLIANT
-DEFAULT 2025-12-03T06:23:46.873877Z 📋 [RECORD-3] Issues: ['**Uniform:** Not wearing the approved IndiGo uniform.', '**Hairstyle:** Hair worn down is a violation of grooming standards which require a secured, approved style.', '**Makeup:** Eyeliner and lipstick shades are non-compliant.', '**Accessories:** A non-standard necklace is being worn.', '**Nails:** Not visible for assessment.']
-DEFAULT 2025-12-03T06:23:46.873881Z 📋 [RECORD-3] Issue '**Uniform:** Not wearing the approved IndiGo uniform.' → Category 'uniform'
-DEFAULT 2025-12-03T06:23:46.873886Z 📋 [RECORD-3] ✅ Added category 'uniform'
-DEFAULT 2025-12-03T06:23:46.873892Z 📋 [RECORD-3] Issue '**Hairstyle:** Hair worn down is a violation of grooming standards which require a secured, approved style.' → Category 'hairstyle'
-DEFAULT 2025-12-03T06:23:46.873896Z 📋 [RECORD-3] ✅ Added category 'hairstyle'
-DEFAULT 2025-12-03T06:23:46.873901Z 📋 [RECORD-3] Issue '**Makeup:** Eyeliner and lipstick shades are non-compliant.' → Category 'makeup'
-DEFAULT 2025-12-03T06:23:46.873905Z 📋 [RECORD-3] ✅ Added category 'makeup'
-DEFAULT 2025-12-03T06:23:46.873911Z 📋 [RECORD-3] Issue '**Accessories:** A non-standard necklace is being worn.' → Category 'accessories'
-DEFAULT 2025-12-03T06:23:46.873916Z 📋 [RECORD-3] ✅ Added category 'accessories'
-DEFAULT 2025-12-03T06:23:46.873921Z 📋 [RECORD-3] Issue '**Nails:** Not visible for assessment.' → Category 'nails'
-DEFAULT 2025-12-03T06:23:46.873925Z 📋 [RECORD-3] ✅ Added category 'nails'
-DEFAULT 2025-12-03T06:23:46.873931Z 📋 [RECORD-3] Final categories for this record: {'accessories', 'hairstyle', 'nails', 'makeup', 'uniform'}
-DEFAULT 2025-12-03T06:23:46.873936Z 📋 [RECORD-4] IGA: IGA6781, Assessment: NON-COMPLIANT
-DEFAULT 2025-12-03T06:23:46.873941Z 📋 [RECORD-4] Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.873946Z 📋 [RECORD-4] Issue 'Assessment criteria are gender-specific (female only)' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.873950Z 📋 [RECORD-4] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.873955Z 📋 [RECORD-4] Issue 'Male crew member does not comply with female standards' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.873959Z 📋 [RECORD-4] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.873964Z 📋 [RECORD-4] Final categories for this record: set()
-DEFAULT 2025-12-03T06:23:46.873969Z 📋 [RECORD-5] IGA: IGA94030, Assessment: NON-COMPLIANT
-DEFAULT 2025-12-03T06:23:46.873978Z 📋 [RECORD-5] Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.873982Z 📋 [RECORD-5] Issue 'Assessment criteria are gender-specific (female only)' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.873987Z 📋 [RECORD-5] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.873992Z 📋 [RECORD-5] Issue 'Male crew member does not comply with female standards' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.874059Z 📋 [RECORD-5] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.874064Z 📋 [RECORD-5] Final categories for this record: set()
-DEFAULT 2025-12-03T06:23:46.874069Z 📋 [RECORD-6] IGA: IGA94030, Assessment: NON-COMPLIANT
-DEFAULT 2025-12-03T06:23:46.874074Z 📋 [RECORD-6] Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.874079Z 📋 [RECORD-6] Issue 'Assessment criteria are gender-specific (female only)' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.874084Z 📋 [RECORD-6] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.874088Z 📋 [RECORD-6] Issue 'Male crew member does not comply with female standards' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.874093Z 📋 [RECORD-6] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.874098Z 📋 [RECORD-6] Final categories for this record: set()
-DEFAULT 2025-12-03T06:23:46.874103Z 📋 [RECORD-7] IGA: 93860, Assessment: NON-COMPLIANT
-DEFAULT 2025-12-03T06:23:46.874108Z 📋 [RECORD-7] Issues: []
-DEFAULT 2025-12-03T06:23:46.874113Z 📋 [RECORD-7] Final categories for this record: set()
-DEFAULT 2025-12-03T06:23:46.874118Z 📋 [RECORD-8] IGA: IGA93860, Assessment: NON-COMPLIANT
-DEFAULT 2025-12-03T06:23:46.874123Z 📋 [RECORD-8] Issues: []
-DEFAULT 2025-12-03T06:23:46.874127Z 📋 [RECORD-8] Final categories for this record: set()
-DEFAULT 2025-12-03T06:23:46.874133Z 📋 [RECORD-9] IGA: IGA6781, Assessment: NON-COMPLIANT
-DEFAULT 2025-12-03T06:23:46.874139Z 📋 [RECORD-9] Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
-DEFAULT 2025-12-03T06:23:46.874145Z 📋 [RECORD-9] Issue 'Assessment criteria are gender-specific (female only)' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.874149Z 📋 [RECORD-9] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.874155Z 📋 [RECORD-9] Issue 'Male crew member does not comply with female standards' → Category 'other'
-DEFAULT 2025-12-03T06:23:46.874160Z 📋 [RECORD-9] ❌ Skipped category 'other' (not in valid set)
-DEFAULT 2025-12-03T06:23:46.874166Z 📋 [RECORD-9] Final categories for this record: set()
-DEFAULT 2025-12-03T06:23:46.874173Z 📋 [RECORD-10] IGA: IGA6781, Assessment: NON-COMPLIANT
+200
+
+314 B
+
+2 ms
+
+Edg 142.0.0.0
+https://6e-ifs-grooming-be-dev.goindigo.in/check-grooming-video
+2025-12-03 11:51:59.693
+INFO:     169.254.169.126:46870 - "OPTIONS /check-grooming-video HTTP/1.1" 200 OK
+2025-12-03 11:52:00.305
+
+POST
+
+200
+
+1.47 KiB
+
+37.601 s
+
+Edg 142.0.0.0
+https://6e-ifs-grooming-be-dev.goindigo.in/check-grooming-video
+2025-12-03 11:52:37.911
+📥 Received video assessment:
+2025-12-03 11:52:37.911
+ IGA Code: 94030 → IGA94030
+2025-12-03 11:52:37.911
+ Name: Aditya Chauhan
+2025-12-03 11:52:37.911
+ Base: DEL
+2025-12-03 11:52:37.911
+ Terminal: T1
+2025-12-03 11:52:37.911
+🔢 Video token count: 5665
+2025-12-03 11:52:37.911
+[DEBUG] ============ ISSUE EXTRACTION START ============
+2025-12-03 11:52:37.911
+[DEBUG] Text length: 1159 characters
+2025-12-03 11:52:37.911
+[DEBUG] METHOD 1: Trying 'Issues Found:' pattern...
+2025-12-03 11:52:37.912
+[DEBUG] Found matching pattern
+2025-12-03 11:52:37.912
+[DEBUG] Block content (first 200 chars): - Hairstyle is a non-approved bob cut, which is a direct violation of the listed standards.
+2025-12-03 11:52:37.912
+- A mandatory watch with a seconds hand is not visible/worn.
+2025-12-03 11:52:37.912
+- Nails were not visible for assessment.
+2025-12-03 11:52:37.912
+[DEBUG] ✓ Extracted 3 issues from Issues Found
+2025-12-03 11:52:37.912
+[DEBUG] 1. Hairstyle is a non-approved bob cut, which is a direct violation of the listed standards.
+2025-12-03 11:52:37.912
+[DEBUG] 2. A mandatory watch with a seconds hand is not visible/worn.
+2025-12-03 11:52:37.912
+[DEBUG] 3. Nails were not visible for assessment.
+2025-12-03 11:52:37.912
+[DEBUG] ============ FINAL RESULT ============
+2025-12-03 11:52:37.912
+[DEBUG] Total issues extracted: 3
+2025-12-03 11:52:37.912
+[DEBUG] ISSUE 1: Hairstyle is a non-approved bob cut, which is a direct violation of the listed standards.
+2025-12-03 11:52:37.912
+[DEBUG] ISSUE 2: A mandatory watch with a seconds hand is not visible/worn.
+2025-12-03 11:52:37.912
+[DEBUG] ISSUE 3: Nails were not visible for assessment.
+2025-12-03 11:52:37.912
+[DEBUG] ============ EXTRACTION COMPLETE ============
+2025-12-03 11:52:37.912
+💾 Saving to GCS with base: DEL, terminal: T1
+2025-12-03 11:52:37.912
+📁 GCS path: Grooming-Results/20251203/results/IGA94030/grooming_result_IGA94030_062237.json
+2025-12-03 11:52:37.912
+📊 Assessment: COMPLIANT, Score: 7
+2025-12-03 11:52:37.912
+✅ Successfully saved assessment to GCS: Grooming-Results/20251203/results/IGA94030/grooming_result_IGA94030_062237.json
+2025-12-03 11:52:37.912
+🔍 Record contains: 3 issues
+2025-12-03 11:52:37.912
+✅ Appended to crew log: Grooming-Results/crew_logs/IGA94030.jsonl
+2025-12-03 11:52:37.912
+✅ Created ticket: Grooming-Results/tickets/GROOM_20251203062237.json
+2025-12-03 11:52:37.912
+✅ Video assessment saved with base: DEL
+2025-12-03 11:52:37.912
+INFO:     169.254.169.126:46874 - "POST /check-grooming-video HTTP/1.1" 200 OK
+2025-12-03 11:53:44.326
+
+OPTIONS
+
+200
+
+342 B
+
+2 ms
+
+Chrome 142.0.0.0
+https://6e-ifs-grooming-be-dev.goindigo.in/v1/insights
+2025-12-03 11:53:44.330
+INFO:     169.254.169.126:7926 - "OPTIONS /v1/insights HTTP/1.1" 200 OK
+2025-12-03 11:53:44.382
+
+GET
+
+200
+
+6.79 KiB
+
+2.494 s
+
+Chrome 142.0.0.0
+https://6e-ifs-grooming-be-dev.goindigo.in/v1/insights
+2025-12-03 11:53:45.773
+🔍 Loading records from 2025-11-27 to 2025-12-03
+2025-12-03 11:53:45.773
+📁 Checking date prefix: Grooming-Results/20251127/results/
+2025-12-03 11:53:45.773
+📊 Found 16 JSON files for 2025-11-27
+2025-12-03 11:53:45.773
+✅ Loaded record: 6781 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+✅ Loaded record: 6781 - COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Uniform: Name badge is not visible.', 'Nails: Cannot be assessed as they are not visible.']
+2025-12-03 11:53:45.773
+✅ Loaded record: 6781 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+✅ Loaded record: 93869 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+✅ Loaded record: 93869 - COMPLIANT - 3 issues
+2025-12-03 11:53:45.773
+   Issues: ['Nails were not visible for assessment.', 'Accessories such as watch, rings, and bangles were not visible for assessment.', 'The full uniform, including the badge and tunic fit, was not visible for a complete assessment.']
+2025-12-03 11:53:45.773
+✅ Loaded record: 93869 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+✅ Loaded record: 93869 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+✅ Loaded record: 93869 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+✅ Loaded record: IGA34412 - COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Uniform: Name badge is not visible.', 'Nails: Cannot be assessed as they are not visible.']
+2025-12-03 11:53:45.773
+✅ Loaded record: IGA34412 - COMPLIANT - 3 issues
+2025-12-03 11:53:45.773
+   Issues: ['Uniform badge is not visible.', 'Nails could not be assessed (NOT VISIBLE).', 'Watch, rings, and bangles could not be assessed (NOT VISIBLE).']
+2025-12-03 11:53:45.773
+✅ Loaded record: IGA6781 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+✅ Loaded record: IGA6781 - COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Nails were not visible for assessment.', 'Watch, rings, and bangles were not visible for assessment.']
+2025-12-03 11:53:45.773
+✅ Loaded record: IGA6781 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+✅ Loaded record: IGA93869 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+✅ Loaded record: IGA93869 - COMPLIANT - 3 issues
+2025-12-03 11:53:45.773
+   Issues: ['Nails were not visible for assessment.', 'Accessories such as watch, rings, and bangles were not visible for assessment.', 'The full uniform, including the badge and tunic fit, was not visible for a complete assessment.']
+2025-12-03 11:53:45.773
+✅ Loaded record: IGA93872 - NON-COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Assessment criteria are gender-specific (female only)', 'Male crew member does not comply with female standards']
+2025-12-03 11:53:45.773
+📁 Checking date prefix: Grooming-Results/20251128/results/
+2025-12-03 11:53:45.773
+📊 Found 23 JSON files for 2025-11-28
+2025-12-03 11:53:45.773
+✅ Loaded record: 93869 - COMPLIANT - 2 issues
+2025-12-03 11:53:45.773
+   Issues: ['Uniform: Name badge is not visible.', 'Nails: Cannot be assessed as they are not visible.']
