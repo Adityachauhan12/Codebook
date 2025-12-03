@@ -294,6 +294,15 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
     # Extract recommendations
     ok_r, block_r = _extract(_rx["reco_block"], text)
 
+    # Determine if there's an actual nails violation (not just visibility issue)
+    nails_violation = False
+    nails_issues = [issue for issue in issues if "nail" in issue.lower()]
+    if nails_issues:
+        # Only count as violation if nails are visible AND non-compliant (score < 1)
+        has_visibility_issue = any(any(phrase in issue.lower() for phrase in ["not visible", "cannot be assessed", "could not be assessed", "were not visible"]) for issue in nails_issues)
+        if not has_visibility_issue and cats.get("nails", 0) < 1:
+            nails_violation = True
+    
     return {
         "person": {"name": name or "", "iga_code": iga or ""},
         "assessment": assessment,
@@ -302,6 +311,7 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
         "details": details,
         "issues": issues,
         "recommendations": _lines_to_list(block_r) if ok_r else [],
+        "nails_violation": nails_violation,  # NEW: Structured nails violation flag
         "_metadata": {"not_visible": not_visible_flags},
     }
 
