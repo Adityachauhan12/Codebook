@@ -282,14 +282,14 @@ def _parse_text_to_ui(text: str, name: Optional[str], iga: Optional[str]) -> Dic
         if score > 10:
             score = 10
 
-    # Determine compliance based on score
+    # Determine compliance based on score (7+ is COMPLIANT)
     if score is not None:
         assessment = "COMPLIANT" if score >= 7 else "NON-COMPLIANT"
     elif assessment is None:
         assessment = "NON-COMPLIANT"
 
-    # Extract issues
-    issues = _extract_issues_from_text(text)
+    # Extract issues and remove only asterisks, keep category labels
+    issues = [issue.replace('**', '') for issue in _extract_issues_from_text(text)]
 
     # Extract recommendations
     ok_r, block_r = _extract(_rx["reco_block"], text)
