@@ -716,17 +716,11 @@ def get_individual_analysis_data(iga_code: str, crew_name: Optional[str], date_f
     
     for record in non_compliant_records:
         for issue in record.get("issues", []):
-            category = _issue_heading(issue)
-            
-            # Skip nails category if it's a "not visible" issue
-            if category == "nails":
-                print(f"DEBUG: Nails issue found: '{issue}'")
-                if any(phrase in issue.lower() for phrase in ["not visible", "cannot be assessed", "could not be assessed", "not visible for assessment"]):
-                    print(f"DEBUG: Skipping nails visibility issue: '{issue}'")
-                    continue
-                else:
-                    print(f"DEBUG: Counting nails violation: '{issue}'")
+            # Skip any visibility issues that mention nails
+            if "nail" in issue.lower() and any(phrase in issue.lower() for phrase in ["not visible", "cannot be assessed", "could not be assessed", "not visible for assessment", "were not visible"]):
+                continue
                 
+            category = _issue_heading(issue)
             if category and category != "other":
                 category_violations[category] += 1
     
