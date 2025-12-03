@@ -132,6 +132,7 @@ def upload_grooming_result_text(
         "issues": parsed.get("issues") if parsed else [],
         "recommendations": parsed.get("recommendations") if parsed else [],
         "details": parsed.get("details") if parsed else {},
+        "nails_violation": parsed.get("nails_violation", False) if parsed else False,
     }
     
     print(f"💾 Saving to GCS with base: {base}, terminal: {terminal}")
