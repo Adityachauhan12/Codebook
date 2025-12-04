@@ -92,6 +92,7 @@ class GroomingClient:
                 payload["terminal"] = terminal
             if department:
                 payload["department"] = department
+
                 
             async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
                 response = await client.post(f"{self.base_url}/check-grooming", json=payload)
