@@ -85,8 +85,7 @@ async def assess_grooming_photo(
             raise HTTPException(status_code=400, detail="Only image files are allowed")
         
         file_data = await file.read()
-        # Convert to base64 as expected by the backend
-        image_base64 = base64.b64encode(file_data).decode('utf-8')
+        image_base64 = f"data:{file.content_type};base64,{base64.b64encode(file_data).decode('utf-8')}"
         
         client = GroomingClient()
         result = await client.check_grooming_photo(image_base64, crewName, igaCode, base, terminal, department)
