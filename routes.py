@@ -72,7 +72,7 @@ async def assess_grooming_video(
 
 @router.post("/assessment/photo")
 async def assess_grooming_photo(
-    file: UploadFile = File(...),
+    imageBase64: str = Form(...),
     crewName: Optional[str] = Form(None),
     igaCode: Optional[str] = Form(None),
     base: Optional[str] = Form(None),
@@ -81,14 +81,8 @@ async def assess_grooming_photo(
 ):
     """Assess grooming from photo"""
     try:
-        if not file.content_type or not file.content_type.startswith("image/"):
-            raise HTTPException(status_code=400, detail="Only image files are allowed")
-        
-        file_data = await file.read()
-        image_base64 = f"data:{file.content_type};base64,{base64.b64encode(file_data).decode('utf-8')}"
-        
         client = GroomingClient()
-        result = await client.check_grooming_photo(image_base64, crewName, igaCode, base, terminal, department)
+        result = await client.check_grooming_photo(imageBase64, crewName, igaCode, base, terminal, department)
         return result
     except Exception as e:
         logger.error(f"Error assessing photo: {e}")
