@@ -1,660 +1,191 @@
-from datetime import datetime
-from typing import Dict, Any, List, Optional
-import uuid
-import json
-from google.cloud import bigquery
-import os
-from logger_config import get_logger
-from tools import mcp_tool_call
-from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Query
-
-app = FastAPI()
-
-# Pydantic Models
-class LeaveRequest(BaseModel):
-    iga_code: str
-    employee_name: str
-    base: str
-    start_date: str
-    end_date: str
-    comment: str
-    applied_by: Optional[str] = None
-    applied_by_name: Optional[str] = None
-
-class AdminAction(BaseModel):
-    status: int  # 1 for approved, 0 for rejected
-    comment: Optional[str] = None
-    approved_by: Optional[str] = None
-    rejected_by: Optional[str] = None
-    status_updated_by: Optional[Dict[str, str]] = None  # {"name": "Admin Name", "iga_code": "123"}
-
-logger = get_logger("urti_leaves")
- 
-client = bigquery.Client(project=os.getenv("GCP_PROJECT_ID"))
- 
-def table_ref() -> str:
-
-    ref = f"{os.getenv('GCP_PROJECT_ID')}.{os.getenv('BQ_DATASET')}.{os.getenv('BQ_TABLE')}"
-
-    return ref
- 
-def query_rows(sql: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-
-    try:
-
-        job_config = bigquery.QueryJobConfig()
-
-        if params:
-
-            job_config.query_parameters = [
-
-                bigquery.ScalarQueryParameter(name, "STRING", str(value))
-
-                for name, value in params.items() if value is not None
-
-            ]
-
-        query_job = client.query(sql, job_config=job_config, location=os.getenv("BQ_LOCATION"))
-
-        results = [dict(row) for row in query_job.result()]
-
-        logger.info(f"Query returned {len(results)} rows")
-
-        return results
-
-    except Exception as e:
-
-        logger.error(f"Error executing query: {e}")
-
-        raise
- 
-def upsert_leave_record(record: Dict[str, Any]) -> str:
-
-    try:
-
-        if 'id' not in record:
-
-            record['id'] = str(uuid.uuid4())
-
-        now = datetime.utcnow()
-
-        if 'created_at' not in record:
-
-            record['created_at'] = now
-
-        record['updated_at'] = now
- 
-        logger.info(f"Upserting leave record with ID: {record['id']}")
- 
-        # ✅ UPDATED MERGE SQL - Added status_updated_by
-
-        merge_sql = f"""
-
-        MERGE `{table_ref()}` AS target
-
-        USING (
-
-            SELECT
-
-                @id as id,
-
-                @iga_code as iga_code,
-
-                @employee_name as employee_name,
-
-                @base as base,
-
-                @start_date as start_date,
-
-                @end_date as end_date,
-
-                @duration_days as duration_days,
-
-                @comment as comment,
-
-                @status as status,
-
-                @created_by as created_by,
-
-                @status_updated_by as status_updated_by,
-
-                @created_at as created_at,
-
-                @updated_at as updated_at
-
-        ) AS source
-
-        ON target.id = source.id
-
-        WHEN MATCHED THEN
-
-            UPDATE SET
-
-                status = source.status,
-
-                created_by = COALESCE(target.created_by, source.created_by),
-
-                status_updated_by = source.status_updated_by,
-
-                comment = COALESCE(source.comment, target.comment),
-
-                updated_at = source.updated_at
-
-        WHEN NOT MATCHED THEN
-
-            INSERT (id, iga_code, employee_name, base, start_date, end_date,
-
-                    duration_days, comment, status, created_by, status_updated_by, created_at, updated_at)
-
-            VALUES (source.id, source.iga_code, source.employee_name, source.base,
-
-                    source.start_date, source.end_date, source.duration_days,
-
-                    source.comment, source.status, source.created_by, source.status_updated_by, source.created_at, source.updated_at)
-
-        """
- 
-        # ✅ UPDATED Query Parameters - Added status_updated_by
-
-        job_config = bigquery.QueryJobConfig(
-
-            query_parameters=[
-
-                bigquery.ScalarQueryParameter("id", "STRING", record["id"]),
-
-                bigquery.ScalarQueryParameter("iga_code", "STRING", record["iga_code"]),
-
-                bigquery.ScalarQueryParameter("employee_name", "STRING", record["employee_name"]),
-
-                bigquery.ScalarQueryParameter("base", "STRING", record["base"]),
-
-                bigquery.ScalarQueryParameter("start_date", "DATE", record["start_date"]),
-
-                bigquery.ScalarQueryParameter("end_date", "DATE", record["end_date"]),
-
-                bigquery.ScalarQueryParameter("duration_days", "INT64", record["duration_days"]),
-
-                bigquery.ScalarQueryParameter("comment", "STRING", record.get("comment")),
-
-                bigquery.ScalarQueryParameter("status", "STRING", record["status"]),
-
-                bigquery.ScalarQueryParameter("created_by", "STRING", json.dumps(record.get("created_by")) if record.get("created_by") else None),  # ✅ NEW
-
-                bigquery.ScalarQueryParameter("status_updated_by", "STRING", json.dumps(record.get("status_updated_by")) if record.get("status_updated_by") else None),  # ✅ NEW
-
-                bigquery.ScalarQueryParameter("created_at", "TIMESTAMP", record["created_at"]),
-
-                bigquery.ScalarQueryParameter("updated_at", "TIMESTAMP", record["updated_at"])
-
-            ]
-
-        )
- 
-        query_job = client.query(merge_sql, job_config=job_config, location=os.getenv("BQ_LOCATION"))
-
-        query_job.result()
-
-        logger.info(f"Leave record upserted successfully with ID: {record['id']}")
-
-        return record["id"]
-
-    except Exception as e:
-
-        logger.error(f"Error upserting leave record: {e}")
-
-        raise
- 
-async def fetch_crew_info(client=None, iga=None, base=None, position=None):
-
-    try:
-
-        if iga:
-
-            logger.info(f"Fetching crew info by IGA: {iga}")
-
-            data = await mcp_tool_call(client,"crew_info_by_iga", {"iga_code": iga})
-
-            logger.info(f"Received {len(data) if data else 0} records for IGA {iga}")
-
-            return data
- 
-        if base and position:
-
-            logger.info(f"Fetching crew info by Base: {base}, Position: {position}")
-
-            data = await mcp_tool_call(client,"crew_info_by_base_or_pos", {"base": base, "position": position})
-
-            logger.info(f"Received {len(data) if data else 0} records for Base {base}, Position {position}")
-
-            return data
- 
-        logger.warning("Invalid parameters: missing IGA or Base/Position")
-
-        raise
- 
-    except Exception as e:
-
-        logger.error(f"Error fetching crew info: {e}")
-
-        raise
- 
-
-
-
-
-
 @app.post("/api/createLeave")
-
 def create_leave(request: LeaveRequest):
-
     start_date_obj = datetime.strptime(request.start_date, "%Y-%m-%d")
-
     end_date_obj = datetime.strptime(request.end_date, "%Y-%m-%d")
-
     duration_days = (end_date_obj - start_date_obj).days + 1
 
-    # ✅ UPDATED - Added created_by field
-
     record = {
-
         "iga_code": request.iga_code,
-
         "employee_name": request.employee_name,
-
         "base": request.base,
-
         "start_date": request.start_date,
-
         "end_date": request.end_date,
-
         "duration_days": duration_days,
-
         "comment": request.comment,
-
         "status": "pending",
-
-        "created_by": {"name": request.applied_by_name or "Unknown", "iga_code": request.applied_by or "ADMIN"},  # ✅ FIXED - Person who created the leave
-
-        "status_updated_by": None  # ✅ NEW - Will store {"name": "Admin Name", "iga_code": "6781"} when status changes
-
+        "created_by": {"name": request.applied_by_name or "Unknown", "iga_code": request.applied_by or "ADMIN"},
+        "status_updated_by": None
     }
 
-    print(record)
-
+    logger.info(f"Creating leave request for {request.iga_code} from {request.start_date} to {request.end_date}")
     try:
-
-        logger.info(f"Creating leave request for {request.iga_code} from {request.start_date} to {request.end_date}")
-
         leave_id = upsert_leave_record(record)
-
         logger.info(f"Leave request created successfully with ID {leave_id}")
-
         return {
-
             "message": "Leave request created successfully",
-
             "id": leave_id,
-
             "status": "pending",
-
-            "created_by": {"name": request.applied_by_name or "Unknown", "iga_code": request.applied_by or "ADMIN"},  # ✅ FIXED
-
-            "status_updated_by": None  # ✅ NEW
-
+            "created_by": record["created_by"],
+            "status_updated_by": None
         }
-
     except Exception as e:
-
         logger.error(f"Error creating leave request: {e}")
-
         raise HTTPException(status_code=500, detail=str(e))
- 
- 
+
 @app.get("/api/listLeaves")
-
 def list_leaves(
-
     base: Optional[str] = Query(None),
-
     status: Optional[str] = Query(None),
-
     iga_code: Optional[str] = Query(None),
-
     date: Optional[str] = Query(None)
-
 ):
-
     sql = f"SELECT * FROM `{table_ref()}` WHERE 1=1"
-
     params = {}
-
     if base:
-
         sql += " AND base = @base"
-
         params["base"] = base
-
     if status:
-
         sql += " AND status = @status"
-
         params["status"] = status
-
     if iga_code:
-
         sql += " AND iga_code = @iga_code"
-
         params["iga_code"] = iga_code
-
     if date:
-
         sql += " AND DATE(created_at) = @date"
-
         params["date"] = date
-
     sql += " ORDER BY created_at DESC"
 
+    logger.info(f"Listing leaves with filters: {params}")
     try:
-
-        logger.info(f"Listing leaves with filters: {params}")
-
         leaves = query_rows(sql, params)
-
         logger.info(f"Found {len(leaves)} leave records")
-
-        # ✅ Parse JSON strings back to objects
-        for leave in leaves:
-            if leave.get('created_by') and isinstance(leave['created_by'], str):
-                try:
-                    leave['created_by'] = json.loads(leave['created_by'])
-                except:
-                    leave['created_by'] = None
-            if leave.get('status_updated_by') and isinstance(leave['status_updated_by'], str):
-                try:
-                    leave['status_updated_by'] = json.loads(leave['status_updated_by'])
-                except:
-                    leave['status_updated_by'] = None
-
-        return leaves
-
+        return decode_json_fields(leaves)
     except Exception as e:
-
         logger.error(f"Error listing leaves: {e}")
-
         raise HTTPException(status_code=500, detail=str(e))
- 
- 
+
 @app.get("/api/list_leaves_analytics")
-
 def list_leaves_analytics(
-
     base: Optional[str] = Query(None),
-
     status: Optional[str] = Query(None),
-
     iga_code: Optional[str] = Query(None),
-
     start_date: Optional[str] = Query(None),
-
     end_date: Optional[str] = Query(None),
-
     duration_days: Optional[int] = Query(None),
-
     employee_name: Optional[str] = Query(None)
-
 ):
-
     sql = f"SELECT * FROM `{table_ref()}` WHERE 1=1"
-
     params = {}
-
     if base:
-
         sql += " AND base = @base"
-
         params["base"] = base
-
     if status:
-
         sql += " AND status = @status"
-
         params["status"] = status
-
     if iga_code:
-
         sql += " AND iga_code = @iga_code"
-
         params["iga_code"] = iga_code
-
     if start_date:
-
         sql += " AND start_date >= @start_date"
-
         params["start_date"] = start_date
-
     if end_date:
-
         sql += " AND end_date <= @end_date"
-
         params["end_date"] = end_date
-
     if duration_days is not None:
-
         sql += " AND duration_days = @duration_days"
-
         params["duration_days"] = duration_days
-
     if employee_name:
-
         sql += " AND employee_name = @employee_name"
-
         params["employee_name"] = employee_name
-
     sql += " ORDER BY created_at DESC"
 
+    logger.info(f"Listing leaves analytics with filters: {params}")
     try:
-
-        logger.info(f"Listing leaves analytics with filters: {params}")
-
         leaves = query_rows(sql, params)
-
         logger.info(f"Found {len(leaves)} leave records (analytics)")
-
-        # ✅ Parse JSON strings back to objects
-        for leave in leaves:
-            if leave.get('created_by') and isinstance(leave['created_by'], str):
-                try:
-                    leave['created_by'] = json.loads(leave['created_by'])
-                except:
-                    leave['created_by'] = None
-            if leave.get('status_updated_by') and isinstance(leave['status_updated_by'], str):
-                try:
-                    leave['status_updated_by'] = json.loads(leave['status_updated_by'])
-                except:
-                    leave['status_updated_by'] = None
-
-        return leaves
-
+        return decode_json_fields(leaves)
     except Exception as e:
-
         logger.error(f"Error listing leaves analytics: {e}")
-
         raise HTTPException(status_code=500, detail=str(e))
- 
- 
-# ✅ UPDATED ENDPOINT - Now accepts created_by, approved_by, rejected_by
 
 @app.patch("/api/ApproveRejectLeave/{leave_id}")
-
 def approve_or_reject_leave(leave_id: str, action: AdminAction):
-
     try:
-
-        status = ""
-
-        if action.status == 1:
-
-            status = "approved"
-
-        elif action.status == 0:
-
-            status = "rejected"
-
-        else:
-
+        status = {1: "approved", 0: "rejected"}.get(action.status)
+        if status is None:
             logger.error(f"Error updating leave {leave_id}: invalid status value")
-
             raise HTTPException(status_code=400, detail="invalid status value")
 
         logger.info(f"Processing leave {leave_id} with action {status}")
-
         sql = f"SELECT * FROM `{table_ref()}` WHERE id = @id"
-
         existing_records = query_rows(sql, {"id": leave_id})
-
         if not existing_records:
-
             logger.error(f"Leave record {leave_id} not found")
-
             raise HTTPException(status_code=404, detail="Leave record not found")
-
         existing_record = existing_records[0]
 
-        # ✅ UPDATED - Now handles approved_by/rejected_by based on status
-
         updated_record = {
-
             "id": leave_id,
-
             "iga_code": existing_record["iga_code"],
-
             "employee_name": existing_record["employee_name"],
-
             "base": existing_record["base"],
-
             "start_date": existing_record["start_date"],
-
             "end_date": existing_record["end_date"],
-
             "duration_days": existing_record["duration_days"],
-
             "comment": action.comment or existing_record.get("comment"),
-
             "status": status,
-
-            "created_by": existing_record.get("created_by"),  # ✅ Preserve creator
-
-            "status_updated_by": action.status_updated_by,  # ✅ NEW - {"name": "Test Admin", "iga_code": "6781"}
+            "created_by": existing_record.get("created_by"),
+            # "status_updated_by": action.status_updated_by,
+            "status_updated_by": action.status_updated_by.model_dump() if action.status_updated_by else None,  # ✅ NEW - Convert Pydantic to dict
 
             "created_at": existing_record["created_at"]
-
         }
 
         upsert_leave_record(updated_record)
-
         logger.info(f"Leave {leave_id} updated successfully to {status}")
-
         return {
-
             "message": f"Leave {status} successfully",
-
             "id": leave_id,
-
             "status": status,
-
-            "status_updated_by": updated_record.get("status_updated_by")  # ✅ NEW
-
+            "status_updated_by": updated_record.get("status_updated_by")
         }
-
     except Exception as e:
-
         logger.error(f"Error updating leave {leave_id}: {e}")
-
         raise HTTPException(status_code=500, detail=str(e))
- 
- 
+
 @app.get("/api/getEmployeeLeaves/{iga_code}")
-
 def get_employee_leaves(iga_code: str):
-
+    logger.info(f"Fetching leaves for employee {iga_code}")
+    sql = f"SELECT * FROM `{table_ref()}` WHERE iga_code = @iga_code ORDER BY created_at DESC"
     try:
-
-        logger.info(f"Fetching leaves for employee {iga_code}")
-
-        sql = f"SELECT * FROM `{table_ref()}` WHERE iga_code = @iga_code ORDER BY created_at DESC"
-
         leaves = query_rows(sql, {"iga_code": iga_code})
-
         logger.info(f"Found {len(leaves)} leaves for employee {iga_code}")
-
-        # ✅ Parse JSON strings back to objects
-        for leave in leaves:
-            if leave.get('created_by') and isinstance(leave['created_by'], str):
-                try:
-                    leave['created_by'] = json.loads(leave['created_by'])
-                except:
-                    leave['created_by'] = None
-            if leave.get('status_updated_by') and isinstance(leave['status_updated_by'], str):
-                try:
-                    leave['status_updated_by'] = json.loads(leave['status_updated_by'])
-                except:
-                    leave['status_updated_by'] = None
-
-        return leaves
-
+        return decode_json_fields(leaves)
     except Exception as e:
-
         logger.error(f"Error fetching leaves for employee {iga_code}: {e}")
-
         raise HTTPException(status_code=500, detail=str(e))
- 
- 
+
 @app.get("/api/leaveSummary")
-
 def leave_summary():
-
     sql = f"""
-
     SELECT
-
         COUNT(*) AS total_leaves,
-
         SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_leaves,
-
         SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) AS approved_leaves,
-
         SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS rejected_leaves
-
     FROM `{table_ref()}`
-
     """
-
+    logger.info("Fetching leave summary")
     try:
-
-        logger.info("Fetching leave summary")
-
         result = query_rows(sql)
-
         summary = result[0] if result else {
-
             "total_leaves": 0,
-
             "pending_leaves": 0,
-
             "approved_leaves": 0,
-
             "rejected_leaves": 0
-
         }
-
         logger.info(f"Leave summary: {summary}")
-
         return summary
-
     except Exception as e:
-
         logger.error(f"Error fetching leave summary: {e}")
-
         raise HTTPException(status_code=500, detail=str(e))
- 
