@@ -17,10 +17,14 @@ def query_rows(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[s
     try:
         job_config = bigquery.QueryJobConfig()
         if params:
-            job_config.query_parameters = [
-                bigquery.ScalarQueryParameter(name, "STRING", str(value))
-                for name, value in params.items() if value is not None
-            ]
+            query_parameters = []
+            for name, value in params.items():
+                if value is not None:
+                    if name in ['page_size', 'offset']:
+                        query_parameters.append(bigquery.ScalarQueryParameter(name, "INT64", int(value)))
+                    else:
+                        query_parameters.append(bigquery.ScalarQueryParameter(name, "STRING", str(value)))
+            job_config.query_parameters = query_parameters
         query_job = client.query(sql, job_config=job_config, location=os.getenv("BQ_LOCATION"))
         results = [dict(row) for row in query_job.result()]
         logger.info(f"Query returned {len(results)} rows")
@@ -61,12 +65,12 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
         SELECT * FROM `{table_ref()}`
         {where_clause}
         ORDER BY created_at DESC
-        LIMIT @page_size OFFSET @offset
+        LIMIT {page_size} OFFSET {offset}
         """
         
         params.update({
-            'page_size': str(page_size),
-            'offset': str(offset)
+            'page_size': page_size,
+            'offset': offset
         })
         
         records = query_rows(data_sql, params)
@@ -133,7 +137,13 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
                 record['id']
             )
             if overlapping:
-                overlap_details = [f"ID: {leave['id']}, Dates: {leave['start_date']} to {leave['end_date']}" for leave in overlapping]
+                def format_date(date_str):
+                    try:
+                        return datetime.strptime(str(date_str), "%Y-%m-%d").strftime("%d-%m-%Y")
+                    except:
+                        return str(date_str)
+                
+                overlap_details = [f"ID: {leave['id']}, Dates: {format_date(leave['start_date'])} to {format_date(leave['end_date'])}" for leave in overlapping]
                 raise ValueError(f"Leave dates overlap with existing records for IGA {record['iga_code']}: {'; '.join(overlap_details)}")
 
         logger.info(f"Upserting leave record with ID: {record['id']}")
