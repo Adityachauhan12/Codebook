@@ -28,82 +28,46 @@ def create_leave(request: LeaveRequest):
             "created_by": record["created_by"],
             "status_updated_by": None
         }
+    except ValueError as e:
+        logger.error(f"Validation error creating leave request: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating leave request: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/listLeaves")
 def list_leaves(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     base: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    iga_code: Optional[str] = Query(None),
-    date: Optional[str] = Query(None)
+    iga_code: Optional[str] = Query(None)
 ):
-    sql = f"SELECT * FROM `{table_ref()}` WHERE 1=1"
-    params = {}
-    if base:
-        sql += " AND base = @base"
-        params["base"] = base
-    if status:
-        sql += " AND status = @status"
-        params["status"] = status
-    if iga_code:
-        sql += " AND iga_code = @iga_code"
-        params["iga_code"] = iga_code
-    if date:
-        sql += " AND DATE(created_at) = @date"
-        params["date"] = date
-    sql += " ORDER BY created_at DESC"
-
-    logger.info(f"Listing leaves with filters: {params}")
+    filters = {k: v for k, v in {"base": base, "status": status, "iga_code": iga_code}.items() if v}
+    logger.info(f"Listing leaves with filters: {filters}, page: {page}, page_size: {page_size}")
     try:
-        leaves = query_rows(sql, params)
-        logger.info(f"Found {len(leaves)} leave records")
-        return decode_json_fields(leaves)
+        result = query_paginated_leaves(page, page_size, filters)
+        logger.info(f"Found {result['pagination']['total_records']} total leave records")
+        return result
     except Exception as e:
         logger.error(f"Error listing leaves: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/list_leaves_analytics")
 def list_leaves_analytics(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     base: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     iga_code: Optional[str] = Query(None),
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
-    duration_days: Optional[int] = Query(None),
     employee_name: Optional[str] = Query(None)
 ):
-    sql = f"SELECT * FROM `{table_ref()}` WHERE 1=1"
-    params = {}
-    if base:
-        sql += " AND base = @base"
-        params["base"] = base
-    if status:
-        sql += " AND status = @status"
-        params["status"] = status
-    if iga_code:
-        sql += " AND iga_code = @iga_code"
-        params["iga_code"] = iga_code
-    if start_date:
-        sql += " AND start_date >= @start_date"
-        params["start_date"] = start_date
-    if end_date:
-        sql += " AND end_date <= @end_date"
-        params["end_date"] = end_date
-    if duration_days is not None:
-        sql += " AND duration_days = @duration_days"
-        params["duration_days"] = duration_days
-    if employee_name:
-        sql += " AND employee_name = @employee_name"
-        params["employee_name"] = employee_name
-    sql += " ORDER BY created_at DESC"
-
-    logger.info(f"Listing leaves analytics with filters: {params}")
+    filters = {k: v for k, v in {"base": base, "status": status, "iga_code": iga_code}.items() if v}
+    logger.info(f"Listing leaves analytics with filters: {filters}, page: {page}, page_size: {page_size}")
     try:
-        leaves = query_rows(sql, params)
-        logger.info(f"Found {len(leaves)} leave records (analytics)")
-        return decode_json_fields(leaves)
+        result = query_paginated_leaves(page, page_size, filters)
+        logger.info(f"Found {result['pagination']['total_records']} total leave records (analytics)")
+        return result
     except Exception as e:
         logger.error(f"Error listing leaves analytics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -154,13 +118,16 @@ def approve_or_reject_leave(leave_id: str, action: AdminAction):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/getEmployeeLeaves/{iga_code}")
-def get_employee_leaves(iga_code: str):
-    logger.info(f"Fetching leaves for employee {iga_code}")
-    sql = f"SELECT * FROM `{table_ref()}` WHERE iga_code = @iga_code ORDER BY created_at DESC"
+def get_employee_leaves(
+    iga_code: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100)
+):
+    logger.info(f"Fetching leaves for employee {iga_code}, page: {page}, page_size: {page_size}")
     try:
-        leaves = query_rows(sql, {"iga_code": iga_code})
-        logger.info(f"Found {len(leaves)} leaves for employee {iga_code}")
-        return decode_json_fields(leaves)
+        result = query_paginated_leaves(page, page_size, {"iga_code": iga_code})
+        logger.info(f"Found {result['pagination']['total_records']} total leaves for employee {iga_code}")
+        return result
     except Exception as e:
         logger.error(f"Error fetching leaves for employee {iga_code}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
