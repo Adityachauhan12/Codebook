@@ -1,20 +1,19 @@
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import uuid
-from google.cloud import bigquery
 import os
+import json
+from google.cloud import bigquery
 from logger_config import get_logger
 from tools import mcp_tool_call
 
 logger = get_logger("urti_leaves")
-
 client = bigquery.Client(project=os.getenv("GCP_PROJECT_ID"))
 
 def table_ref() -> str:
-    ref = f"{os.getenv('GCP_PROJECT_ID')}.{os.getenv('BQ_DATASET')}.{os.getenv('BQ_TABLE')}"
-    return ref
+    return f"{os.getenv('GCP_PROJECT_ID')}.{os.getenv('BQ_DATASET')}.{os.getenv('BQ_TABLE')}"
 
-def query_rows(sql: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+def query_rows(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     try:
         job_config = bigquery.QueryJobConfig()
         if params:
@@ -32,11 +31,9 @@ def query_rows(sql: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
 
 def upsert_leave_record(record: Dict[str, Any]) -> str:
     try:
-        if 'id' not in record:
-            record['id'] = str(uuid.uuid4())
+        record.setdefault('id', str(uuid.uuid4()))
         now = datetime.utcnow()
-        if 'created_at' not in record:
-            record['created_at'] = now
+        record.setdefault('created_at', now)
         record['updated_at'] = now
 
         logger.info(f"Upserting leave record with ID: {record['id']}")
@@ -44,7 +41,7 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
         merge_sql = f"""
         MERGE `{table_ref()}` AS target
         USING (
-            SELECT 
+            SELECT
                 @id as id,
                 @iga_code as iga_code,
                 @employee_name as employee_name,
@@ -55,13 +52,7 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
                 @comment as comment,
                 @status as status,
                 @created_by as created_by,
-                @created_by_iga as created_by_iga,
-                @approved_by as approved_by,
-                @approved_by_iga as approved_by_iga,
-                @approved_by_date as approved_by_date,
-                @rejected_by as rejected_by,
-                @rejected_by_iga as rejected_by_iga,
-                @rejected_by_date as rejected_by_date,
+                @status_updated_by as status_updated_by,
                 @created_at as created_at,
                 @updated_at as updated_at
         ) AS source
@@ -69,32 +60,16 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
         WHEN MATCHED THEN
             UPDATE SET
                 status = source.status,
+                created_by = COALESCE(target.created_by, source.created_by),
+                status_updated_by = source.status_updated_by,
                 comment = COALESCE(source.comment, target.comment),
-                approved_by = COALESCE(source.approved_by, target.approved_by),
-                approved_by_iga = COALESCE(source.approved_by_iga, target.approved_by_iga),
-                approved_by_date = COALESCE(source.approved_by_date, target.approved_by_date),
-                rejected_by = COALESCE(source.rejected_by, target.rejected_by),
-                rejected_by_iga = COALESCE(source.rejected_by_iga, target.rejected_by_iga),
-                rejected_by_date = COALESCE(source.rejected_by_date, target.rejected_by_date),
                 updated_at = source.updated_at
         WHEN NOT MATCHED THEN
-            INSERT (
-                id, iga_code, employee_name, base, start_date, end_date, 
-                duration_days, comment, status, 
-                created_by, created_by_iga,
-                approved_by, approved_by_iga, approved_by_date,
-                rejected_by, rejected_by_iga, rejected_by_date,
-                created_at, updated_at
-            )
-            VALUES (
-                source.id, source.iga_code, source.employee_name, source.base,
-                source.start_date, source.end_date, source.duration_days,
-                source.comment, source.status,
-                source.created_by, source.created_by_iga,
-                source.approved_by, source.approved_by_iga, source.approved_by_date,
-                source.rejected_by, source.rejected_by_iga, source.rejected_by_date,
-                source.created_at, source.updated_at
-            )
+            INSERT (id, iga_code, employee_name, base, start_date, end_date,
+                    duration_days, comment, status, created_by, status_updated_by, created_at, updated_at)
+            VALUES (source.id, source.iga_code, source.employee_name, source.base,
+                    source.start_date, source.end_date, source.duration_days,
+                    source.comment, source.status, source.created_by, source.status_updated_by, source.created_at, source.updated_at)
         """
 
         job_config = bigquery.QueryJobConfig(
@@ -108,16 +83,8 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
                 bigquery.ScalarQueryParameter("duration_days", "INT64", record["duration_days"]),
                 bigquery.ScalarQueryParameter("comment", "STRING", record.get("comment")),
                 bigquery.ScalarQueryParameter("status", "STRING", record["status"]),
-                # New audit fields
-                bigquery.ScalarQueryParameter("created_by", "STRING", record.get("created_by")),
-                bigquery.ScalarQueryParameter("created_by_iga", "STRING", record.get("created_by_iga")),
-                bigquery.ScalarQueryParameter("approved_by", "STRING", record.get("approved_by")),
-                bigquery.ScalarQueryParameter("approved_by_iga", "STRING", record.get("approved_by_iga")),
-                bigquery.ScalarQueryParameter("approved_by_date", "TIMESTAMP", record.get("approved_by_date")),
-                bigquery.ScalarQueryParameter("rejected_by", "STRING", record.get("rejected_by")),
-                bigquery.ScalarQueryParameter("rejected_by_iga", "STRING", record.get("rejected_by_iga")),
-                bigquery.ScalarQueryParameter("rejected_by_date", "TIMESTAMP", record.get("rejected_by_date")),
-                # Timestamps
+                bigquery.ScalarQueryParameter("created_by", "STRING", json.dumps(record.get("created_by")) if record.get("created_by") else None),
+                bigquery.ScalarQueryParameter("status_updated_by", "STRING", json.dumps(record.get("status_updated_by")) if record.get("status_updated_by") else None),
                 bigquery.ScalarQueryParameter("created_at", "TIMESTAMP", record["created_at"]),
                 bigquery.ScalarQueryParameter("updated_at", "TIMESTAMP", record["updated_at"])
             ]
@@ -138,16 +105,22 @@ async def fetch_crew_info(client=None, iga=None, base=None, position=None):
             data = await mcp_tool_call(client, "crew_info_by_iga", {"iga_code": iga})
             logger.info(f"Received {len(data) if data else 0} records for IGA {iga}")
             return data
-
         if base and position:
             logger.info(f"Fetching crew info by Base: {base}, Position: {position}")
             data = await mcp_tool_call(client, "crew_info_by_base_or_pos", {"base": base, "position": position})
             logger.info(f"Received {len(data) if data else 0} records for Base {base}, Position {position}")
             return data
-
         logger.warning("Invalid parameters: missing IGA or Base/Position")
-        raise ValueError("Must provide either IGA or both Base and Position")
-
+        raise ValueError("Missing IGA or Base/Position")
     except Exception as e:
         logger.error(f"Error fetching crew info: {e}")
         raise
+def decode_json_fields(leaves: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for leave in leaves:
+        for field in ['created_by', 'status_updated_by']:
+            if leave.get(field) and isinstance(leave[field], str):
+                try:
+                    leave[field] = json.loads(leave[field])
+                except Exception:
+                    leave[field] = None
+    return leaves
