@@ -38,5 +38,83 @@ curl -X POST "http://127.0.0.1:8003/api/createLeave" \
     "applied_by_name": "Admin User"
   }'
 
+curl -X 'POST' \
+  'http://127.0.0.1:8002/api/createLeave' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "iga_code": "IGA1111",
+  "employee_name": "John Doe",
+  "base": "DEL",
+  "start_date": "2025-12-02",
+  "end_date": "2025-12-03",
+  "comment": "ok",
+  "applied_by": "Ankit Yadav",
+  "applied_by_name": "IGA0001"
+}'
+Request URL
+http://127.0.0.1:8002/api/createLeave
+Server response
+Code	Details
+400
+Undocumented
+Error: Bad Request
+
+Response body
+Download
+{
+  "detail": "Leave dates overlap with existing records for IGA IGA1111: ID: f2c8c007-36e9-437c-9083-5bccc27398e2, Dates: 2025-12-01 to 2025-12-04"
+}
+but getting error in pagination api GET
+/api/listLeaves
+List Leaves
+
+Parameters
+Cancel
+Name	Description
+page
+integer
+(query)
+1
+minimum: 1
+page_size
+integer
+(query)
+20
+maximum: 100
+minimum: 1
+base
+string | (string | null)
+(query)
+DEL
+status
+string | (string | null)
+(query)
+status
+iga_code
+string | (string | null)
+(query)
+IGA1111
+Execute
+Clear
+Responses
+Curl
+
+curl -X 'GET' \
+  'http://127.0.0.1:8002/api/listLeaves?page=1&page_size=20&base=DEL&iga_code=IGA1111' \
+  -H 'accept: application/json'
+Request URL
+http://127.0.0.1:8002/api/listLeaves?page=1&page_size=20&base=DEL&iga_code=IGA1111
+Server response
+Code	Details
+500
+Undocumented
+Error: Internal Server Error
+
+Response body
+Download
+{
+  "detail": "400 LIMIT expects an integer literal or parameter at [5:15]; reason: invalidQuery, location: query, message: LIMIT expects an integer literal or parameter at [5:15]\n\nLocation: asia-south1\nJob ID: 11764bde-8dbf-4668-9507-37b3f5423d45\n"
+}    also have to make the 400 msg dates in dd-mm-yyyy format 
 
 
