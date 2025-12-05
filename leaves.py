@@ -29,6 +29,64 @@ def query_rows(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[s
         logger.error(f"Error executing query: {e}")
         raise
 
+def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Query leaves with pagination support"""
+    try:
+        offset = (page - 1) * page_size
+        
+        # Build WHERE clause from filters
+        where_conditions = []
+        params = {}
+        
+        if filters:
+            if filters.get('iga_code'):
+                where_conditions.append('iga_code = @iga_code')
+                params['iga_code'] = filters['iga_code']
+            if filters.get('status'):
+                where_conditions.append('status = @status')
+                params['status'] = filters['status']
+            if filters.get('base'):
+                where_conditions.append('base = @base')
+                params['base'] = filters['base']
+        
+        where_clause = 'WHERE ' + ' AND '.join(where_conditions) if where_conditions else ''
+        
+        # Count total records
+        count_sql = f"SELECT COUNT(*) as total FROM `{table_ref()}` {where_clause}"
+        count_result = query_rows(count_sql, params)
+        total_records = count_result[0]['total'] if count_result else 0
+        
+        # Get paginated data
+        data_sql = f"""
+        SELECT * FROM `{table_ref()}`
+        {where_clause}
+        ORDER BY created_at DESC
+        LIMIT @page_size OFFSET @offset
+        """
+        
+        params.update({
+            'page_size': str(page_size),
+            'offset': str(offset)
+        })
+        
+        records = query_rows(data_sql, params)
+        decoded_records = decode_json_fields(records)
+        
+        return {
+            'data': decoded_records,
+            'pagination': {
+                'page': page,
+                'page_size': page_size,
+                'total_records': total_records,
+                'total_pages': (total_records + page_size - 1) // page_size,
+                'has_next': page * page_size < total_records,
+                'has_prev': page > 1
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error in paginated query: {e}")
+        raise
+
 def check_overlapping_leaves(iga_code: str, start_date: str, end_date: str, exclude_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Check for overlapping leave records for the same IGA code"""
     try:
