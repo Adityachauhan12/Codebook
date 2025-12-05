@@ -29,12 +29,54 @@ def query_rows(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[s
         logger.error(f"Error executing query: {e}")
         raise
 
+def check_overlapping_leaves(iga_code: str, start_date: str, end_date: str, exclude_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Check for overlapping leave records for the same IGA code"""
+    try:
+        sql = f"""
+        SELECT id, iga_code, start_date, end_date, status
+        FROM `{table_ref()}`
+        WHERE iga_code = @iga_code
+        AND status != 'REJECTED'
+        AND (
+            (start_date <= @start_date AND end_date >= @start_date) OR
+            (start_date <= @end_date AND end_date >= @end_date) OR
+            (start_date >= @start_date AND end_date <= @end_date)
+        )
+        """
+        
+        params = {
+            'iga_code': iga_code,
+            'start_date': start_date,
+            'end_date': end_date
+        }
+        
+        if exclude_id:
+            sql += " AND id != @exclude_id"
+            params['exclude_id'] = exclude_id
+            
+        return query_rows(sql, params)
+    except Exception as e:
+        logger.error(f"Error checking overlapping leaves: {e}")
+        raise
+
 def upsert_leave_record(record: Dict[str, Any]) -> str:
     try:
         record.setdefault('id', str(uuid.uuid4()))
         now = datetime.utcnow()
         record.setdefault('created_at', now)
         record['updated_at'] = now
+
+        # Check for overlapping leaves only for new records or status updates
+        if record.get('status') != 'REJECTED':
+            overlapping = check_overlapping_leaves(
+                record['iga_code'], 
+                record['start_date'], 
+                record['end_date'],
+                record['id']
+            )
+            if overlapping:
+                overlap_details = [f"ID: {leave['id']}, Dates: {leave['start_date']} to {leave['end_date']}" for leave in overlapping]
+                raise ValueError(f"Leave dates overlap with existing records for IGA {record['iga_code']}: {'; '.join(overlap_details)}")
 
         logger.info(f"Upserting leave record with ID: {record['id']}")
 
