@@ -4,7 +4,6 @@ import { Calendar } from "lucide-react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 
-
 interface LeaveRecord {
   id: string;
   iga_code: string;
@@ -18,10 +17,10 @@ interface LeaveRecord {
   approved_by: string | null;
   created_by: string | null;
   rejected_by: string | null;
+  rejection_reason: string | null;
   created_at: string;
   updated_at: string;
 }
-
 
 interface Attendance {
   name: string;
@@ -35,25 +34,10 @@ interface Attendance {
   approvedBy: string | null;
   id: string;
   duration: number;
-  createdBy?: {name: string, iga_code: string} | null;  // ✅ NEW
-  statusUpdatedBy?: {name: string, iga_code: string} | null;  // ✅ NEW
+  createdBy?: {name: string, iga_code: string} | null;
+  statusUpdatedBy?: {name: string, iga_code: string} | null;
+  rejectionReason?: string | null;
 }
-
-
-// ✅ NEW FUNCTION - Get IGA code from localStorage
-const getIGAFromLocalStorage = (): string => {
-  try {
-    const userinfo = localStorage.getItem('userinfo');
-    if (userinfo) {
-      const user = JSON.parse(userinfo);
-      return user.iga_code || user.igaCode || user.IGA || 'ADMIN';
-    }
-  } catch (error) {
-    console.error('Error reading IGA from localStorage:', error);
-  }
-  return 'ADMIN';
-};
-
 
 const AdminUrtiPage: React.FC = () => {
   const [attendances, setAttendances] = useState<Attendance[]>([]);
@@ -75,26 +59,25 @@ const AdminUrtiPage: React.FC = () => {
     []
   );
   const [sortConfig, setSortConfig] = useState<{
-    key: 'date' | 'leaveFrom' | null;
-    direction: 'asc' | 'desc';
-  }>({ key: null, direction: 'asc' });
+    key: "date" | "leaveFrom" | null;
+    direction: "asc" | "desc";
+  }>({ key: null, direction: "asc" });
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [modal, setModal] = useState<{
     show: boolean;
-    type: 'success' | 'error' | 'warning';
+    type: "success" | "error" | "warning";
     message: string;
-  }>({ show: false, type: 'success', message: '' });
+  }>({ show: false, type: "success", message: "" });
   const [showCommentModal, setShowCommentModal] = useState(false);
   const [selectedComment, setSelectedComment] = useState("");
-
+  const [isShowingRejectionReason, setIsShowingRejectionReason] = useState(false);
 
   const handleLogout = () => {
     localStorage.clear();
     window.location.href = "/";
   };
-
 
   // Format API date (YYYY-MM-DD or ISO) to DD-MM-YYYY
   const formatApiDateToDisplay = (dateString: string): string => {
@@ -105,21 +88,17 @@ const AdminUrtiPage: React.FC = () => {
     return `${day}-${month}-${year}`;
   };
 
-
-  // Format date to dd/mm/yy
-  const formatDateToDDMMYY = (dateString: string): string => {
+  // Format date to dd/mm/yyyy
+  const formatDateToDDMMYYYY = (dateString: string): string => {
     const [day, month, year] = dateString.split("-");
-    const shortYear = year.slice(-2);
-    return `${day}/${month}/${shortYear}`;
+    return `${day}/${month}/${year}`;
   };
-
 
   // Convert dd-mm-yyyy string to Date object
   const parseDate = (dateString: string): Date => {
     const [day, month, year] = dateString.split("-");
     return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
   };
-
 
   // API function to approve/reject leave
   const approveRejectLeave = async (
@@ -130,30 +109,41 @@ const AdminUrtiPage: React.FC = () => {
     try {
       setActionLoading(leaveId);
 
-      // ✅ NEW - Get admin info from localStorage
-      const userinfo = localStorage.getItem('userinfo');
-      const user = userinfo ? JSON.parse(userinfo) : {};
-      const igaCode = getIGAFromLocalStorage();
+      // Get actual user info from localStorage
+      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
+      const fullName = `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() || "Unknown";
+      const igaCode = userInfo.iga_code ?? userInfo.igaCode ?? "ADMIN";
 
+      // Get token from localStorage
+      const token = localStorage.getItem('token') || localStorage.getItem('authToken');
+      
       const response = await fetch(
         `${window.IFS_365_API_URL}/api/ApproveRejectLeave/${leaveId}`,
         {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
+            ...(token && { "Authorization": `Bearer ${token}` })
           },
           body: JSON.stringify({
             status: action === "approved" ? 1 : 0,
             comment: comment,
+            approved_by: action === "approved" ? igaCode : null,
+            rejected_by: action === "rejected" ? igaCode : null,
+            rejection_reason: action === "rejected" ? comment : null,
             status_updated_by: {
-              name: user.name || 'Admin',
+              name: fullName,
               iga_code: igaCode
-            }  // ✅ NEW - Admin's complete info
+            }
           }),
         }
       );
 
-      if (!response.ok) throw new Error("Failed to update leave status");
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API Error Response:', errorText);
+        throw new Error(`Failed to update leave status: ${response.status} - ${errorText}`);
+      }
 
       const result = await response.json();
 
@@ -162,13 +152,12 @@ const AdminUrtiPage: React.FC = () => {
 
       return result;
     } catch (error) {
-      console.error("Error approving/rejecting leave:", error);
+      console.error("Error updating leave status:", error);
       throw error;
     } finally {
       setActionLoading(null);
     }
   };
-
 
   // API function to fetch leave data
   const fetchLeaveData = async () => {
@@ -183,18 +172,20 @@ const AdminUrtiPage: React.FC = () => {
         params.append("status", appliedFilters.statusFilter.toLowerCase());
       }
 
-      const url = `${window.IFS_365_API_URL}/api/listLeaves${params.toString() ? `?${params.toString()}` : ""
-        }`;
+      const url = `${window.IFS_365_API_URL}/api/listLeaves${
+        params.toString() ? `?${params.toString()}` : ""
+      }`;
 
-      const response = await fetch(url);
+      const response = await fetch(url,{
+        cache: 'no-store'
+      });
 
       if (!response.ok) throw new Error("Failed to fetch leave data");
 
       const data: LeaveRecord[] = await response.json();
 
-      // ✅ FIX #1: Changed leaves to data
       // Transform API data to match component interface
-      const transformedData = data.map((leave: any) => {
+      const transformedData: Attendance[] = data.map((leave: any) => {
         const igaCode = leave.iga_code || '';
         const formattedIgaCode = igaCode.startsWith('IGA') ? igaCode : `IGA${igaCode}`;
 
@@ -211,8 +202,9 @@ const AdminUrtiPage: React.FC = () => {
           comment: leave.comment || "",
           approvedBy: leave.approved_by || null,
           duration: leave.duration_days,
-          createdBy: leave.created_by || null,  // ✅ NEW
-          statusUpdatedBy: leave.status_updated_by || null,  // ✅ NEW
+          createdBy: leave.created_by || null,
+          statusUpdatedBy: leave.status_updated_by || null,
+          rejectionReason: leave.rejection_reason || null,
         };
       });
 
@@ -223,7 +215,6 @@ const AdminUrtiPage: React.FC = () => {
       setIsLoadingData(false);
     }
   };
-
 
   const applyFiltersToData = () => {
     const now = new Date();
@@ -254,15 +245,22 @@ const AdminUrtiPage: React.FC = () => {
         !keyword ||
         entry.name.toLowerCase().includes(keyword) ||
         entry.igaCode.toLowerCase().includes(keyword);
+      const matchesStatus = 
+        appliedFilters.statusFilter === "All" || 
+        entry.status === appliedFilters.statusFilter;
 
-      return matchesFrom && matchesTo && matchesKeyword;
+      return matchesFrom && matchesTo && matchesKeyword && matchesStatus;
     });
 
     if (sortConfig.key) {
       filtered.sort((a, b) => {
-        const aDate = parseDate(sortConfig.key === 'date' ? a.date : a.leaveFrom);
-        const bDate = parseDate(sortConfig.key === 'date' ? b.date : b.leaveFrom);
-        return sortConfig.direction === 'asc'
+        const aDate = parseDate(
+          sortConfig.key === "date" ? a.date : a.leaveFrom
+        );
+        const bDate = parseDate(
+          sortConfig.key === "date" ? b.date : b.leaveFrom
+        );
+        return sortConfig.direction === "asc"
           ? aDate.getTime() - bDate.getTime()
           : bDate.getTime() - aDate.getTime();
       });
@@ -271,10 +269,10 @@ const AdminUrtiPage: React.FC = () => {
     setFilteredAttendances(filtered);
   };
 
-  const handleSort = (key: 'date' | 'leaveFrom') => {
-    setSortConfig(prev => ({
+  const handleSort = (key: "date" | "leaveFrom") => {
+    setSortConfig((prev) => ({
       key,
-      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc",
     }));
   };
 
@@ -287,7 +285,9 @@ const AdminUrtiPage: React.FC = () => {
         </div>
       </div>
       <div className="text-center">
-        <p className="text-indigo-primary font-semibold">Loading Leaves data...</p>
+        <p className="text-indigo-primary font-semibold">
+          Loading Leaves data...
+        </p>
         <p className="text-sm text-muted-foreground">Please wait a moment.</p>
       </div>
     </div>
@@ -323,13 +323,16 @@ const AdminUrtiPage: React.FC = () => {
     });
   };
 
-  const showModal = (type: 'success' | 'error' | 'warning', message: string) => {
+  const showModal = (
+    type: "success" | "error" | "warning",
+    message: string
+  ) => {
     setModal({ show: true, type, message });
-    setTimeout(() => setModal({ show: false, type: 'success', message: '' }), 3000);
   };
 
-  const handleViewComment = (comment: string) => {
+  const handleViewComment = (comment: string, isRejectionReason = false) => {
     setSelectedComment(comment);
+    setIsShowingRejectionReason(isRejectionReason);
     setShowCommentModal(true);
   };
 
@@ -339,7 +342,7 @@ const AdminUrtiPage: React.FC = () => {
   ) => {
     const leave = filteredAttendances[index];
     if (!leave.comment.trim()) {
-      showModal('warning', 'Please add a comment before approving/rejecting');
+      showModal("warning", "Please add a comment before Approving/Rejecting");
       return;
     }
     try {
@@ -348,10 +351,13 @@ const AdminUrtiPage: React.FC = () => {
         newStatus.toLowerCase() as "approved" | "rejected",
         leave.comment
       );
-      showModal('success', `Leave request has been ${newStatus.toLowerCase()} successfully!`);
+      showModal(
+        "success",
+        `Leave request has been ${newStatus.toLowerCase()} successfully!\nPlease go to "${newStatus}" filter to see updates.`
+      );
     } catch (error) {
       console.error("Failed to update status:", error);
-      showModal('error', 'Failed to update leave status. Please try again.');
+      showModal("error", "Failed to update leave status. Please try again.");
     }
   };
 
@@ -388,7 +394,10 @@ const AdminUrtiPage: React.FC = () => {
     fetchLeaveData();
   }, [appliedFilters.selectedBase, appliedFilters.statusFilter]);
 
-  useEffect(() => applyFiltersToData(), [attendances, appliedFilters, sortConfig]);
+  useEffect(
+    () => applyFiltersToData(),
+    [attendances, appliedFilters, sortConfig]
+  );
   useEffect(
     () =>
       setAppliedFilters((prev) => ({
@@ -397,6 +406,20 @@ const AdminUrtiPage: React.FC = () => {
       })),
     [searchKeyword]
   );
+
+  // Prevent body scroll when modal is open
+  useEffect(() => {
+    if (showCommentModal) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
+    }
+    
+    // Cleanup on unmount
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, [showCommentModal]);
 
   return (
     <Layout userRole="Admin" onLogout={handleLogout}>
@@ -409,11 +432,23 @@ const AdminUrtiPage: React.FC = () => {
               onClick={() => setModal({ ...modal, show: false })}
               className="absolute top-3 right-3 text-gray-400 hover:text-gray-600"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             </button>
-            <p className="text-gray-800 text-center text-lg mb-8 mt-4">{modal.message}</p>
+            <p className="text-gray-800 text-center text-lg mb-8 mt-4 whitespace-pre-wrap">
+              {modal.message}
+            </p>
             <div className="flex justify-center">
               <button
                 onClick={() => setModal({ ...modal, show: false })}
@@ -428,27 +463,41 @@ const AdminUrtiPage: React.FC = () => {
 
       {/* Comment Modal */}
       {showCommentModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
-            <div className="flex justify-between items-center p-6 border-b flex-shrink-0">
-              <h2 className="text-xl font-bold text-gray-900">Comment</h2>
-              <button
-                onClick={() => setShowCommentModal(false)}
-                className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
-              >
-                ×
-              </button>
-            </div>
-            <div className="p-6 overflow-y-auto flex-1">
-              <p className="text-gray-700 whitespace-pre-wrap break-words">{selectedComment}</p>
-            </div>
-            <div className="flex justify-end p-6 border-t flex-shrink-0">
-              <button
-                onClick={() => setShowCommentModal(false)}
-                className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
-              >
-                Close
-              </button>
+        <div className="fixed inset-0 z-50" style={{overflow: 'hidden'}}>
+          <div 
+            className="absolute inset-0 bg-black bg-opacity-50"
+            onClick={() => setShowCommentModal(false)}
+          />
+          <div className="relative h-full flex items-center justify-center p-4">
+            <div 
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md" 
+              style={{maxHeight: '90vh', display: 'flex', flexDirection: 'column'}}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-center p-6 border-b" style={{flexShrink: 0}}>
+                <h2 className="text-xl font-bold text-gray-900">
+                  {isShowingRejectionReason ? "Rejection Reason" : "Comment"}
+                </h2>
+                <button
+                  onClick={() => setShowCommentModal(false)}
+                  className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="p-6" style={{flex: 1, minHeight: 0, overflow: 'auto'}}>
+                <p className="text-gray-700 whitespace-pre-wrap break-words">
+                  {selectedComment}
+                </p>
+              </div>
+              <div className="flex justify-end p-6 border-t" style={{flexShrink: 0}}>
+                <button
+                  onClick={() => setShowCommentModal(false)}
+                  className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -468,7 +517,7 @@ const AdminUrtiPage: React.FC = () => {
                   <h1 className="text-3xl font-bold text-gray-900 mb-1">
                     URTI Leave Management
                   </h1>
-                  <p className="text-gray-600">
+                  <p className=" text-gray-600">
                     Manage and review URTI leave requests
                   </p>
                 </div>
@@ -491,12 +540,9 @@ const AdminUrtiPage: React.FC = () => {
                 className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
               >
                 <option value="All">All Bases</option>
-                <option value="DEL">DEL</option>
-                <option value="BOM">BOM</option>
-                <option value="VJA">VJA</option>
-                <option value="BLR">BLR</option>
-                <option value="HYD">HYD</option>
-                <option value="AMD">AMD</option>
+                {((window as any).BASES || []).map((base: string) => (
+                  <option key={base} value={base}>{base}</option>
+                ))}
               </select>
             </div>
             <div className="w-36">
@@ -547,28 +593,34 @@ const AdminUrtiPage: React.FC = () => {
 
           {/* Stats */}
           <div className="flex gap-3 ml-auto">
-            <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
-              <div className="text-xs font-bold text-amber-600">Pending</div>
-              <div className="text-lg font-extrabold text-amber-600">
-                {filteredAttendances.filter((a) => a.status === "Pending").length}
+            {(appliedFilters.statusFilter === "All" || appliedFilters.statusFilter === "Pending") && (
+              <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+                <div className="text-xs font-bold text-amber-600">Pending</div>
+                <div className="text-lg font-extrabold text-amber-600">
+                  {filteredAttendances.filter((a) => a.status === "Pending").length}
+                </div>
               </div>
-            </div>
-            <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
-              <div className="text-xs font-bold text-[rgb(139,170,21)]">
-                Approved
+            )}
+            {(appliedFilters.statusFilter === "All" || appliedFilters.statusFilter === "Approved") && (
+              <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+                <div className="text-xs font-bold text-[rgb(139,170,21)]">
+                  Approved
+                </div>
+                <div className="text-lg font-extrabold text-[rgb(139,170,21)]">
+                  {filteredAttendances.filter((a) => a.status === "Approved").length}
+                </div>
               </div>
-              <div className="text-lg font-extrabold text-[rgb(139,170,21)]">
-                {filteredAttendances.filter((a) => a.status === "Approved").length}
+            )}
+            {(appliedFilters.statusFilter === "All" || appliedFilters.statusFilter === "Rejected") && (
+              <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+                <div className="text-xs font-bold text-[rgb(224,107,20)]">
+                  Rejected
+                </div>
+                <div className="text-lg font-extrabold text-[rgb(224,107,20)]">
+                  {filteredAttendances.filter((a) => a.status === "Rejected").length}
+                </div>
               </div>
-            </div>
-            <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
-              <div className="text-xs font-bold text-[rgb(224,107,20)]">
-                Rejected
-              </div>
-              <div className="text-lg font-extrabold text-[rgb(224,107,20)]">
-                {filteredAttendances.filter((a) => a.status === "Rejected").length}
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
@@ -577,7 +629,10 @@ const AdminUrtiPage: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 card-glass animate-slide-down relative z-50">
             <div className="relative z-50">
               <label className="block text-xs font-medium text-indigo-primary mb-1">
-                From <span className="text-xs font-normal text-gray-500">(DD/MM/YYYY)</span>
+                From{" "}
+                <span className="text-xs font-normal text-gray-500">
+                  (DD/MM/YYYY)
+                </span>
               </label>
               <DatePicker
                 selected={customFromDate}
@@ -591,7 +646,10 @@ const AdminUrtiPage: React.FC = () => {
             </div>
             <div className="relative z-50">
               <label className="block text-xs font-medium text-indigo-primary mb-1">
-                To <span className="text-xs font-normal text-gray-500">(DD/MM/YYYY)</span>
+                To{" "}
+                <span className="text-xs font-normal text-gray-500">
+                  (DD/MM/YYYY)
+                </span>
               </label>
               <DatePicker
                 selected={customToDate}
@@ -610,10 +668,11 @@ const AdminUrtiPage: React.FC = () => {
         {/* Search bar */}
         <div className="w-full">
           <div
-            className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300 ${searchKeyword.trim() !== ""
+            className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300 ${
+              searchKeyword.trim() !== ""
                 ? "shadow-[0_0_12px_4px_rgba(0,0,153,0.4)]"
                 : "shadow-[0_0_8px_2px_rgba(0,0,153,0.2)]"
-              }`}
+            }`}
           >
             <div className="relative bg-white rounded-full">
               <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
@@ -634,7 +693,7 @@ const AdminUrtiPage: React.FC = () => {
               <input
                 value={searchKeyword}
                 onChange={(e) => setSearchKeyword(e.target.value)}
-                placeholder="Search by IGA code or employee name"
+                placeholder="Search by IGA code or name"
                 className="w-full pl-12 pr-12 py-3 text-sm bg-transparent rounded-full focus:outline-none"
               />
               {searchKeyword && (
@@ -669,83 +728,116 @@ const AdminUrtiPage: React.FC = () => {
             <div className="overflow-x-auto scrollbar-thin">
               <table className="w-full">
                 <thead>
-                  <tr>
-                    <th className="px-4 py-3 text-left">IGA Code</th>
-                    <th className="px-4 py-3 text-left">Employee Name</th>
-                    <th className="px-4 py-3 text-left cursor-pointer" onClick={() => handleSort('date')}>
-                      Date Applied {sortConfig.key === 'date' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+                  <tr className="bg-indigo-gradient text-white">
+                    <th className="px-6 py-4 text-left font-semibold">
+                      IGA Code
                     </th>
-                    <th className="px-4 py-3 text-left">Base</th>
-                    <th className="px-4 py-3 text-left cursor-pointer" onClick={() => handleSort('leaveFrom')}>
-                      Leave Period {sortConfig.key === 'leaveFrom' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+                    <th className="px-4 py-4 text-left font-semibold w-32">
+                      Name
                     </th>
-                    <th className="px-4 py-3 text-left">Created By</th>  {/* ✅ NEW */}
-                    <th className="px-4 py-3 text-left">Status Updated By</th>  {/* ✅ NEW */}
-                    <th className="px-4 py-3 text-left">Status</th>
-                    <th className="px-4 py-3 text-left">Comment</th>
-                    <th className="px-4 py-3 text-left">Actions</th>
+                    <th
+                      className="px-4 py-4 text-left font-semibold cursor-pointer hover:bg-white/10 transition-colors select-none w-28"
+                      onClick={() => handleSort("date")}
+                    >
+                      <div className="flex items-center gap-1">
+                        Date Applied
+                        <span className="text-xs">
+                          {sortConfig.key === "date"
+                            ? sortConfig.direction === "asc"
+                              ? "▲"
+                              : "▼"
+                            : ""}
+                        </span>
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 text-left font-semibold">Base</th>
+                    <th
+                      className="px-6 py-4 text-left font-semibold cursor-pointer hover:bg-white/10 transition-colors select-none"
+                      onClick={() => handleSort("leaveFrom")}
+                    >
+                      <div className="flex items-center gap-1">
+                        Leave Period
+                        <span className="text-xs">
+                          {sortConfig.key === "leaveFrom"
+                            ? sortConfig.direction === "asc"
+                              ? "▲"
+                              : "▼"
+                            : ""}
+                        </span>
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 text-left font-semibold">
+                      Applied By
+                    </th>
+                    <th className="px-6 py-4 text-left font-semibold">
+                      Reviewed By
+                    </th>
+                    <th className="px-6 py-4 text-left font-semibold">
+                      Status
+                    </th>
+                    <th className="px-6 py-4 text-left font-semibold">
+                      Comment
+                    </th>
+                    <th className="px-6 py-4 text-left font-semibold">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-indigo-primary/10">
                   {filteredAttendances.map((e, idx) => (
                     <tr
                       key={e.id}
-                      className={`hover:bg-indigo-primary/5 transition-colors animate-fadeInUp delay-[${idx * 50}ms]`}
+                      className={`hover:bg-indigo-primary/5 transition-colors animate-fadeInUp delay-[${
+                        idx * 50
+                      }ms]`}
                     >
-                      {/* 1. IGA Code */}
                       <td className="px-6 py-3">
                         <span className="font-mono text-sm bg-indigo-primary/10 text-indigo-primary px-2 py-1 rounded-md border border-indigo-primary/20">
                           {e.igaCode}
                         </span>
                       </td>
-
-                      {/* 2. Employee Name */}
-                      <td className="px-6 py-3">{e.name}</td>
-
-                      {/* 3. Date Applied */}
-                      <td className="px-6 py-3 font-medium text-sm">
-                        {formatDateToDDMMYY(e.date)}
+                      <td className="px-4 py-3 w-24">{e.name}</td>
+                      <td className="px-4 py-3 font-medium text-sm w-22">
+                        {formatDateToDDMMYYYY(e.date)}
                       </td>
-
-                      {/* 4. Base */}
                       <td className="px-6 py-3">
                         <span className="px-3 py-1 rounded-full text-xs font-medium bg-indigo-primary/10 text-indigo-primary border border-indigo-primary/20">
                           {e.base}
                         </span>
                       </td>
-
-                      {/* 5. Leave Period */}
                       <td className="px-6 py-3 font-medium text-sm">
-                        {formatDateToDDMMYY(e.leaveFrom)} to {formatDateToDDMMYY(e.leaveTo)} ({e.duration} days)
+                        {formatDateToDDMMYYYY(e.leaveFrom)} to{" "}
+                        {formatDateToDDMMYYYY(e.leaveTo)} ({e.duration} {e.duration === 1 ? 'day' : 'days'})
                       </td>
-
-                      {/* 6. Created By - ✅ NEW */}
                       <td className="px-6 py-3 text-sm">
                         {e.createdBy ? 
                           `${e.createdBy.name} (${e.createdBy.iga_code})` : 
-                          'N/A'
+                          '--'
                         }
                       </td>
-
-                      {/* 7. Status Updated By - ✅ NEW */}
                       <td className="px-6 py-3 text-sm">
                         {e.statusUpdatedBy ? 
                           `${e.statusUpdatedBy.name} (${e.statusUpdatedBy.iga_code})` : 
-                          'N/A'
+                          '--'
                         }
                       </td>
-
-                      {/* 8. Status */}
                       <td className="px-6 py-3">
                         <span className={getBadgeClasses(e.status)}>
                           {e.status}
                         </span>
                       </td>
-
-                      {/* 9. Comment */}
                       <td className="px-6 py-3">
                         {isCommentLocked(e.status) ? (
-                          e.comment ? (
+                          e.status === "Rejected" && e.rejectionReason ? (
+                            <div className="space-y-1">
+                              <button
+                                onClick={() => handleViewComment(e.rejectionReason!, true)}
+                                className="text-red-600 hover:text-red-800 underline text-sm font-medium"
+                              >
+                                View Rejection Reason
+                              </button>
+                            </div>
+                          ) : e.comment ? (
                             <button
                               onClick={() => handleViewComment(e.comment)}
                               className="text-indigo-primary hover:text-blue-800 underline text-sm"
@@ -753,25 +845,29 @@ const AdminUrtiPage: React.FC = () => {
                               View Comment
                             </button>
                           ) : (
-                            <span className="text-gray-400 text-sm">No comment</span>
+                            <span className="text-gray-400 text-sm">
+                              No comment
+                            </span>
                           )
                         ) : (
                           <div>
                             <input
                               value={e.comment}
-                              onChange={(ev) => updateComment(idx, ev.target.value)}
+                              onChange={(ev) =>
+                                updateComment(idx, ev.target.value)
+                              }
                               maxLength={100}
                               className="w-full px-3 py-2 border-2 rounded-lg text-sm transition-all border-indigo-primary/20 focus:ring-indigo-primary/50 focus:border-indigo-primary bg-white"
                               placeholder="Add comment…"
                             />
                             {e.comment.length > 100 && (
-                              <p className="text-xs text-red-500 mt-1">Character limit exceeded</p>
+                              <p className="text-xs text-red-500 mt-1">
+                                Character limit exceeded
+                              </p>
                             )}
                           </div>
                         )}
                       </td>
-
-                      {/* 10. Actions */}
                       <td className="px-6 py-3">
                         <div className="flex gap-2 justify-center">
                           {e.status === "Pending" && (
@@ -798,12 +894,12 @@ const AdminUrtiPage: React.FC = () => {
                           )}
                           {(e.status === "Approved" ||
                             e.status === "Rejected") && (
-                              <span className="px-4 py-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg">
-                                {e.status === "Approved"
-                                  ? "Approved"
-                                  : "Rejected"}
-                              </span>
-                            )}
+                            <span className="px-4 py-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg">
+                              {e.status === "Approved"
+                                ? "Approved"
+                                : "Rejected"}
+                            </span>
+                          )}
                         </div>
                       </td>
                     </tr>
