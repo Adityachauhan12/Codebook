@@ -139,7 +139,7 @@ def upsert_leave_record(record: Dict[str, Any]) -> str:
             if overlapping:
                 def format_date(date_str):
                     try:
-                        return datetime.strptime(str(date_str), "%Y-%m-%d").strftime("%d-%m-%Y")
+                        return datetime.strptime(str(date_str), "%Y-%m-%d").strftime("%d/%m/%Y")
                     except:
                         return str(date_str)
                 
