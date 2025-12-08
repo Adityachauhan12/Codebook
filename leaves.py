@@ -36,11 +36,10 @@ def query_rows(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[s
 def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Query leaves with pagination support"""
     try:
-        offset = (page - 1) * page_size
-        
         # Build WHERE clause from filters
         where_conditions = []
         params = {}
+        is_search_active = False
         
         if filters:
             if filters.get('iga_code'):
@@ -55,6 +54,7 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
             if filters.get('search'):
                 where_conditions.append('LOWER(employee_name) LIKE LOWER(@search)')
                 params['search'] = f"%{filters['search']}%"
+                is_search_active = True
             if filters.get('date_from'):
                 where_conditions.append('DATE(created_at) >= @date_from')
                 params['date_from'] = filters['date_from']
@@ -69,18 +69,36 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
         count_result = query_rows(count_sql, params)
         total_records = count_result[0]['total'] if count_result else 0
         
-        # Get paginated data
+        # If search is active, return all results without pagination
+        if is_search_active:
+            data_sql = f"""
+            SELECT * FROM `{table_ref()}`
+            {where_clause}
+            ORDER BY created_at DESC
+            """
+            records = query_rows(data_sql, params)
+            decoded_records = decode_json_fields(records)
+            
+            return {
+                'data': decoded_records,
+                'pagination': {
+                    'page': 1,
+                    'page_size': total_records,
+                    'total_records': total_records,
+                    'total_pages': 1,
+                    'has_next': False,
+                    'has_prev': False
+                }
+            }
+        
+        # Normal pagination when no search
+        offset = (page - 1) * page_size
         data_sql = f"""
         SELECT * FROM `{table_ref()}`
         {where_clause}
         ORDER BY created_at DESC
         LIMIT {page_size} OFFSET {offset}
         """
-        
-        params.update({
-            'page_size': page_size,
-            'offset': offset
-        })
         
         records = query_rows(data_sql, params)
         decoded_records = decode_json_fields(records)
