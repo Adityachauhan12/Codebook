@@ -3,7 +3,7 @@ def create_leave(request: LeaveRequest):
     start_date_obj = datetime.strptime(request.start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(request.end_date, "%Y-%m-%d")
     duration_days = (end_date_obj - start_date_obj).days + 1
-
+ 
     record = {
         "iga_code": request.iga_code,
         "employee_name": request.employee_name,
@@ -16,7 +16,7 @@ def create_leave(request: LeaveRequest):
         "created_by": {"name": request.applied_by_name or "Unknown", "iga_code": request.applied_by or "ADMIN"},
         "status_updated_by": None
     }
-
+ 
     logger.info(f"Creating leave request for {request.iga_code} from {request.start_date} to {request.end_date}")
     try:
         leave_id = upsert_leave_record(record)
@@ -34,7 +34,7 @@ def create_leave(request: LeaveRequest):
     except Exception as e:
         logger.error(f"Error creating leave request: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+ 
 @app.get("/api/listLeaves")
 def list_leaves(
     page: int = Query(1, ge=1),
@@ -52,7 +52,7 @@ def list_leaves(
     except Exception as e:
         logger.error(f"Error listing leaves: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+ 
 @app.get("/api/list_leaves_analytics")
 def list_leaves_analytics(
     page: int = Query(1, ge=1),
@@ -71,7 +71,7 @@ def list_leaves_analytics(
     except Exception as e:
         logger.error(f"Error listing leaves analytics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+ 
 @app.patch("/api/ApproveRejectLeave/{leave_id}")
 def approve_or_reject_leave(leave_id: str, action: AdminAction):
     try:
@@ -79,7 +79,7 @@ def approve_or_reject_leave(leave_id: str, action: AdminAction):
         if status is None:
             logger.error(f"Error updating leave {leave_id}: invalid status value")
             raise HTTPException(status_code=400, detail="invalid status value")
-
+ 
         logger.info(f"Processing leave {leave_id} with action {status}")
         sql = f"SELECT * FROM `{table_ref()}` WHERE id = @id"
         existing_records = query_rows(sql, {"id": leave_id})
@@ -87,7 +87,7 @@ def approve_or_reject_leave(leave_id: str, action: AdminAction):
             logger.error(f"Leave record {leave_id} not found")
             raise HTTPException(status_code=404, detail="Leave record not found")
         existing_record = existing_records[0]
-
+ 
         updated_record = {
             "id": leave_id,
             "iga_code": existing_record["iga_code"],
@@ -101,10 +101,10 @@ def approve_or_reject_leave(leave_id: str, action: AdminAction):
             "created_by": existing_record.get("created_by"),
             # "status_updated_by": action.status_updated_by,
             "status_updated_by": action.status_updated_by.model_dump() if action.status_updated_by else None,  # ✅ NEW - Convert Pydantic to dict
-
+ 
             "created_at": existing_record["created_at"]
         }
-
+ 
         upsert_leave_record(updated_record)
         logger.info(f"Leave {leave_id} updated successfully to {status}")
         return {
@@ -116,7 +116,7 @@ def approve_or_reject_leave(leave_id: str, action: AdminAction):
     except Exception as e:
         logger.error(f"Error updating leave {leave_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+ 
 @app.get("/api/getEmployeeLeaves/{iga_code}")
 def get_employee_leaves(
     iga_code: str,
@@ -131,7 +131,7 @@ def get_employee_leaves(
     except Exception as e:
         logger.error(f"Error fetching leaves for employee {iga_code}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+ 
 @app.get("/api/leaveSummary")
 def leave_summary():
     sql = f"""
