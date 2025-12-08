@@ -41,9 +41,12 @@ def list_leaves(
     page_size: int = Query(20, ge=1, le=100),
     base: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    iga_code: Optional[str] = Query(None)
+    iga_code: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None)
 ):
-    filters = {k: v for k, v in {"base": base, "status": status, "iga_code": iga_code}.items() if v}
+    filters = {k: v for k, v in {"base": base, "status": status, "iga_code": iga_code, "search": search, "date_from": date_from, "date_to": date_to}.items() if v}
     logger.info(f"Listing leaves with filters: {filters}, page: {page}, page_size: {page_size}")
     try:
         result = query_paginated_leaves(page, page_size, filters)
@@ -60,9 +63,11 @@ def list_leaves_analytics(
     base: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     iga_code: Optional[str] = Query(None),
-    employee_name: Optional[str] = Query(None)
+    search: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None)
 ):
-    filters = {k: v for k, v in {"base": base, "status": status, "iga_code": iga_code}.items() if v}
+    filters = {k: v for k, v in {"base": base, "status": status, "iga_code": iga_code, "search": search, "date_from": date_from, "date_to": date_to}.items() if v}
     logger.info(f"Listing leaves analytics with filters: {filters}, page: {page}, page_size: {page_size}")
     try:
         result = query_paginated_leaves(page, page_size, filters)
