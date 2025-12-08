@@ -1,163 +1,1379 @@
-@app.post("/api/createLeave")
-def create_leave(request: LeaveRequest):
-    start_date_obj = datetime.strptime(request.start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(request.end_date, "%Y-%m-%d")
-    duration_days = (end_date_obj - start_date_obj).days + 1
- 
-    record = {
-        "iga_code": request.iga_code,
-        "employee_name": request.employee_name,
-        "base": request.base,
-        "start_date": request.start_date,
-        "end_date": request.end_date,
-        "duration_days": duration_days,
-        "comment": request.comment,
-        "status": "pending",
-        "created_by": {"name": request.applied_by_name or "Unknown", "iga_code": request.applied_by or "ADMIN"},
-        "status_updated_by": None
+import React, { useState, useEffect } from "react";
+import Layout from "../../components/Layout";
+import { Calendar } from "lucide-react";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
+
+/**
+ * Leave interface representing a leave application
+ * Maps to the listLeaves API response structure
+ */
+interface Leave {
+  name: string; // employee_name from API
+  date: string; // created_at from API (formatted)
+  igaCode: string; // iga_code from API
+  comment: string; // comment from API
+  status: "Approved" | "Rejected" | "Pending"; // status from API (capitalized)
+  leaveFrom: string; // start_date from API (formatted)
+  leaveTo: string; // end_date from API (formatted)
+  duration: number; // duration_days from API
+  createdBy?: {name: string, iga_code: string} | null;
+  statusUpdatedBy?: {name: string, iga_code: string} | null;
+  createdAt?: string; // original created_at for sorting
+}
+
+interface FormData {
+  selectedBase?: string;
+  selectedPosition?: string;
+  selectedEmployee: string;
+  leaveFrom: Date | null;
+  leaveTo: Date | null;
+}
+
+function FlightopsUrtiPage() {
+  const calculateDays = (fromDate: Date, toDate: Date): number => {
+    const timeDiff = toDate.getTime() - fromDate.getTime();
+    return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
+  };
+
+  // Normalize search to handle both IGA105 and 105 formats
+  const normalizeSearch = (searchTerm: string, igaCode: string) => {
+    const term = searchTerm.toLowerCase().trim();
+    const code = igaCode.toLowerCase();
+    const numericPart = code.replace('iga', '');
+    
+    return code.includes(term) || numericPart === term || term === `iga${numericPart}`;
+  };
+
+  const [leaves, setLeaves] = useState<Leave[]>([]);
+
+  const [showForm, setShowForm] = useState(false);
+  const [formData, setFormData] = useState<FormData>({
+    selectedEmployee: "",
+    leaveFrom: null,
+    leaveTo: null,
+  });
+  const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>(
+    {}
+  );
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [filteredLeaves, setFilteredLeaves] = useState<Leave[]>([]);
+  const [modalSearchKeyword, setModalSearchKeyword] = useState("");
+  const [apiSuggestions, setApiSuggestions] = useState<any[]>([]);
+  const [isLoadingApi, setIsLoadingApi] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [showExcelUpload, setShowExcelUpload] = useState(false);
+  const [excelFile, setExcelFile] = useState<File | null>(null);
+  const [excelError, setExcelError] = useState("");
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [errorDetails, setErrorDetails] = useState<any>(null);
+  const [isUploadingExcel, setIsUploadingExcel] = useState(false);
+  const [selectedCrewData, setSelectedCrewData] = useState<any>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingLeaves, setIsLoadingLeaves] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [showCommentModal, setShowCommentModal] = useState(false);
+  const [selectedComment, setSelectedComment] = useState("");
+  const [showSuccessPopup, setShowSuccessPopup] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [baseError, setBaseError] = useState("");
+  const [showExcelErrorModal, setShowExcelErrorModal] = useState(false);
+  const [excelErrorModalData, setExcelErrorModalData] = useState<any>(null);
+  const [showErrorPopup, setShowErrorPopup] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const handleLogout = () => {
+    localStorage.clear();
+    window.location.href = "/";
+  };
+
+
+    const LoadingSpinner = () => (
+    <div className="flex flex-col items-center justify-center h-64 space-y-4">
+      <div className="relative">
+        <div className="w-16 h-16 border-4 border-indigo-primary/30 border-t-indigo-primary rounded-full animate-spin"></div>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="w-8 h-8 bg-indigo-gradient rounded-full animate-pulse"></div>
+        </div>
+      </div>
+      <div className="text-center">
+        <p className="text-indigo-primary font-semibold">Loading document data...</p>
+        <p className="text-sm text-muted-foreground">Please wait a moment.</p>
+      </div>
+    </div>
+  );
+  
+  // Fetch leaves data function
+  const fetchLeaves = async () => {
+    setIsLoadingLeaves(true);
+    try {
+      // Get base from localStorage or use default
+      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
+      const userBase = userInfo.user_base === 'CORP' ? 'DEL' : (userInfo.user_base || 'DEL');
+
+      const response = await fetch(
+        `${window.IFS_365_API_URL}/api/listLeaves?base=${userBase}`,
+        { cache: 'no-store' }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+
+        // Transform API response to match Leave interface
+        const transformedLeaves: Leave[] = data.map((item: any) => {
+          const igaCode = item.iga_code || '';
+          const formattedIgaCode = igaCode.startsWith('IGA') ? igaCode : `IGA${igaCode}`;
+
+          return {
+            name: item.employee_name || '',
+            date: item.created_at ? new Date(item.created_at).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
+            igaCode: formattedIgaCode,
+            comment: item.comment || '',
+            status: (item.status?.charAt(0).toUpperCase() + item.status?.slice(1)) as Leave['status'] || 'Pending',
+            leaveFrom: item.start_date ? new Date(item.start_date).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
+            leaveTo: item.end_date ? new Date(item.end_date).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
+            duration: item.duration_days || 0,
+            createdBy: item.created_by || null,
+            statusUpdatedBy: item.status_updated_by || null,
+            createdAt: item.created_at // Keep original date for sorting
+          };
+        });
+
+        // Sort by created_at date (latest first)
+        transformedLeaves.sort((a, b) => {
+          const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return dateB - dateA;
+        });
+
+        setLeaves(transformedLeaves);
+      } else {
+        console.error('Failed to fetch leaves:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error fetching leaves:', error);
+    } finally {
+      setIsLoadingLeaves(false);
     }
- 
-    logger.info(f"Creating leave request for {request.iga_code} from {request.start_date} to {request.end_date}")
-    try:
-        leave_id = upsert_leave_record(record)
-        logger.info(f"Leave request created successfully with ID {leave_id}")
-        return {
-            "message": "Leave request created successfully",
-            "id": leave_id,
-            "status": "pending",
-            "created_by": record["created_by"],
-            "status_updated_by": None
+  };
+
+  // Fetch leaves data on component mount
+  useEffect(() => {
+    fetchLeaves();
+  }, []);
+
+  // Statistics
+  const stats = {
+    total: leaves.length,
+    pending: leaves.filter((l) => l.status === "Pending").length,
+    approved: leaves.filter((l) => l.status === "Approved").length,
+    rejected: leaves.filter((l) => l.status === "Rejected").length,
+    thisMonth: leaves.filter(
+      (l) => new Date(l.date).getMonth() === new Date().getMonth()
+    ).length,
+    totalDays: leaves
+      .filter((l) => l.status === "Approved")
+      .reduce((sum, l) => sum + l.duration, 0),
+  };
+
+  // Apply search filter for main table
+  useEffect(() => {
+    const keyword = searchKeyword.trim().toLowerCase();
+
+    const filtered = leaves.filter((entry) => {
+      const matchesKeyword =
+        !keyword ||
+        entry.name.toLowerCase().includes(keyword) ||
+        normalizeSearch(keyword, entry.igaCode) ||
+        entry.status.toLowerCase().includes(keyword);
+
+      const matchesStatus =
+        statusFilter === "All" || entry.status === statusFilter;
+
+      return matchesKeyword && matchesStatus;
+    });
+
+    // Sort filtered results by created_at date (latest first)
+    filtered.sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return dateB - dateA;
+    });
+
+    setFilteredLeaves(filtered);
+  }, [searchKeyword, leaves, statusFilter]);
+
+  // API search function for crew data
+  const searchCrewByIGA = async (igaCode: string) => {
+    if (!igaCode.trim()) {
+      setApiSuggestions([]);
+      setHasSearched(false);
+      return;
+    }
+
+    setIsLoadingApi(true);
+    try {
+      const response = await fetch(`${window.IFS_365_API_URL}/api/search_crew?iga=${igaCode}`, {
+        cache: 'no-store'
+      });
+      if (response.ok) {
+        const result = await response.json();
+        if (result.results?.success && result.results?.data) {
+          setApiSuggestions([result.results.data]);
+        } else {
+          setApiSuggestions([]);
         }
-    except ValueError as e:
-        logger.error(f"Validation error creating leave request: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error creating leave request: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
- 
-@app.get("/api/listLeaves")
-def list_leaves(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    base: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    iga_code: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None)
-):
-    filters = {k: v for k, v in {"base": base, "status": status, "iga_code": iga_code, "search": search, "date_from": date_from, "date_to": date_to}.items() if v}
-    logger.info(f"Listing leaves with filters: {filters}, page: {page}, page_size: {page_size}")
-    try:
-        result = query_paginated_leaves(page, page_size, filters)
-        logger.info(f"Found {result['pagination']['total_records']} total leave records")
-        return result
-    except Exception as e:
-        logger.error(f"Error listing leaves: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
- 
-@app.get("/api/list_leaves_analytics")
-def list_leaves_analytics(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    base: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    iga_code: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None)
-):
-    filters = {k: v for k, v in {"base": base, "status": status, "iga_code": iga_code, "search": search, "date_from": date_from, "date_to": date_to}.items() if v}
-    logger.info(f"Listing leaves analytics with filters: {filters}, page: {page}, page_size: {page_size}")
-    try:
-        result = query_paginated_leaves(page, page_size, filters)
-        logger.info(f"Found {result['pagination']['total_records']} total leave records (analytics)")
-        return result
-    except Exception as e:
-        logger.error(f"Error listing leaves analytics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
- 
-@app.patch("/api/ApproveRejectLeave/{leave_id}")
-def approve_or_reject_leave(leave_id: str, action: AdminAction):
-    try:
-        status = {1: "approved", 0: "rejected"}.get(action.status)
-        if status is None:
-            logger.error(f"Error updating leave {leave_id}: invalid status value")
-            raise HTTPException(status_code=400, detail="invalid status value")
- 
-        logger.info(f"Processing leave {leave_id} with action {status}")
-        sql = f"SELECT * FROM `{table_ref()}` WHERE id = @id"
-        existing_records = query_rows(sql, {"id": leave_id})
-        if not existing_records:
-            logger.error(f"Leave record {leave_id} not found")
-            raise HTTPException(status_code=404, detail="Leave record not found")
-        existing_record = existing_records[0]
- 
-        updated_record = {
-            "id": leave_id,
-            "iga_code": existing_record["iga_code"],
-            "employee_name": existing_record["employee_name"],
-            "base": existing_record["base"],
-            "start_date": existing_record["start_date"],
-            "end_date": existing_record["end_date"],
-            "duration_days": existing_record["duration_days"],
-            "comment": action.comment or existing_record.get("comment"),
-            "status": status,
-            "created_by": existing_record.get("created_by"),
-            # "status_updated_by": action.status_updated_by,
-            "status_updated_by": action.status_updated_by.model_dump() if action.status_updated_by else None,  # ✅ NEW - Convert Pydantic to dict
- 
-            "created_at": existing_record["created_at"]
+      } else {
+        setApiSuggestions([]);
+      }
+    } catch (error) {
+      console.error('Error fetching crew data:', error);
+      setApiSuggestions([]);
+    } finally {
+      setIsLoadingApi(false);
+      setHasSearched(true);
+    }
+  };
+
+  // Handle search button click or Enter key
+  const handleSearch = () => {
+    const keyword = modalSearchKeyword.trim();
+    if (!keyword) {
+      setApiSuggestions([]);
+      setHasSearched(false);
+      return;
+    }
+    
+    // Extract numeric part from IGA code or use as is
+    const numericPart = keyword.toLowerCase().startsWith('iga') 
+      ? keyword.slice(3) 
+      : keyword;
+    
+    if (numericPart && /^\d+$/.test(numericPart)) {
+      searchCrewByIGA(numericPart);
+    } else {
+      // For non-numeric input, still set hasSearched to show "No employee found"
+      setApiSuggestions([]);
+      setHasSearched(true);
+    }
+  };
+
+  // Handle Enter key press
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSearch();
+    }
+  };
+
+
+
+  const formatDate = (date: Date): string => {
+    const day = date.getDate().toString().padStart(2, "0");
+    const month = (date.getMonth() + 1).toString().padStart(2, "0");
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+  };
+
+  const validateForm = (): boolean => {
+    const newErrors: Partial<Record<keyof FormData, string>> = {};
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (!formData.selectedEmployee)
+      newErrors.selectedEmployee = "Please select an employee";
+
+    if (!formData.leaveFrom)
+      newErrors.leaveFrom = "Leave from date is required";
+    else if (formData.leaveFrom > today)
+      newErrors.leaveFrom = "URTI leaves can only be applied for today or previous days";
+
+    if (!formData.leaveTo) 
+      newErrors.leaveTo = "Leave to date is required";
+    else if (formData.leaveTo > today)
+      newErrors.leaveTo = "URTI leaves can only be applied for today or previous days";
+
+    if (
+      formData.leaveFrom &&
+      formData.leaveTo &&
+      formData.leaveFrom > formData.leaveTo
+    ) {
+      newErrors.leaveTo = "Leave to date must be after from date";
+    }
+
+    setErrors(newErrors);
+
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleAddLeave = async () => {
+    // console.log('🔵 Step 1: handleAddLeave called');
+
+    if (!validateForm()) {
+      return;
+    }
+    if (!selectedCrewData || !formData.leaveFrom || !formData.leaveTo) {
+      return;
+    }
+
+
+
+    setIsSubmitting(true);
+
+    try {
+      const formatDateForAPI = (date: Date): string => {
+        const year = date.getFullYear();
+        const month = (date.getMonth() + 1).toString().padStart(2, "0");
+        const day = date.getDate().toString().padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      };
+
+      // ✅ Get logged-in user info for created_by
+      const userInfo = JSON.parse(localStorage.getItem("userInfo") || "{}");
+      const fullName = `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() || "Unknown";
+      const creator = {
+        name: fullName,
+        iga_code: userInfo.iga_code ?? userInfo.igaCode ?? "ADMIN"
+      };
+
+      const requestBody = {
+        iga_code: selectedCrewData.id?.toString() || "",
+        employee_name: selectedCrewData.name || formData.selectedEmployee,
+        base: selectedCrewData.base ?? "",
+        start_date: formatDateForAPI(formData.leaveFrom),
+        end_date: formatDateForAPI(formData.leaveTo),
+        comment: "",
+        applied_by: creator.iga_code,
+        applied_by_name: creator.name,
+        approved_by: null,
+        rejected_by: null
+      };
+
+      console.log('Request body:', requestBody);
+
+      const response = await fetch(`${window.IFS_365_API_URL}/api/createLeave`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+        
+      });
+
+      console.log('🔵 Step 6: API response received:', { status: response.status, ok: response.ok });
+
+      if (response.ok) {
+        console.log('✅ Step 7: API call successful');
+        // Refresh leaves data
+        await fetchLeaves();
+        // Reset form
+        setFormData({ selectedEmployee: "", leaveFrom: null, leaveTo: null });
+        setErrors({});
+        setModalSearchKeyword("");
+        setSelectedCrewData(null);
+        setShowForm(false);
+        // Show success popup
+        setSuccessMessage("Leave application submitted successfully!");
+        setShowSuccessPopup(true);
+      } else {
+        console.log('❌ Step 7: API call failed with status:', response.status);
+        const errorData = await response.json().catch(() => ({}));
+        console.log('❌ Error data:', errorData);
+        setErrorMessage(`Failed to create leave: ${errorData.message || response.statusText}`);
+        setShowErrorPopup(true);
+      }
+    } catch (error) {
+      console.error('❌ Step 8: Exception occurred:', error);
+      setErrorMessage('Failed to create leave. Please try again.');
+      setShowErrorPopup(true);
+    } finally {
+      console.log('🔵 Step 9: Cleanup - setting isSubmitting to false');
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleCancel = () => {
+    console.log('🔵 Cancel button clicked');
+    setFormData({ selectedEmployee: "", leaveFrom: null, leaveTo: null });
+    setErrors({});
+    setModalSearchKeyword("");
+    setSelectedCrewData(null);
+    setApiSuggestions([]);
+    setHasSearched(false);
+    setShowForm(false);
+  };
+
+  const handleEmployeeSelect = (employeeName: string, crewData?: any) => {
+    if (crewData) {
+      // Check if employee's base matches user's base
+      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
+      const userBase = userInfo.user_base === 'CORP' ? 'DEL' : (userInfo.user_base || 'DEL');
+      
+      if (crewData.base && crewData.base !== userBase) {
+        setBaseError(`You can only apply leaves for employees from your base (${userBase}). This employee is from ${crewData.base}.`);
+        // Close dropdown to show error message
+        setApiSuggestions([]);
+        setHasSearched(false);
+        return;
+      }
+    }
+    
+    setBaseError("");
+    setFormData({ ...formData, selectedEmployee: employeeName });
+    if (crewData) {
+      setSelectedCrewData(crewData);
+    }
+    setErrors({ ...errors, selectedEmployee: undefined });
+    setModalSearchKeyword("");
+    setApiSuggestions([]);
+    setHasSearched(false);
+  };
+
+  const handleClearFilters = () => {
+    setSearchKeyword("");
+    setStatusFilter("All");
+  };
+
+  const getBadgeClasses = (status: Leave["status"]) => {
+    const base =
+      "inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border transition-all duration-200";
+
+    if (status === "Approved")
+      return `${base} bg-green-100 text-green-800 border-green-200`;
+
+    if (status === "Rejected")
+      return `${base} bg-red-100 text-red-800 border-red-200`;
+
+    return `${base} bg-amber-100 text-amber-800 border-amber-200`;
+  };
+
+  const handleExcelUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setExcelFile(file);
+    setExcelError('');
+  };
+
+  const processExcelFile = async () => {
+    if (!excelFile) return;
+
+    setIsUploadingExcel(true);
+    setExcelError('');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', excelFile);
+
+      const response = await fetch(`${window.IFS_365_API_URL}/api/upload-leave-excel`, {
+        method: 'POST',
+        body: formData,
+        cache: 'no-store'
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        
+        // Close the upload modal first
+        setShowExcelUpload(false);
+        setExcelFile(null);
+        setExcelError('');
+        
+        // Handle mixed success/error responses
+        const successCount = result.summary?.successful || 0;
+        if (successCount > 0 && result.error_details && result.error_details.length > 0) {
+          // Mixed result: some success, some errors
+          setExcelErrorModalData({
+            ...result,
+            hasSuccess: true,
+            successMessage: `Successfully uploaded ${successCount} leave records`
+          });
+          setShowExcelErrorModal(true);
+        } else if (successCount > 0) {
+          // Pure success
+          setSuccessMessage(`Successfully uploaded ${successCount} leave records`);
+          setShowSuccessPopup(true);
+        } else {
+          // Pure error
+          setExcelErrorModalData(result);
+          setShowExcelErrorModal(true);
         }
- 
-        upsert_leave_record(updated_record)
-        logger.info(f"Leave {leave_id} updated successfully to {status}")
-        return {
-            "message": f"Leave {status} successfully",
-            "id": leave_id,
-            "status": status,
-            "status_updated_by": updated_record.get("status_updated_by")
+        
+        // Refresh data if any records were uploaded
+        if (successCount > 0) {
+          await fetchLeaves();
         }
-    except Exception as e:
-        logger.error(f"Error updating leave {leave_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
- 
-@app.get("/api/getEmployeeLeaves/{iga_code}")
-def get_employee_leaves(
-    iga_code: str,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100)
-):
-    logger.info(f"Fetching leaves for employee {iga_code}, page: {page}, page_size: {page_size}")
-    try:
-        result = query_paginated_leaves(page, page_size, {"iga_code": iga_code})
-        logger.info(f"Found {result['pagination']['total_records']} total leaves for employee {iga_code}")
-        return result
-    except Exception as e:
-        logger.error(f"Error fetching leaves for employee {iga_code}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
- 
-@app.get("/api/leaveSummary")
-def leave_summary():
-    sql = f"""
-    SELECT
-        COUNT(*) AS total_leaves,
-        SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_leaves,
-        SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) AS approved_leaves,
-        SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS rejected_leaves
-    FROM `{table_ref()}`
-    """
-    logger.info("Fetching leave summary")
-    try:
-        result = query_rows(sql)
-        summary = result[0] if result else {
-            "total_leaves": 0,
-            "pending_leaves": 0,
-            "approved_leaves": 0,
-            "rejected_leaves": 0
-        }
-        logger.info(f"Leave summary: {summary}")
-        return summary
-    except Exception as e:
-        logger.error(f"Error fetching leave summary: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        setShowExcelUpload(false);
+        setExcelFile(null);
+        setExcelError('');
+        setExcelErrorModalData(errorData);
+        setShowExcelErrorModal(true);
+      }
+    } catch (error) {
+      setExcelError(`Upload error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsUploadingExcel(false);
+    }
+  };
+
+  const handleCancelExcelUpload = () => {
+    setShowExcelUpload(false);
+    setExcelFile(null);
+    setExcelError('');
+    setErrorDetails(null);
+    setShowErrorDetails(false);
+  };
+
+  const handleCloseExcelErrorModal = () => {
+    setShowExcelErrorModal(false);
+    setExcelErrorModalData(null);
+  };
+
+  return (
+    <Layout userRole="Flightops" onLogout={handleLogout}>
+      <div className="space-y-4">
+        {/* Header Card */}
+        <div className="card-glass shadow-indigo border border-indigo-100">
+          <div className="p-2">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-indigo-gradient rounded-xl flex items-center justify-center shadow-indigo">
+                  <Calendar className="h-6 w-6 text-white"></Calendar>
+                </div>
+                <div>
+                  <h1 className="text-2xl font-bold text-gray-900 mb-1">
+                    URTI Leaves Management
+                  </h1>
+                  <p className="text-sm text-gray-600">
+                    Apply and track URTI leave applications for Crew Members.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="bg-gradient-to-r from-[#000099] to-blue-800 text-white px-4 sm:px-6 py-3 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105 whitespace-nowrap"
+                >
+                  Apply for Leave
+                </button>
+                <button
+                  onClick={() => setShowExcelUpload(true)}
+                  className="bg-gradient-to-r from-green-600 to-green-700 text-white px-4 sm:px-6 py-3 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105 whitespace-nowrap flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  Upload Excel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Statistics Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-indigo-100 p-4 text-center">
+            <div className="text-2xl font-bold text-[#000099]">
+              {stats.total}
+            </div>
+            <div className="text-sm text-gray-600 mt-1">Total Applications</div>
+          </div>
+          <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-amber-200 p-4 text-center">
+            <div className="text-2xl font-bold text-amber-600">
+              {stats.pending}
+            </div>
+            <div className="text-sm text-gray-600 mt-1">Pending</div>
+          </div>
+          <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-green-200 p-4 text-center">
+            <div className="text-2xl font-bold text-green-600">
+              {stats.approved}
+            </div>
+            <div className="text-sm text-gray-600 mt-1">Approved</div>
+          </div>
+          <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-red-200 p-4 text-center">
+            <div className="text-2xl font-bold text-red-600">
+              {stats.rejected}
+            </div>
+            <div className="text-sm text-gray-600 mt-1">Rejected</div>
+          </div>
+        </div>
+
+
+
+        {/* Search Bar and Filter */}
+        <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center">
+          <div
+            className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300 flex-1 ${searchKeyword.trim() !== ""
+                ? "shadow-[0_0_12px_4px_rgba(0,0,153,0.4)]"
+                : "shadow-[0_0_8px_2px_rgba(0,0,153,0.2)]"
+              }`}
+          >
+            <div className="relative bg-white rounded-full">
+              <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
+                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              <input
+                type="text"
+                value={searchKeyword}
+                onChange={(e) => setSearchKeyword(e.target.value)}
+                placeholder="Search by IGA-Code, Name, Status..."
+                className="w-full pl-12 pr-12 py-3 text-sm bg-transparent rounded-full focus:outline-none"
+              />
+              {searchKeyword && (
+                <button
+                  onClick={() => setSearchKeyword("")}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-red-500 transition-colors duration-200"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="relative">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className={`appearance-none px-4 py-3 pr-10 rounded-lg bg-white text-gray-900 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 min-w-32 ${statusFilter === "All"
+                  ? "border border-blue-500"
+                  : "border border-gray-300"
+                }`}
+            >
+              <option value="All">All</option>
+              <option value="Pending">Pending</option>
+              <option value="Approved">Approved</option>
+              <option value="Rejected">Rejected</option>
+            </select>
+            <div className="absolute right-2 sm:right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
+              <svg className="w-3 h-3 sm:w-4 sm:h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
+          <button
+            onClick={handleClearFilters}
+            className="px-4 py-3 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200 transition-colors whitespace-nowrap"
+          >
+            Clear
+          </button>
+        </div>
+
+        {/* Excel Upload Modal */}
+        {showExcelUpload && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" style={{overflow: 'hidden'}}>
+            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-green-600/20 w-full max-w-md max-h-[90vh] flex flex-col">
+              <div className="flex justify-between items-center p-6 border-b border-green-600/20 flex-shrink-0">
+                <h2 className="text-xl font-bold text-green-600">Upload Excel File</h2>
+                <button
+                  onClick={handleCancelExcelUpload}
+                  className="text-gray-400 hover:text-gray-600 text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto flex-1">
+                <div className="space-y-4">
+                  <div className="text-sm text-gray-600">
+                    <p className="mb-2 font-medium">Excel file requirements:</p>
+                    <ul className="list-disc list-inside space-y-1 text-xs">
+                      <li>Must have exactly 4 columns</li>
+                      <li>Column 1: IGA Code</li>
+                      <li>Column 2: Name</li>
+                      <li>Column 3: From Date (format: DD/MM/YYYY)</li>
+                      <li>Column 4: To Date (format: DD/MM/YYYY)</li>
+                      <li>No duplicate leave periods for the same person</li>
+                    </ul>
+                    <a
+                      href="/Leaves_sample.xlsx"
+                      download="Leaves_sample.xlsx"
+                      className="inline-flex items-center gap-2 mt-3 text-green-600 hover:text-green-700 font-medium text-sm hover:underline"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      Download Sample Excel Template
+                    </a>
+                  </div>
+
+                  <div className="border-2 border-dashed border-green-300 rounded-lg p-6 text-center">
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls"
+                      onChange={handleExcelUpload}
+                      className="hidden"
+                      id="excel-upload"
+                    />
+                    <label
+                      htmlFor="excel-upload"
+                      className="cursor-pointer flex flex-col items-center gap-2"
+                    >
+                      <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                      <span className="text-green-600 font-medium">
+                        {excelFile ? excelFile.name : 'Click to select Excel file'}
+                      </span>
+                    </label>
+                  </div>
+
+
+                </div>
+
+              </div>
+              <div className="flex gap-3 p-6 border-t border-green-600/20 flex-shrink-0">
+                <button
+                  onClick={processExcelFile}
+                  disabled={!excelFile || isUploadingExcel}
+                  className="flex-1 bg-gradient-to-r from-green-600 to-green-700 text-white px-4 py-3 rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-all duration-300 flex items-center justify-center gap-2"
+                >
+                  {isUploadingExcel ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      Uploading...
+                    </>
+                  ) : (
+                    'Upload & Process'
+                  )}
+                </button>
+                <button
+                  onClick={handleCancelExcelUpload}
+                  className="flex-1 bg-gray-500 text-white px-4 py-3 rounded-xl font-semibold hover:bg-gray-600 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Apply Leave Modal */}
+        {showForm && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-[#000099]/20 w-full max-w-2xl mx-2 sm:mx-0 h-[85vh] flex flex-col">
+              {/* Modal Header */}
+              <div className="flex justify-between items-center p-4 sm:p-6 border-b border-[#000099]/20">
+                <h2 className="text-xl font-bold text-[#000099]">
+                  Apply for Leave
+                </h2>
+                <button
+                  onClick={handleCancel}
+                  className="text-gray-400 hover:text-gray-600 text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-4 sm:p-6 flex-1 overflow-y-auto">
+                <div className="space-y-4">
+                  {/* Employee Search with Gradient Design */}
+                  <div className="relative group">
+                    <label className="block text-sm font-bold text-[#000099] mb-2">
+                      IGA Code <span className="text-red-500">*</span>
+                    </label>
+                    <div
+                      className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300 ${modalSearchKeyword.trim() !== ""
+                          ? "shadow-[0_0_12px_4px_rgba(0,0,153,0.4)]"
+                          : "shadow-[0_0_8px_2px_rgba(0,0,153,0.2)]"
+                        }`}
+                    >
+                      <div className="relative bg-white rounded-full">
+                        <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
+                          <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                          </svg>
+                        </div>
+                        <input
+                          type="text"
+                          value={modalSearchKeyword}
+                          onChange={(e) => {
+                            setModalSearchKeyword(e.target.value);
+                            if (e.target.value.trim() === "") {
+                              setFormData({ ...formData, selectedEmployee: "" });
+                              setSelectedCrewData(null);
+                              setApiSuggestions([]);
+                              setHasSearched(false);
+                              setBaseError("");
+                            }
+                          }}
+                          onKeyPress={handleKeyPress}
+                          placeholder="Search by IGA-Code.."
+                          className="w-full pl-12 pr-20 py-3 text-sm bg-transparent rounded-full focus:outline-none"
+                        />
+                        <button
+                          onClick={handleSearch}
+                          className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 text-[#000099] hover:text-blue-700 transition-colors duration-200"
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                          </svg>
+                        </button>
+                        {modalSearchKeyword && (
+                          <button
+                            onClick={() => {
+                              setModalSearchKeyword("");
+                              setApiSuggestions([]);
+                              setHasSearched(false);
+                            }}
+                            className="absolute right-10 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-red-500 transition-colors duration-200"
+                          >
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {(isLoadingApi || apiSuggestions.length > 0 || (!isLoadingApi && hasSearched && apiSuggestions.length === 0)) && (
+                      <div className="absolute top-full left-0 right-0 bg-white border border-gray-300 rounded-lg mt-1 max-h-48 overflow-y-auto z-10 shadow-lg">
+                        {isLoadingApi && (
+                          <div className="px-4 py-6 text-center">
+                            <div className="flex flex-col items-center justify-center gap-3">
+                              <div className="relative">
+                                <div className="animate-spin rounded-full h-10 w-10 border-4 border-[#000099]/20 border-t-[#000099]"></div>
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                  <div className="w-4 h-4 bg-[#000099] rounded-full animate-pulse"></div>
+                                </div>
+                              </div>
+                              <p className="text-sm text-gray-600 font-medium">Searching...</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* API Results */}
+                        {!isLoadingApi && apiSuggestions.length > 0 && (
+                          <>
+                            {apiSuggestions.map((crew, index) => (
+                              <button
+                                key={`api-${index}`}
+                                onClick={() => handleEmployeeSelect(crew.name || 'Unknown', crew)}
+                                className="w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors border-b border-gray-100 last:border-b-0"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex-1">
+                                    <div className="font-semibold text-gray-900 mb-1">
+                                      {crew.name || 'Unknown'}
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 text-xs">
+                                      <span className="bg-indigo-100 text-indigo-700 px-2 py-1 rounded font-medium">
+                                        IGA{crew.id || 'N/A'}
+                                      </span>
+                                      <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded font-medium">
+                                        {crew.base || 'N/A'}
+                                      </span>
+                                      <span className="bg-green-100 text-green-700 px-2 py-1 rounded font-medium">
+                                        {crew.designation || 'N/A'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </button>
+                            ))}
+                          </>
+                        )}
+
+                        {!isLoadingApi && hasSearched && apiSuggestions.length === 0 && (
+                          <div className="px-4 py-6 text-center">
+                            <div className="flex flex-col items-center gap-2">
+                              <svg className="w-12 h-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                              <p className="text-gray-500 font-medium">No employee found</p>
+                              <p className="text-xs text-gray-400">Try searching with a different IGA code</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Base Error Display - Always visible when there's an error */}
+                  {baseError && (
+                    <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-red-600 text-sm flex items-center gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                        {baseError}
+                      </p>
+                    </div>
+                  )}
+
+                  {formData.selectedEmployee && selectedCrewData && (
+                    <div className="mt-4 p-4 bg-gradient-to-r from-[#000099]/5 to-[#000099]/10 rounded-xl border border-[#000099]/20">
+                      <div className="flex items-start gap-3">
+                        <div className="w-12 h-12 bg-[#000099] rounded-full flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
+                          {formData.selectedEmployee.charAt(0)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-gray-900 mb-2 break-words">
+                            {selectedCrewData.name || formData.selectedEmployee}
+                          </div>
+                          <div className="flex flex-wrap gap-2 text-xs">
+                            <span className="bg-indigo-100 text-indigo-700 px-2 py-1 rounded font-medium whitespace-nowrap">
+                              IGA{selectedCrewData.id || 'N/A'}
+                            </span>
+                            <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded font-medium whitespace-nowrap">
+                              {selectedCrewData.base || 'N/A'}
+                            </span>
+                            <span className="bg-green-100 text-green-700 px-2 py-1 rounded font-medium whitespace-nowrap">
+                              {selectedCrewData.designation || 'N/A'}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setFormData({ ...formData, selectedEmployee: "" });
+                            setSelectedCrewData(null);
+                          }}
+                          className="text-gray-400 hover:text-red-500 transition-colors duration-200 p-1 flex-shrink-0"
+                        >
+                          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {errors.selectedEmployee && (
+                    <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      {errors.selectedEmployee}
+                    </p>
+                  )}
+
+
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+                    <div className="space-y-2">
+                      <label className="block text-sm font-bold text-[#000099] mb-2">
+                        Leave From <span className="text-red-500">*</span> <span className="text-xs font-normal text-gray-500">(DD/MM/YYYY)</span>
+                      </label>
+                      <div className="relative">
+                        <DatePicker
+                          selected={formData.leaveFrom}
+                          onChange={(date: Date | null) => setFormData({ ...formData, leaveFrom: date })}
+                          dateFormat="dd/MM/YYYY"
+                          placeholderText="Select date"
+                          maxDate={new Date()}
+                          popperClassName="!z-[9999999]"
+                          popperPlacement="top"
+                          portalId="root"
+                          className={`w-full px-3 py-3 border-2 rounded-xl text-[#000099] font-medium bg-gradient-to-r from-blue-50 to-indigo-50 focus:ring-2 focus:ring-[#000099] focus:border-[#000099] transition-all duration-300 ${errors.leaveFrom
+                              ? "border-red-500 bg-red-50"
+                              : "border-[#000099]/40 hover:border-[#000099]"
+                            }`}
+                          wrapperClassName="w-full"
+                        />
+                      </div>
+                      {errors.leaveFrom && (
+                        <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                          {errors.leaveFrom}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="block text-sm font-bold text-[#000099] mb-2">
+                        Leave To <span className="text-red-500">*</span> <span className="text-xs font-normal text-gray-500">(DD/MM/YYYY)</span>
+                      </label>
+                      <div className="relative">
+                        <DatePicker
+                          selected={formData.leaveTo}
+                          onChange={(date: Date | null) => setFormData({ ...formData, leaveTo: date })}
+                          dateFormat="dd/MM/YYYY"
+                          placeholderText="Select date"
+                          maxDate={new Date()}
+                          popperClassName="!z-[9999999]"
+                          popperPlacement="top"
+                          portalId="root"
+                          className={`w-full px-3 py-3 border-2 rounded-xl text-[#000099] font-medium bg-gradient-to-r from-blue-50 to-indigo-50 focus:ring-2 focus:ring-[#000099] focus:border-[#000099] transition-all duration-300 ${errors.leaveTo
+                              ? "border-red-500 bg-red-50"
+                              : "border-[#000099]/40 hover:border-[#000099]"
+                            }`}
+                          wrapperClassName="w-full"
+                        />
+                      </div>
+                      {errors.leaveTo && (
+                        <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                          {errors.leaveTo}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Duration Display */}
+                  <div className="space-y-2 mt-4">
+                    <label className="block text-sm font-bold text-[#000099]">
+                      Duration
+                    </label>
+                    <div className="px-4 py-4 border-2 border-[#000099]/30 rounded-xl bg-gradient-to-r from-[#000099]/5 to-blue-50 text-[#000099] font-bold text-center">
+                      {formData.leaveFrom && formData.leaveTo ? (
+                        <div className="flex items-center justify-center gap-2">
+                          <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <span className="text-lg">
+                            {calculateDays(formData.leaveFrom, formData.leaveTo)} day(s)
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-gray-500 font-normal">Select dates to calculate duration</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Modal Footer with Blue Submit Button */}
+              <div className="flex flex-col sm:flex-row gap-4 p-4 sm:p-6 border-t border-[#000099]/20 bg-white/95 rounded-b-2xl">
+                  <button
+                    onClick={handleAddLeave}
+                    disabled={isSubmitting}
+                    className="flex-1 bg-gradient-to-r from-[#000099] to-blue-600 text-white px-6 py-4 rounded-xl hover:from-blue-600 hover:to-[#000099] transition-all duration-300 font-bold shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center justify-center gap-2 text-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                        Submitting...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        Submit Application
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    className="flex-1 bg-gradient-to-r from-gray-500 to-gray-600 text-white px-6 py-4 rounded-xl hover:from-gray-600 hover:to-gray-700 transition-all duration-300 font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center justify-center gap-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+        )}
+
+        {/* Leave Applications Table */}
+        <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-[#000099]/20 overflow-hidden">
+          {/* Loading State */}
+          {isLoadingLeaves && (
+            <LoadingSpinner/>
+          )}
+
+          {/* Table Content */}
+          {!isLoadingLeaves && (
+            <div className="overflow-x-auto -mx-4 sm:mx-0">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gradient-to-r from-[#000099] to-[#000066] text-white">
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm">
+                      IGA Code
+                    </th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm">
+                      Name
+                    </th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden sm:table-cell">
+                      Duration
+                    </th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden md:table-cell">
+                      Leave Period
+                    </th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden lg:table-cell">
+                      Date Applied
+                    </th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden lg:table-cell">
+                      Applied By
+                    </th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden lg:table-cell">
+                      Reviewed By
+                    </th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden md:table-cell">Comment</th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm">Status</th>
+                    
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#000099]/10">
+                  {filteredLeaves.map((entry, idx) => (
+                    <tr
+                      key={idx}
+                      className="hover:bg-[#000099]/5 transition-all duration-200 group"
+                    >
+                      <td className="px-3 sm:px-6 py-4">
+                        <span className="font-mono text-xs sm:text-sm bg-[#000099]/10 text-[#000099] px-2 py-1 rounded-md border border-[#000099]/20">
+                          {entry.igaCode}
+                        </span>
+                      </td>
+                      <td className="px-3 sm:px-6 py-4">
+                        <div className="font-medium text-gray-900 group-hover:text-[#000099] transition-colors text-xs sm:text-sm">
+                          {entry.name}
+                        </div>
+                        <div className="sm:hidden text-xs text-gray-500 mt-1">
+                          {entry.duration} day{entry.duration !== 1 ? "s" : ""}
+                        </div>
+                        <div className="md:hidden text-xs mt-1">
+                          {entry.comment ? (
+                            <button
+                              onClick={() => {
+                                setSelectedComment(entry.comment);
+                                setShowCommentModal(true);
+                              }}
+                              className="text-blue-600 hover:text-blue-800 underline"
+                            >
+                              View Comment
+                            </button>
+                          ) : (
+                            <span className="text-gray-400">No comment</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden sm:table-cell">
+                        {entry.duration} day{entry.duration !== 1 ? "s" : ""}
+                      </td>
+                      <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden md:table-cell">
+                        {entry.leaveFrom} to {entry.leaveTo}
+                      </td>
+                      <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden lg:table-cell">
+                        {entry.date}
+                      </td>
+                      <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden lg:table-cell">
+                        {entry.createdBy ? 
+                          `${entry.createdBy.name} (IGA${entry.createdBy.iga_code})` : 
+                          '--'
+                        }
+                      </td>
+                      <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden lg:table-cell">
+                        {entry.statusUpdatedBy ? 
+                          `${entry.statusUpdatedBy.name} (IGA${entry.statusUpdatedBy.iga_code})` : 
+                          '--'
+                        }
+                      </td>
+                       <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden md:table-cell">
+                        {entry.comment ? (
+                          <button
+                            onClick={() => {
+                              setSelectedComment(entry.comment);
+                              setShowCommentModal(true);
+                            }}
+                            className="text-indigo-primary hover:text-blue-800 underline"
+                          >
+                            View Comment
+                          </button>
+                        ) : (
+                          <span className="text-gray-400">No comment</span>
+                        )}
+                      </td>
+                      <td className="px-3 sm:px-6 py-4">
+                        <span className={getBadgeClasses(entry.status)}>
+                          {entry.status}
+                        </span>
+                      </td>
+
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {filteredLeaves.length === 0 && (
+                <div className="text-center py-12 text-[#000099]/70">
+                  <div className="text-4xl mb-4"></div>
+                  <h3 className="text-lg font-medium text-[#000099] mb-2">
+                    No applications found
+                  </h3>
+                  <p className="text-[#000099]/70">
+                    Try adjusting your search criteria or use quick filters.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Comment Modal */}
+        {showCommentModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
+              <div className="flex justify-between items-center p-6 border-b flex-shrink-0">
+                <h2 className="text-xl font-bold text-gray-900">Comment</h2>
+                <button
+                  onClick={() => setShowCommentModal(false)}
+                  className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto flex-1">
+                <p className="text-gray-700 whitespace-pre-wrap break-words">{selectedComment}</p>
+              </div>
+              <div className="flex justify-end p-6 border-t flex-shrink-0">
+                <button
+                  onClick={() => setShowCommentModal(false)}
+                  className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Success Popup */}
+        {showSuccessPopup && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border-2 border-indigo-500">
+              <div className="p-6 text-center">
+                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <h2 className="text-xl font-bold text-gray-900 mb-2">Success!</h2>
+                <p className="text-gray-600 mb-6">{successMessage}</p>
+                <button
+                  onClick={() => setShowSuccessPopup(false)}
+                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Error Popup */}
+        {showErrorPopup && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border-2 border-red-500">
+              <div className="p-6 text-center">
+                <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <h2 className="text-xl font-bold text-red-600 mb-2">Duplicate Application</h2>
+                <p className="text-gray-700 mb-6">{errorMessage}</p>
+                <button
+                  onClick={() => setShowErrorPopup(false)}
+                  className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Excel Error Modal */}
+        {showExcelErrorModal && excelErrorModalData && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+              <div className="flex justify-between items-center p-6 border-b flex-shrink-0">
+                <h2 className="text-xl font-bold text-gray-900">Upload Results</h2>
+                <button
+                  onClick={handleCloseExcelErrorModal}
+                  className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto flex-1">
+                {excelErrorModalData.hasSuccess && (
+                  <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <span className="font-medium text-green-800">Success:</span>
+                    </div>
+                    <p className="text-green-700 mb-3">{excelErrorModalData.successMessage}</p>
+                    {excelErrorModalData.success_details && excelErrorModalData.success_details.length > 0 && (
+                      <div className="space-y-2 max-h-40 overflow-y-auto">
+                        {excelErrorModalData.success_details.map((success: any, index: number) => (
+                          <div key={index} className="text-xs bg-white p-2 rounded border border-green-200 break-words">
+                            <div className="font-medium text-green-800">Row {success.row_number}: IGA{success.iga_code}</div>
+                            <div className="text-green-700">{success.employee_name}</div>
+                            <div className="text-green-600">{success.leave_period} ({success.duration} days)</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {excelErrorModalData.error_details && excelErrorModalData.error_details.length > 0 && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-5 h-5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <span className="font-medium text-red-800">Errors:</span>
+                    </div>
+                    <p className="text-red-700 mb-3">{excelErrorModalData.message || 'Some records failed to upload'}</p>
+                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                      {excelErrorModalData.failed_details && excelErrorModalData.failed_details.length > 0 ? (
+                        excelErrorModalData.failed_details.map((failed: any, index: number) => (
+                          <div key={index} className="text-xs bg-white p-2 rounded border border-red-200 break-words">
+                            <div className="font-medium text-red-800">Row {failed.row_number}: IGA{failed.iga_code}</div>
+                            <div className="text-red-700">{failed.result.replace('validation_error: ', '')}</div>
+                          </div>
+                        ))
+                      ) : (
+                        excelErrorModalData.error_details.map((errorMsg: string, index: number) => (
+                          <div key={index} className="text-xs bg-white p-2 rounded border border-red-200 break-words">
+                            {errorMsg}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+                
+                {!excelErrorModalData.hasSuccess && !excelErrorModalData.error_details && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-5 h-5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <span className="font-medium text-red-800">Upload Failed:</span>
+                    </div>
+                    <p className="text-red-700">{excelErrorModalData.error || excelErrorModalData.message || 'Failed to upload Excel file'}</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-end p-6 border-t flex-shrink-0">
+                <button
+                  onClick={handleCloseExcelErrorModal}
+                  className="px-6 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </Layout>
+  );
+}
+
+export default FlightopsUrtiPage;
