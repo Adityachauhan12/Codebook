@@ -17,6 +17,9 @@ interface Leave {
   leaveFrom: string; // start_date from API (formatted)
   leaveTo: string; // end_date from API (formatted)
   duration: number; // duration_days from API
+  createdBy?: {name: string, iga_code: string} | null;
+  statusUpdatedBy?: {name: string, iga_code: string} | null;
+  createdAt?: string; // original created_at for sorting
 }
 
 interface FormData {
@@ -62,6 +65,8 @@ function FlightopsUrtiPage() {
   const [showExcelUpload, setShowExcelUpload] = useState(false);
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [excelError, setExcelError] = useState("");
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [errorDetails, setErrorDetails] = useState<any>(null);
   const [isUploadingExcel, setIsUploadingExcel] = useState(false);
   const [selectedCrewData, setSelectedCrewData] = useState<any>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -71,6 +76,11 @@ function FlightopsUrtiPage() {
   const [selectedComment, setSelectedComment] = useState("");
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+  const [baseError, setBaseError] = useState("");
+  const [showExcelErrorModal, setShowExcelErrorModal] = useState(false);
+  const [excelErrorModalData, setExcelErrorModalData] = useState<any>(null);
+  const [showErrorPopup, setShowErrorPopup] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const handleLogout = () => {
     localStorage.clear();
@@ -93,50 +103,62 @@ function FlightopsUrtiPage() {
     </div>
   );
   
+  // Fetch leaves data function
+  const fetchLeaves = async () => {
+    setIsLoadingLeaves(true);
+    try {
+      // Get base from localStorage or use default
+      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
+      const userBase = userInfo.user_base === 'CORP' ? 'DEL' : (userInfo.user_base || 'DEL');
+
+      const response = await fetch(
+        `${window.IFS_365_API_URL}/api/listLeaves?base=${userBase}`,
+        { cache: 'no-store' }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+
+        // Transform API response to match Leave interface
+        const transformedLeaves: Leave[] = data.map((item: any) => {
+          const igaCode = item.iga_code || '';
+          const formattedIgaCode = igaCode.startsWith('IGA') ? igaCode : `IGA${igaCode}`;
+
+          return {
+            name: item.employee_name || '',
+            date: item.created_at ? new Date(item.created_at).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
+            igaCode: formattedIgaCode,
+            comment: item.comment || '',
+            status: (item.status?.charAt(0).toUpperCase() + item.status?.slice(1)) as Leave['status'] || 'Pending',
+            leaveFrom: item.start_date ? new Date(item.start_date).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
+            leaveTo: item.end_date ? new Date(item.end_date).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
+            duration: item.duration_days || 0,
+            createdBy: item.created_by || null,
+            statusUpdatedBy: item.status_updated_by || null,
+            createdAt: item.created_at // Keep original date for sorting
+          };
+        });
+
+        // Sort by created_at date (latest first)
+        transformedLeaves.sort((a, b) => {
+          const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return dateB - dateA;
+        });
+
+        setLeaves(transformedLeaves);
+      } else {
+        console.error('Failed to fetch leaves:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error fetching leaves:', error);
+    } finally {
+      setIsLoadingLeaves(false);
+    }
+  };
+
   // Fetch leaves data on component mount
   useEffect(() => {
-    const fetchLeaves = async () => {
-      setIsLoadingLeaves(true);
-      try {
-        // Get base from localStorage or use default
-        const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
-        const userBase = userInfo.user_base === 'CORP' ? 'DEL' : (userInfo.user_base || 'DEL');
-
-        const response = await fetch(
-          `${window.IFS_365_API_URL}/api/listLeaves?base=${userBase}`
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-
-          // Transform API response to match Leave interface
-          const transformedLeaves: Leave[] = data.map((item: any) => {
-            const igaCode = item.iga_code || '';
-            const formattedIgaCode = igaCode.startsWith('IGA') ? igaCode : `IGA${igaCode}`;
-
-            return {
-              name: item.employee_name || '',
-              date: item.created_at ? new Date(item.created_at).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
-              igaCode: formattedIgaCode,
-              comment: item.comment || '',
-              status: (item.status?.charAt(0).toUpperCase() + item.status?.slice(1)) as Leave['status'] || 'Pending',
-              leaveFrom: item.start_date ? new Date(item.start_date).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
-              leaveTo: item.end_date ? new Date(item.end_date).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
-              duration: item.duration_days || 0
-            };
-          });
-
-          setLeaves(transformedLeaves);
-        } else {
-          console.error('Failed to fetch leaves:', response.statusText);
-        }
-      } catch (error) {
-        console.error('Error fetching leaves:', error);
-      } finally {
-        setIsLoadingLeaves(false);
-      }
-    };
-
     fetchLeaves();
   }, []);
 
@@ -171,6 +193,13 @@ function FlightopsUrtiPage() {
       return matchesKeyword && matchesStatus;
     });
 
+    // Sort filtered results by created_at date (latest first)
+    filtered.sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return dateB - dateA;
+    });
+
     setFilteredLeaves(filtered);
   }, [searchKeyword, leaves, statusFilter]);
 
@@ -184,7 +213,9 @@ function FlightopsUrtiPage() {
 
     setIsLoadingApi(true);
     try {
-      const response = await fetch(`${window.IFS_365_API_URL}/api/search_crew?iga=${igaCode}`);
+      const response = await fetch(`${window.IFS_365_API_URL}/api/search_crew?iga=${igaCode}`, {
+        cache: 'no-store'
+      });
       if (response.ok) {
         const result = await response.json();
         if (result.results?.success && result.results?.data) {
@@ -245,14 +276,21 @@ function FlightopsUrtiPage() {
 
   const validateForm = (): boolean => {
     const newErrors: Partial<Record<keyof FormData, string>> = {};
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
     if (!formData.selectedEmployee)
       newErrors.selectedEmployee = "Please select an employee";
 
     if (!formData.leaveFrom)
       newErrors.leaveFrom = "Leave from date is required";
+    else if (formData.leaveFrom > today)
+      newErrors.leaveFrom = "URTI leaves can only be applied for today or previous days";
 
-    if (!formData.leaveTo) newErrors.leaveTo = "Leave to date is required";
+    if (!formData.leaveTo) 
+      newErrors.leaveTo = "Leave to date is required";
+    else if (formData.leaveTo > today)
+      newErrors.leaveTo = "URTI leaves can only be applied for today or previous days";
 
     if (
       formData.leaveFrom &&
@@ -277,6 +315,8 @@ function FlightopsUrtiPage() {
       return;
     }
 
+
+
     setIsSubmitting(true);
 
     try {
@@ -287,55 +327,62 @@ function FlightopsUrtiPage() {
         return `${year}-${month}-${day}`;
       };
 
+      // ✅ Get logged-in user info for created_by
+      const userInfo = JSON.parse(localStorage.getItem("userInfo") || "{}");
+      const fullName = `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() || "Unknown";
+      const creator = {
+        name: fullName,
+        iga_code: userInfo.iga_code ?? userInfo.igaCode ?? "ADMIN"
+      };
+
       const requestBody = {
         iga_code: selectedCrewData.id?.toString() || "",
         employee_name: selectedCrewData.name || formData.selectedEmployee,
-        base: selectedCrewData.base || "",
+        base: selectedCrewData.base ?? "",
         start_date: formatDateForAPI(formData.leaveFrom),
         end_date: formatDateForAPI(formData.leaveTo),
         comment: "",
+        applied_by: creator.iga_code,
+        applied_by_name: creator.name,
+        approved_by: null,
+        rejected_by: null
       };
 
+      console.log('Request body:', requestBody);
 
       const response = await fetch(`${window.IFS_365_API_URL}/api/createLeave`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify(requestBody),
+        
       });
 
       console.log('🔵 Step 6: API response received:', { status: response.status, ok: response.ok });
 
       if (response.ok) {
         console.log('✅ Step 7: API call successful');
-        const duration = calculateDays(formData.leaveFrom, formData.leaveTo);
-        const igaId = selectedCrewData.id?.toString() || "";
-        const formattedIgaCode = igaId.startsWith("IGA") ? igaId : `IGA${igaId}`;
-        const newLeave: Leave = {
-          name: selectedCrewData.name || formData.selectedEmployee,
-          date: formatDate(new Date()),
-          igaCode: formattedIgaCode,
-          comment: "",
-          status: "Pending",
-          leaveFrom: formatDate(formData.leaveFrom),
-          leaveTo: formatDate(formData.leaveTo),
-          duration: duration,
-        };
-
-        setLeaves([newLeave, ...leaves]);
+        // Refresh leaves data
+        await fetchLeaves();
+        // Reset form
         setFormData({ selectedEmployee: "", leaveFrom: null, leaveTo: null });
         setErrors({});
         setModalSearchKeyword("");
         setSelectedCrewData(null);
         setShowForm(false);
+        // Show success popup
+        setSuccessMessage("Leave application submitted successfully!");
+        setShowSuccessPopup(true);
       } else {
         console.log('❌ Step 7: API call failed with status:', response.status);
         const errorData = await response.json().catch(() => ({}));
         console.log('❌ Error data:', errorData);
-        alert(`Failed to create leave: ${errorData.message || response.statusText}`);
+        setErrorMessage(`Failed to create leave: ${errorData.message || response.statusText}`);
+        setShowErrorPopup(true);
       }
     } catch (error) {
       console.error('❌ Step 8: Exception occurred:', error);
-      alert('Failed to create leave. Please try again.');
+      setErrorMessage('Failed to create leave. Please try again.');
+      setShowErrorPopup(true);
     } finally {
       console.log('🔵 Step 9: Cleanup - setting isSubmitting to false');
       setIsSubmitting(false);
@@ -354,6 +401,21 @@ function FlightopsUrtiPage() {
   };
 
   const handleEmployeeSelect = (employeeName: string, crewData?: any) => {
+    if (crewData) {
+      // Check if employee's base matches user's base
+      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
+      const userBase = userInfo.user_base === 'CORP' ? 'DEL' : (userInfo.user_base || 'DEL');
+      
+      if (crewData.base && crewData.base !== userBase) {
+        setBaseError(`You can only apply leaves for employees from your base (${userBase}). This employee is from ${crewData.base}.`);
+        // Close dropdown to show error message
+        setApiSuggestions([]);
+        setHasSearched(false);
+        return;
+      }
+    }
+    
+    setBaseError("");
     setFormData({ ...formData, selectedEmployee: employeeName });
     if (crewData) {
       setSelectedCrewData(crewData);
@@ -386,194 +448,8 @@ function FlightopsUrtiPage() {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
-      setExcelError('Please select an Excel file (.xlsx or .xls)');
-      return;
-    }
-
-    // Validate Excel structure using a library like xlsx
-    try {
-      const XLSX = await import('xlsx');
-      const arrayBuffer = await file.arrayBuffer();
-      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const data = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
-
-      // Check if file has data
-      if (data.length < 2) {
-        setExcelError('Excel file must contain headers and at least one data row');
-        return;
-      }
-
-      // Validate headers - should have exactly 4 specific columns (allow empty columns)
-      const headers = data[0] || [];
-      const nonEmptyHeaders = headers.filter(h => h !== null && h !== undefined && String(h).trim() !== '');
-      
-      if (nonEmptyHeaders.length !== 4) {
-        setExcelError(`Excel file must have exactly 4 columns: IGA Code, Employee Name, From Date, To Date. Found ${nonEmptyHeaders.length} non-empty columns.`);
-        return;
-      }
-
-      // Check header names (case-insensitive)
-      const expectedHeaders = ['iga code', 'employee name', 'from date', 'to date'];
-      const actualHeaders = nonEmptyHeaders.map(h => String(h).toLowerCase().trim());
-      
-      // Validate each required header exists
-      for (let i = 0; i < expectedHeaders.length; i++) {
-        const expected = expectedHeaders[i];
-        const actual = actualHeaders[i];
-        
-        if (!actual.includes(expected.replace(' ', '')) && 
-            !actual.includes(expected) &&
-            !actual.includes('from_date') && !actual.includes('to_date') &&
-            !actual.includes('fromdate') && !actual.includes('todate')) {
-          setExcelError(`Invalid column header at position ${i + 1}. Expected: "${expected.charAt(0).toUpperCase() + expected.slice(1)}" but got: "${nonEmptyHeaders[i]}"`);
-          return;
-        }
-      }
-
-      // Validate data rows
-      const validationErrors: string[] = [];
-      const leaveEntries: Array<{igaCode: string, name: string, leaveFrom: string, leaveTo: string}> = [];
-
-      for (let i = 1; i < data.length; i++) {
-        const row = data[i];
-        if (!row || row.length === 0) continue; // Skip empty rows
-
-        // Filter out empty cells to check actual data columns
-        const nonEmptyRow = row.filter(cell => cell !== null && cell !== undefined && String(cell).trim() !== '');
-        
-        if (nonEmptyRow.length === 0) continue; // Skip completely empty rows
-        
-        if (nonEmptyRow.length !== 4) {
-          validationErrors.push(`Row ${i + 1}: Must have exactly 4 data columns, found ${nonEmptyRow.length}`);
-          continue;
-        }
-
-        const [igaCode, employeeName, fromDate, toDate] = nonEmptyRow.map(cell => String(cell || '').trim());
-
-        // Validate IGA Code
-        if (!igaCode) {
-          validationErrors.push(`Row ${i + 1}: IGA Code is required`);
-          continue;
-        }
-
-        // Validate Employee Name
-        if (!employeeName) {
-          validationErrors.push(`Row ${i + 1}: Employee Name is required`);
-          continue;
-        }
-
-        // Validate From Date and To Date
-        if (!fromDate) {
-          validationErrors.push(`Row ${i + 1}: From Date is required`);
-          continue;
-        }
-
-        if (!toDate) {
-          validationErrors.push(`Row ${i + 1}: To Date is required`);
-          continue;
-        }
-
-        // Check date format (DD/MM/YYYY)
-        const dateRegex = /^\d{2}\/\d{2}\/\d{4}$/;
-        
-        if (!dateRegex.test(fromDate)) {
-          validationErrors.push(`Row ${i + 1}: From Date must be in format DD/MM/YYYY, got: ${fromDate}`);
-          continue;
-        }
-
-        if (!dateRegex.test(toDate)) {
-          validationErrors.push(`Row ${i + 1}: To Date must be in format DD/MM/YYYY, got: ${toDate}`);
-          continue;
-        }
-
-        const fromDateStr = fromDate;
-        const toDateStr = toDate;
-        
-        // Validate date format and parse dates
-        const parseDate = (dateStr: string): Date | null => {
-          const [day, month, year] = dateStr.split('/');
-          const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-          
-          // Check if date is valid
-          if (date.getDate() !== parseInt(day) || 
-              date.getMonth() !== parseInt(month) - 1 || 
-              date.getFullYear() !== parseInt(year)) {
-            return null;
-          }
-          return date;
-        };
-
-        const parsedFromDate = parseDate(fromDateStr);
-        const parsedToDate = parseDate(toDateStr);
-
-        if (!parsedFromDate) {
-          validationErrors.push(`Row ${i + 1}: Invalid 'From' date format: ${fromDateStr}. Must be DD/MM/YYYY`);
-          continue;
-        }
-
-        if (!parsedToDate) {
-          validationErrors.push(`Row ${i + 1}: Invalid 'To' date format: ${toDateStr}. Must be DD/MM/YYYY`);
-          continue;
-        }
-
-        // Check if from date is not greater than to date
-        if (parsedFromDate > parsedToDate) {
-          validationErrors.push(`Row ${i + 1}: Leave From date (${fromDateStr}) cannot be greater than Leave To date (${toDateStr})`);
-          continue;
-        }
-
-        leaveEntries.push({
-          igaCode,
-          name: employeeName,
-          leaveFrom: fromDateStr,
-          leaveTo: toDateStr
-        });
-      }
-
-      // Check for duplicate leave periods for the same person
-      const duplicateCheck = new Map<string, Array<{row: number, igaCode: string, name: string}>>();
-      
-      leaveEntries.forEach((entry, index) => {
-        const key = `${entry.igaCode.toUpperCase()}_${entry.leaveFrom}_${entry.leaveTo}`;
-        if (!duplicateCheck.has(key)) {
-          duplicateCheck.set(key, []);
-        }
-        duplicateCheck.get(key)?.push({
-          row: index + 2, // +2 because arrays are 0-indexed and we skip header
-          igaCode: entry.igaCode,
-          name: entry.name
-        });
-      });
-
-      duplicateCheck.forEach((entries, key) => {
-        if (entries.length > 1) {
-          const [, fromDateVal, toDateVal] = key.split('_');
-          const rowNumbers = entries.map(e => `Row ${e.row}`).join(', ');
-          validationErrors.push(`Duplicate leave period found for IGA ${entries[0].igaCode} (${entries[0].name}) from ${fromDateVal} to ${toDateVal} in: ${rowNumbers}`);
-        }
-      });
-
-      // If there are validation errors, show them
-      if (validationErrors.length > 0) {
-        setExcelError(`Invalid Excel format:\n${validationErrors.slice(0, 5).join('\n')}${validationErrors.length > 5 ? `\n... and ${validationErrors.length - 5} more errors` : ''}`);
-        return;
-      }
-
-      // Check if there's actual valid data after validation
-      if (leaveEntries.length === 0) {
-        setExcelError('No valid leave entries found in the Excel file. Please check your data and try again.');
-        return;
-      }
-
-      setExcelFile(file);
-      setExcelError('');
-    } catch (error) {
-      setExcelError('Failed to validate Excel file. Please ensure it\'s a valid Excel format.');
-      console.error('Excel validation error:', error);
-    }
+    setExcelFile(file);
+    setExcelError('');
   };
 
   const processExcelFile = async () => {
@@ -589,44 +465,48 @@ function FlightopsUrtiPage() {
       const response = await fetch(`${window.IFS_365_API_URL}/api/upload-leave-excel`, {
         method: 'POST',
         body: formData,
+        cache: 'no-store'
       });
 
       if (response.ok) {
         const result = await response.json();
-        setSuccessMessage(`Successfully uploaded ${result.count || 0} leave records`);
-        setShowSuccessPopup(true);
         
-        // Refresh the leaves list
-        const userBase = localStorage.getItem('userBase') || 'DEL';
-        const leavesResponse = await fetch(
-          `${window.IFS_365_API_URL}/api/listLeaves?base=${userBase}`
-        );
-        
-        if (leavesResponse.ok) {
-          const data = await leavesResponse.json();
-          const transformedLeaves: Leave[] = data.map((item: any) => {
-            const igaCode = item.iga_code || '';
-            const formattedIgaCode = igaCode.startsWith('IGA') ? igaCode : `IGA${igaCode}`;
-            return {
-              name: item.employee_name || '',
-              date: item.created_at ? new Date(item.created_at).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
-              igaCode: formattedIgaCode,
-              comment: item.comment || '',
-              status: (item.status?.charAt(0).toUpperCase() + item.status?.slice(1)) as Leave['status'] || 'Pending',
-              leaveFrom: item.start_date ? new Date(item.start_date).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
-              leaveTo: item.end_date ? new Date(item.end_date).toLocaleDateString('en-GB').replace(/\//g, '/') : '',
-              duration: item.duration_days || 0
-            };
-          });
-          setLeaves(transformedLeaves);
-        }
-        
+        // Close the upload modal first
         setShowExcelUpload(false);
         setExcelFile(null);
         setExcelError('');
+        
+        // Handle mixed success/error responses
+        const successCount = result.summary?.successful || 0;
+        if (successCount > 0 && result.error_details && result.error_details.length > 0) {
+          // Mixed result: some success, some errors
+          setExcelErrorModalData({
+            ...result,
+            hasSuccess: true,
+            successMessage: `Successfully uploaded ${successCount} leave records`
+          });
+          setShowExcelErrorModal(true);
+        } else if (successCount > 0) {
+          // Pure success
+          setSuccessMessage(`Successfully uploaded ${successCount} leave records`);
+          setShowSuccessPopup(true);
+        } else {
+          // Pure error
+          setExcelErrorModalData(result);
+          setShowExcelErrorModal(true);
+        }
+        
+        // Refresh data if any records were uploaded
+        if (successCount > 0) {
+          await fetchLeaves();
+        }
       } else {
         const errorData = await response.json().catch(() => ({}));
-        setExcelError(errorData.error || errorData.message || 'Failed to upload Excel file');
+        setShowExcelUpload(false);
+        setExcelFile(null);
+        setExcelError('');
+        setExcelErrorModalData(errorData);
+        setShowExcelErrorModal(true);
       }
     } catch (error) {
       setExcelError(`Upload error: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -639,6 +519,13 @@ function FlightopsUrtiPage() {
     setShowExcelUpload(false);
     setExcelFile(null);
     setExcelError('');
+    setErrorDetails(null);
+    setShowErrorDetails(false);
+  };
+
+  const handleCloseExcelErrorModal = () => {
+    setShowExcelErrorModal(false);
+    setExcelErrorModalData(null);
   };
 
   return (
@@ -775,9 +662,9 @@ function FlightopsUrtiPage() {
 
         {/* Excel Upload Modal */}
         {showExcelUpload && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-green-600/20 w-full max-w-md">
-              <div className="flex justify-between items-center p-6 border-b border-green-600/20">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" style={{overflow: 'hidden'}}>
+            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-green-600/20 w-full max-w-md max-h-[90vh] flex flex-col">
+              <div className="flex justify-between items-center p-6 border-b border-green-600/20 flex-shrink-0">
                 <h2 className="text-xl font-bold text-green-600">Upload Excel File</h2>
                 <button
                   onClick={handleCancelExcelUpload}
@@ -787,17 +674,16 @@ function FlightopsUrtiPage() {
                 </button>
               </div>
 
-              <div className="p-6">
+              <div className="p-6 overflow-y-auto flex-1">
                 <div className="space-y-4">
                   <div className="text-sm text-gray-600">
                     <p className="mb-2 font-medium">Excel file requirements:</p>
                     <ul className="list-disc list-inside space-y-1 text-xs">
-                      <li>Must have exactly 4 columns (empty columns are acceptable)</li>
+                      <li>Must have exactly 4 columns</li>
                       <li>Column 1: IGA Code</li>
-                      <li>Column 2: Employee Name</li>
+                      <li>Column 2: Name</li>
                       <li>Column 3: From Date (format: DD/MM/YYYY)</li>
                       <li>Column 4: To Date (format: DD/MM/YYYY)</li>
-                      <li>From Date cannot be greater than To Date</li>
                       <li>No duplicate leave periods for the same person</li>
                     </ul>
                     <a
@@ -833,36 +719,31 @@ function FlightopsUrtiPage() {
                     </label>
                   </div>
 
-                  {excelError && (
-                    <div className="text-red-500 text-sm bg-red-50 p-3 rounded-lg border border-red-200">
-                      <div className="font-medium mb-2">Upload Error:</div>
-                      <div className="whitespace-pre-line">{excelError}</div>
-                    </div>
-                  )}
+
                 </div>
 
-                <div className="flex gap-3 mt-6">
-                  <button
-                    onClick={processExcelFile}
-                    disabled={!excelFile || isUploadingExcel}
-                    className="flex-1 bg-gradient-to-r from-green-600 to-green-700 text-white px-4 py-3 rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-all duration-300 flex items-center justify-center gap-2"
-                  >
-                    {isUploadingExcel ? (
-                      <>
-                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                        Uploading...
-                      </>
-                    ) : (
-                      'Upload & Process'
-                    )}
-                  </button>
-                  <button
-                    onClick={handleCancelExcelUpload}
-                    className="flex-1 bg-gray-500 text-white px-4 py-3 rounded-xl font-semibold hover:bg-gray-600 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
+              </div>
+              <div className="flex gap-3 p-6 border-t border-green-600/20 flex-shrink-0">
+                <button
+                  onClick={processExcelFile}
+                  disabled={!excelFile || isUploadingExcel}
+                  className="flex-1 bg-gradient-to-r from-green-600 to-green-700 text-white px-4 py-3 rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-all duration-300 flex items-center justify-center gap-2"
+                >
+                  {isUploadingExcel ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      Uploading...
+                    </>
+                  ) : (
+                    'Upload & Process'
+                  )}
+                </button>
+                <button
+                  onClick={handleCancelExcelUpload}
+                  className="flex-1 bg-gray-500 text-white px-4 py-3 rounded-xl font-semibold hover:bg-gray-600 transition-colors"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           </div>
@@ -871,7 +752,7 @@ function FlightopsUrtiPage() {
         {/* Apply Leave Modal */}
         {showForm && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
-            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-[#000099]/20 w-full max-w-2xl max-h-[90vh] overflow-y-auto mx-2 sm:mx-0">
+            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-[#000099]/20 w-full max-w-2xl mx-2 sm:mx-0 h-[85vh] flex flex-col">
               {/* Modal Header */}
               <div className="flex justify-between items-center p-4 sm:p-6 border-b border-[#000099]/20">
                 <h2 className="text-xl font-bold text-[#000099]">
@@ -886,7 +767,7 @@ function FlightopsUrtiPage() {
               </div>
 
               {/* Modal Body */}
-              <div className="p-4 sm:p-6">
+              <div className="p-4 sm:p-6 flex-1 overflow-y-auto">
                 <div className="space-y-4">
                   {/* Employee Search with Gradient Design */}
                   <div className="relative group">
@@ -915,6 +796,7 @@ function FlightopsUrtiPage() {
                               setSelectedCrewData(null);
                               setApiSuggestions([]);
                               setHasSearched(false);
+                              setBaseError("");
                             }
                           }}
                           onKeyPress={handleKeyPress}
@@ -1009,6 +891,18 @@ function FlightopsUrtiPage() {
                     )}
                   </div>
 
+                  {/* Base Error Display - Always visible when there's an error */}
+                  {baseError && (
+                    <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-red-600 text-sm flex items-center gap-2">
+                        <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                        {baseError}
+                      </p>
+                    </div>
+                  )}
+
                   {formData.selectedEmployee && selectedCrewData && (
                     <div className="mt-4 p-4 bg-gradient-to-r from-[#000099]/5 to-[#000099]/10 rounded-xl border border-[#000099]/20">
                       <div className="flex items-start gap-3">
@@ -1055,6 +949,8 @@ function FlightopsUrtiPage() {
                     </p>
                   )}
 
+
+
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
                     <div className="space-y-2">
                       <label className="block text-sm font-bold text-[#000099] mb-2">
@@ -1066,8 +962,10 @@ function FlightopsUrtiPage() {
                           onChange={(date: Date | null) => setFormData({ ...formData, leaveFrom: date })}
                           dateFormat="dd/MM/YYYY"
                           placeholderText="Select date"
-                          popperClassName="z-50"
-                          popperPlacement="bottom-start"
+                          maxDate={new Date()}
+                          popperClassName="!z-[9999999]"
+                          popperPlacement="top"
+                          portalId="root"
                           className={`w-full px-3 py-3 border-2 rounded-xl text-[#000099] font-medium bg-gradient-to-r from-blue-50 to-indigo-50 focus:ring-2 focus:ring-[#000099] focus:border-[#000099] transition-all duration-300 ${errors.leaveFrom
                               ? "border-red-500 bg-red-50"
                               : "border-[#000099]/40 hover:border-[#000099]"
@@ -1095,8 +993,10 @@ function FlightopsUrtiPage() {
                           onChange={(date: Date | null) => setFormData({ ...formData, leaveTo: date })}
                           dateFormat="dd/MM/YYYY"
                           placeholderText="Select date"
-                          popperClassName="z-50"
-                          popperPlacement="bottom-start"
+                          maxDate={new Date()}
+                          popperClassName="!z-[9999999]"
+                          popperPlacement="top"
+                          portalId="root"
                           className={`w-full px-3 py-3 border-2 rounded-xl text-[#000099] font-medium bg-gradient-to-r from-blue-50 to-indigo-50 focus:ring-2 focus:ring-[#000099] focus:border-[#000099] transition-all duration-300 ${errors.leaveTo
                               ? "border-red-500 bg-red-50"
                               : "border-[#000099]/40 hover:border-[#000099]"
@@ -1137,8 +1037,10 @@ function FlightopsUrtiPage() {
                   </div>
                 </div>
 
-                {/* Modal Footer with Blue Submit Button */}
-                <div className="flex flex-col sm:flex-row gap-4 mt-6">
+              </div>
+
+              {/* Modal Footer with Blue Submit Button */}
+              <div className="flex flex-col sm:flex-row gap-4 p-4 sm:p-6 border-t border-[#000099]/20 bg-white/95 rounded-b-2xl">
                   <button
                     onClick={handleAddLeave}
                     disabled={isSubmitting}
@@ -1170,7 +1072,6 @@ function FlightopsUrtiPage() {
                 </div>
               </div>
             </div>
-          </div>
         )}
 
         {/* Leave Applications Table */}
@@ -1190,7 +1091,7 @@ function FlightopsUrtiPage() {
                       IGA Code
                     </th>
                     <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm">
-                      Employee Name
+                      Name
                     </th>
                     <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden sm:table-cell">
                       Duration
@@ -1200,6 +1101,12 @@ function FlightopsUrtiPage() {
                     </th>
                     <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden lg:table-cell">
                       Date Applied
+                    </th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden lg:table-cell">
+                      Applied By
+                    </th>
+                    <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden lg:table-cell">
+                      Reviewed By
                     </th>
                     <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm hidden md:table-cell">Comment</th>
                     <th className="px-3 sm:px-6 py-4 text-left font-semibold text-xs sm:text-sm">Status</th>
@@ -1248,6 +1155,18 @@ function FlightopsUrtiPage() {
                       </td>
                       <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden lg:table-cell">
                         {entry.date}
+                      </td>
+                      <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden lg:table-cell">
+                        {entry.createdBy ? 
+                          `${entry.createdBy.name} (IGA${entry.createdBy.iga_code})` : 
+                          '--'
+                        }
+                      </td>
+                      <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden lg:table-cell">
+                        {entry.statusUpdatedBy ? 
+                          `${entry.statusUpdatedBy.name} (IGA${entry.statusUpdatedBy.iga_code})` : 
+                          '--'
+                        }
                       </td>
                        <td className="px-3 sm:px-6 py-4 text-xs sm:text-sm font-medium text-gray-900 hidden md:table-cell">
                         {entry.comment ? (
@@ -1321,7 +1240,7 @@ function FlightopsUrtiPage() {
         {/* Success Popup */}
         {showSuccessPopup && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border-2 border-indigo-500">
               <div className="p-6 text-center">
                 <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                   <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1332,9 +1251,121 @@ function FlightopsUrtiPage() {
                 <p className="text-gray-600 mb-6">{successMessage}</p>
                 <button
                   onClick={() => setShowSuccessPopup(false)}
-                  className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                 >
                   OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Error Popup */}
+        {showErrorPopup && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border-2 border-red-500">
+              <div className="p-6 text-center">
+                <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <h2 className="text-xl font-bold text-red-600 mb-2">Duplicate Application</h2>
+                <p className="text-gray-700 mb-6">{errorMessage}</p>
+                <button
+                  onClick={() => setShowErrorPopup(false)}
+                  className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Excel Error Modal */}
+        {showExcelErrorModal && excelErrorModalData && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+              <div className="flex justify-between items-center p-6 border-b flex-shrink-0">
+                <h2 className="text-xl font-bold text-gray-900">Upload Results</h2>
+                <button
+                  onClick={handleCloseExcelErrorModal}
+                  className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto flex-1">
+                {excelErrorModalData.hasSuccess && (
+                  <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <span className="font-medium text-green-800">Success:</span>
+                    </div>
+                    <p className="text-green-700 mb-3">{excelErrorModalData.successMessage}</p>
+                    {excelErrorModalData.success_details && excelErrorModalData.success_details.length > 0 && (
+                      <div className="space-y-2 max-h-40 overflow-y-auto">
+                        {excelErrorModalData.success_details.map((success: any, index: number) => (
+                          <div key={index} className="text-xs bg-white p-2 rounded border border-green-200 break-words">
+                            <div className="font-medium text-green-800">Row {success.row_number}: IGA{success.iga_code}</div>
+                            <div className="text-green-700">{success.employee_name}</div>
+                            <div className="text-green-600">{success.leave_period} ({success.duration} days)</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {excelErrorModalData.error_details && excelErrorModalData.error_details.length > 0 && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-5 h-5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <span className="font-medium text-red-800">Errors:</span>
+                    </div>
+                    <p className="text-red-700 mb-3">{excelErrorModalData.message || 'Some records failed to upload'}</p>
+                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                      {excelErrorModalData.failed_details && excelErrorModalData.failed_details.length > 0 ? (
+                        excelErrorModalData.failed_details.map((failed: any, index: number) => (
+                          <div key={index} className="text-xs bg-white p-2 rounded border border-red-200 break-words">
+                            <div className="font-medium text-red-800">Row {failed.row_number}: IGA{failed.iga_code}</div>
+                            <div className="text-red-700">{failed.result.replace('validation_error: ', '')}</div>
+                          </div>
+                        ))
+                      ) : (
+                        excelErrorModalData.error_details.map((errorMsg: string, index: number) => (
+                          <div key={index} className="text-xs bg-white p-2 rounded border border-red-200 break-words">
+                            {errorMsg}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+                
+                {!excelErrorModalData.hasSuccess && !excelErrorModalData.error_details && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-5 h-5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <span className="font-medium text-red-800">Upload Failed:</span>
+                    </div>
+                    <p className="text-red-700">{excelErrorModalData.error || excelErrorModalData.message || 'Failed to upload Excel file'}</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-end p-6 border-t flex-shrink-0">
+                <button
+                  onClick={handleCloseExcelErrorModal}
+                  className="px-6 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+                >
+                  Close
                 </button>
               </div>
             </div>
