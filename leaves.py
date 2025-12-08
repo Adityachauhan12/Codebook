@@ -52,6 +52,15 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
             if filters.get('base'):
                 where_conditions.append('base = @base')
                 params['base'] = filters['base']
+            if filters.get('search'):
+                where_conditions.append('LOWER(employee_name) LIKE LOWER(@search)')
+                params['search'] = f"%{filters['search']}%"
+            if filters.get('date_from'):
+                where_conditions.append('DATE(created_at) >= @date_from')
+                params['date_from'] = filters['date_from']
+            if filters.get('date_to'):
+                where_conditions.append('DATE(created_at) <= @date_to')
+                params['date_to'] = filters['date_to']
         
         where_clause = 'WHERE ' + ' AND '.join(where_conditions) if where_conditions else ''
         
