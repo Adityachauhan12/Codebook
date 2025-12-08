@@ -1,120 +1,410 @@
-curl -X POST "http://127.0.0.1:8003/api/createLeave" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "iga_code": "40001",
-    "employee_name": "John Doe",
-    "base": "DEL",
-    "start_date": "2024-12-01",
-    "end_date": "2024-12-05",
-    "comment": "Personal leave",
-    "applied_by": "ADMIN",
-    "applied_by_name": "Admin User"
-  }'
-
-curl -X POST "http://127.0.0.1:8003/api/createLeave" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "iga_code": "40001",
-    "employee_name": "Jane Smith",
-    "base": "DEL",
-    "start_date": "2024-12-02",
-    "end_date": "2024-12-04",
-    "comment": "Medical leave",
-    "applied_by": "ADMIN",
-    "applied_by_name": "Admin User"
-  }'
-
-curl -X GET "http://127.0.0.1:8003/api/listLeaves?page=1&page_size=10&iga_code=40001"
-curl -X POST "http://127.0.0.1:8003/api/createLeave" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "iga_code": "40002",
-    "employee_name": "Bob Wilson",
-    "base": "BOM",
-    "start_date": "2024-12-02",
-    "end_date": "2024-12-04",
-    "comment": "Vacation",
-    "applied_by": "ADMIN",
-    "applied_by_name": "Admin User"
-  }'
-
-curl -X 'POST' \
-  'http://127.0.0.1:8002/api/createLeave' \
-  -H 'accept: application/json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "iga_code": "IGA1111",
-  "employee_name": "John Doe",
-  "base": "DEL",
-  "start_date": "2025-12-02",
-  "end_date": "2025-12-03",
-  "comment": "ok",
-  "applied_by": "Ankit Yadav",
-  "applied_by_name": "IGA0001"
-}'
-Request URL
-http://127.0.0.1:8002/api/createLeave
-Server response
-Code	Details
-400
-Undocumented
-Error: Bad Request
-
-Response body
-Download
 {
-  "detail": "Leave dates overlap with existing records for IGA IGA1111: ID: f2c8c007-36e9-437c-9083-5bccc27398e2, Dates: 2025-12-01 to 2025-12-04"
+  "data": [
+    {
+      "id": "4947e4b0-18c6-40d7-b1d2-f912c14f185f",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-12-06",
+      "end_date": "2025-12-06",
+      "duration_days": 1,
+      "comment": "ki",
+      "status": "rejected",
+      "approved_by": null,
+      "created_at": "2025-12-08T08:10:04.896135+00:00",
+      "updated_at": "2025-12-08T08:10:34.204600+00:00",
+      "created_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      },
+      "status_updated_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      }
+    },
+    {
+      "id": "91d467ce-23b7-4e9c-867e-2dba07067742",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-11-21",
+      "end_date": "2025-11-22",
+      "duration_days": 2,
+      "comment": "hiii",
+      "status": "approved",
+      "approved_by": null,
+      "created_at": "2025-12-08T07:47:11.260329+00:00",
+      "updated_at": "2025-12-08T07:48:13.194139+00:00",
+      "created_by": {
+        "name": "Ankit Yadav",
+        "iga_code": "93872"
+      },
+      "status_updated_by": {
+        "name": "Ankit Yadav",
+        "iga_code": "93872"
+      }
+    },
+    {
+      "id": "46184903-573a-4969-b1bd-17cca8e9e4e7",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-11-14",
+      "end_date": "2025-11-15",
+      "duration_days": 2,
+      "comment": "",
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T10:06:19.114384+00:00",
+      "updated_at": "2025-12-05T10:06:19.114384+00:00",
+      "created_by": {
+        "name": "Ankit Yadav",
+        "iga_code": "93872"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "61a89bf2-88d1-4f31-b19e-45f39c1e0191",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2013-11-14",
+      "end_date": "2013-11-15",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T10:04:41.312601+00:00",
+      "updated_at": "2025-12-05T10:04:41.312601+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "f2c8c007-36e9-437c-9083-5bccc27398e2",
+      "iga_code": "IGA1111",
+      "employee_name": "John Doe",
+      "base": "DEL",
+      "start_date": "2025-12-01",
+      "end_date": "2025-12-04",
+      "duration_days": 4,
+      "comment": "ok",
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T09:40:21.679010+00:00",
+      "updated_at": "2025-12-05T09:40:21.679010+00:00",
+      "created_by": {
+        "name": "IGA94030",
+        "iga_code": "Aditya Chauhan"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "de26417f-278d-45d9-849c-cc10de661a44",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2013-11-12",
+      "end_date": "2013-11-13",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T09:30:43.556301+00:00",
+      "updated_at": "2025-12-05T09:30:43.556301+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "17de87d1-09f3-4e71-849e-34b5f708d32f",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-10-01",
+      "end_date": "2025-10-07",
+      "duration_days": 7,
+      "comment": "APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPR",
+      "status": "approved",
+      "approved_by": null,
+      "created_at": "2025-12-05T07:26:54.217814+00:00",
+      "updated_at": "2025-12-05T07:28:10.892480+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      }
+    },
+    {
+      "id": "c5878da1-48be-427a-9411-ed3cdfb7e619",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-12-04",
+      "end_date": "2025-12-05",
+      "duration_days": 2,
+      "comment": "",
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T07:11:54.310138+00:00",
+      "updated_at": "2025-12-05T07:11:54.310138+00:00",
+      "created_by": {
+        "name": "Ankit Yadav",
+        "iga_code": "93872"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "3c76c076-dd76-4845-8e8f-58bc7ef8ba8c",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-11-02",
+      "end_date": "2025-11-05",
+      "duration_days": 4,
+      "comment": "",
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T07:03:51.501040+00:00",
+      "updated_at": "2025-12-05T07:03:51.501040+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "5b4f83f6-e6b8-450e-a093-9d9c2b8a4195",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-11-03",
+      "end_date": "2025-11-05",
+      "duration_days": 3,
+      "comment": " REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  ",
+      "status": "rejected",
+      "approved_by": null,
+      "created_at": "2025-12-05T07:03:19.107387+00:00",
+      "updated_at": "2025-12-05T07:31:15.530426+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      }
+    },
+    {
+      "id": "ee41ecfe-edee-4e4d-a14c-6602110aea46",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-11-02",
+      "end_date": "2025-11-05",
+      "duration_days": 4,
+      "comment": "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
+      "status": "rejected",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:54:45.659405+00:00",
+      "updated_at": "2025-12-05T07:02:01.160079+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      }
+    },
+    {
+      "id": "3e7d9ab3-9b45-48c6-9ed9-03beebe7ddbc",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2011-10-04",
+      "end_date": "2011-10-05",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:07:23.769453+00:00",
+      "updated_at": "2025-12-05T06:07:23.769453+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "c4c76282-b05d-4d82-928e-6c499647aac0",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2011-10-02",
+      "end_date": "2011-10-03",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:07:21.222896+00:00",
+      "updated_at": "2025-12-05T06:07:21.222896+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "24538f8b-5d34-4ff3-958d-994b6a6a6a17",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2011-10-31",
+      "end_date": "2011-11-01",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:07:18.878200+00:00",
+      "updated_at": "2025-12-05T06:07:18.878200+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "d3bae00e-d1b7-433f-8581-41d85d0e8fca",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2011-10-29",
+      "end_date": "2011-10-30",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:07:16.646627+00:00",
+      "updated_at": "2025-12-05T06:07:16.646627+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "dffeefb7-ebf4-43e7-b391-c90d40e37121",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2011-10-27",
+      "end_date": "2011-10-28",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:07:14.246091+00:00",
+      "updated_at": "2025-12-05T06:07:14.246091+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "6f7afda2-9bde-49ba-a747-1fcc3ccb1bd9",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2011-10-25",
+      "end_date": "2011-10-26",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:07:11.988434+00:00",
+      "updated_at": "2025-12-05T06:07:11.988434+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "dae6b4a0-0b56-4c96-8605-49db86a58558",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2011-10-23",
+      "end_date": "2011-10-24",
+      "duration_days": 2,
+      "comment": " REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  REJECTT  ",
+      "status": "rejected",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:07:09.719332+00:00",
+      "updated_at": "2025-12-05T07:31:44.592831+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      }
+    },
+    {
+      "id": "8e4eefca-b762-4997-87e7-4b8a1b6d605a",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2011-10-21",
+      "end_date": "2011-10-22",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:07:07.301815+00:00",
+      "updated_at": "2025-12-05T06:07:07.301815+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "e67cee47-98ca-4feb-8470-27c68d9becb2",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2011-10-19",
+      "end_date": "2011-10-20",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T06:07:04.875300+00:00",
+      "updated_at": "2025-12-05T06:07:04.875300+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "page_size": 20,
+    "total_records": 322,
+    "total_pages": 17,
+    "has_next": true,
+    "has_prev": false
+  }
 }
-but getting error in pagination api GET
-/api/listLeaves
-List Leaves
-
-Parameters
-Cancel
-Name	Description
-page
-integer
-(query)
-1
-minimum: 1
-page_size
-integer
-(query)
-20
-maximum: 100
-minimum: 1
-base
-string | (string | null)
-(query)
-DEL
-status
-string | (string | null)
-(query)
-status
-iga_code
-string | (string | null)
-(query)
-IGA1111
-Execute
-Clear
-Responses
-Curl
-
-curl -X 'GET' \
-  'http://127.0.0.1:8002/api/listLeaves?page=1&page_size=20&base=DEL&iga_code=IGA1111' \
-  -H 'accept: application/json'
-Request URL
-http://127.0.0.1:8002/api/listLeaves?page=1&page_size=20&base=DEL&iga_code=IGA1111
-Server response
-Code	Details
-500
-Undocumented
-Error: Internal Server Error
-
-Response body
-Download
-{
-  "detail": "400 LIMIT expects an integer literal or parameter at [5:15]; reason: invalidQuery, location: query, message: LIMIT expects an integer literal or parameter at [5:15]\n\nLocation: asia-south1\nJob ID: 11764bde-8dbf-4668-9507-37b3f5423d45\n"
-}    also have to make the 400 msg dates in dd-mm-yyyy format 
-
-
