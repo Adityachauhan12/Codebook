@@ -64,11 +64,6 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
         
         where_clause = 'WHERE ' + ' AND '.join(where_conditions) if where_conditions else ''
         
-        # Count total records
-        count_sql = f"SELECT COUNT(*) as total FROM `{table_ref()}` {where_clause}"
-        count_result = query_rows(count_sql, params)
-        total_records = count_result[0]['total'] if count_result else 0
-        
         # Get status counts (excluding status filter for summary cards)
         status_where_conditions = [c for c in where_conditions if 'status' not in c.lower()]
         status_where_clause = 'WHERE ' + ' AND '.join(status_where_conditions) if status_where_conditions else ''
@@ -76,11 +71,11 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
         
         status_count_sql = f"""
         SELECT 
-            status,
+            LOWER(status) as status,
             COUNT(*) as count
         FROM `{table_ref()}`
         {status_where_clause}
-        GROUP BY status
+        GROUP BY LOWER(status)
         """
         status_counts_result = query_rows(status_count_sql, status_params)
         status_counts = {
@@ -89,9 +84,14 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
             'rejected': 0
         }
         for row in status_counts_result:
-            status_key = row['status'].lower()
+            status_key = row['status']
             if status_key in status_counts:
                 status_counts[status_key] = row['count']
+        
+        # Count total records using SAME filters as status_counts (excluding status filter)
+        count_sql = f"SELECT COUNT(*) as total FROM `{table_ref()}` {status_where_clause}"
+        count_result = query_rows(count_sql, status_params)
+        total_records = count_result[0]['total'] if count_result else 0
         
         # If search is active, return all results without pagination
         if is_search_active:
