@@ -69,6 +69,30 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
         count_result = query_rows(count_sql, params)
         total_records = count_result[0]['total'] if count_result else 0
         
+        # Get status counts (excluding status filter for summary cards)
+        status_where_conditions = [c for c in where_conditions if 'status' not in c.lower()]
+        status_where_clause = 'WHERE ' + ' AND '.join(status_where_conditions) if status_where_conditions else ''
+        status_params = {k: v for k, v in params.items() if k != 'status'}
+        
+        status_count_sql = f"""
+        SELECT 
+            status,
+            COUNT(*) as count
+        FROM `{table_ref()}`
+        {status_where_clause}
+        GROUP BY status
+        """
+        status_counts_result = query_rows(status_count_sql, status_params)
+        status_counts = {
+            'pending': 0,
+            'approved': 0,
+            'rejected': 0
+        }
+        for row in status_counts_result:
+            status_key = row['status'].lower()
+            if status_key in status_counts:
+                status_counts[status_key] = row['count']
+        
         # If search is active, return all results without pagination
         if is_search_active:
             data_sql = f"""
@@ -88,7 +112,8 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
                     'total_pages': 1,
                     'has_next': False,
                     'has_prev': False
-                }
+                },
+                'status_counts': status_counts
             }
         
         # Normal pagination when no search
@@ -112,7 +137,8 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
                 'total_pages': (total_records + page_size - 1) // page_size,
                 'has_next': page * page_size < total_records,
                 'has_prev': page > 1
-            }
+            },
+            'status_counts': status_counts
         }
     except Exception as e:
         logger.error(f"Error in paginated query: {e}")
