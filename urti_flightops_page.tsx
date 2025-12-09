@@ -3,6 +3,7 @@ import Layout from "../../components/Layout";
 import { Calendar } from "lucide-react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
+import { useUserData } from "../../hooks/useUserData";
 
 /**
  * Leave interface representing a leave application
@@ -31,6 +32,7 @@ interface FormData {
 }
 
 function FlightopsUrtiPage() {
+  const { getUserInfo, clearUser } = useUserData();
   const calculateDays = (fromDate: Date, toDate: Date): number => {
     const timeDiff = toDate.getTime() - fromDate.getTime();
     return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
@@ -81,10 +83,21 @@ function FlightopsUrtiPage() {
   const [excelErrorModalData, setExcelErrorModalData] = useState<any>(null);
   const [showErrorPopup, setShowErrorPopup] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [statusCounts, setStatusCounts] = useState<{
+    pending: number;
+    approved: number;
+    rejected: number;
+  }>({
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+  });
 
   const handleLogout = () => {
-    localStorage.clear();
-    window.location.href = "/";
+    clearUser();
   };
 
 
@@ -104,23 +117,36 @@ function FlightopsUrtiPage() {
   );
   
   // Fetch leaves data function
-  const fetchLeaves = async () => {
+  const fetchLeaves = async (page: number = 1, search: string = '') => {
     setIsLoadingLeaves(true);
     try {
-      // Get base from localStorage or use default
-      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
-      const userBase = userInfo.user_base === 'CORP' ? 'DEL' : (userInfo.user_base || 'DEL');
+      // Get base from UserContext or use default
+      const userInfo = getUserInfo();
+      const userBase = userInfo?.user_base === 'CORP' ? 'DEL' : (userInfo?.user_base || 'DEL');
+
+      const params = new URLSearchParams({
+        base: userBase,
+        page: page.toString()
+      });
+      
+      if (search.trim()) {
+        params.append('search', search.trim());
+      }
+      
+      if (statusFilter !== 'All') {
+        params.append('status', statusFilter.toLowerCase());
+      }
 
       const response = await fetch(
-        `${window.IFS_365_API_URL}/api/listLeaves?base=${userBase}`,
+        `${window.IFS_365_API_URL}/api/listLeaves?${params.toString()}`,
         { cache: 'no-store' }
       );
 
       if (response.ok) {
-        const data = await response.json();
+        const response_data = await response.json();
 
         // Transform API response to match Leave interface
-        const transformedLeaves: Leave[] = data.map((item: any) => {
+        const transformedLeaves: Leave[] = (response_data.data || []).map((item: any) => {
           const igaCode = item.iga_code || '';
           const formattedIgaCode = igaCode.startsWith('IGA') ? igaCode : `IGA${igaCode}`;
 
@@ -147,6 +173,22 @@ function FlightopsUrtiPage() {
         });
 
         setLeaves(transformedLeaves);
+        
+        // Set pagination data
+        if (response_data.pagination) {
+          setCurrentPage(response_data.pagination.page);
+          setTotalPages(response_data.pagination.total_pages);
+          setTotalRecords(response_data.pagination.total_records);
+        }
+
+        // Set status counts from API
+        if (response_data.status_counts) {
+          setStatusCounts({
+            pending: response_data.status_counts.pending || 0,
+            approved: response_data.status_counts.approved || 0,
+            rejected: response_data.status_counts.rejected || 0,
+          });
+        }
       } else {
         console.error('Failed to fetch leaves:', response.statusText);
       }
@@ -157,17 +199,35 @@ function FlightopsUrtiPage() {
     }
   };
 
+  // Pagination handlers
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    fetchLeaves(page, searchKeyword);
+  };
+
+  const handlePrevPage = () => {
+    if (currentPage > 1) {
+      handlePageChange(currentPage - 1);
+    }
+  };
+
+  const handleNextPage = () => {
+    if (currentPage < totalPages) {
+      handlePageChange(currentPage + 1);
+    }
+  };
+
   // Fetch leaves data on component mount
   useEffect(() => {
-    fetchLeaves();
+    fetchLeaves(1, searchKeyword);
   }, []);
 
   // Statistics
   const stats = {
-    total: leaves.length,
-    pending: leaves.filter((l) => l.status === "Pending").length,
-    approved: leaves.filter((l) => l.status === "Approved").length,
-    rejected: leaves.filter((l) => l.status === "Rejected").length,
+    total: statusCounts.pending + statusCounts.approved + statusCounts.rejected,
+    pending: statusCounts.pending,
+    approved: statusCounts.approved,
+    rejected: statusCounts.rejected,
     thisMonth: leaves.filter(
       (l) => new Date(l.date).getMonth() === new Date().getMonth()
     ).length,
@@ -176,32 +236,20 @@ function FlightopsUrtiPage() {
       .reduce((sum, l) => sum + l.duration, 0),
   };
 
-  // Apply search filter for main table
+  // Trigger search when searchKeyword or statusFilter changes
   useEffect(() => {
-    const keyword = searchKeyword.trim().toLowerCase();
+    const timeoutId = setTimeout(() => {
+      setCurrentPage(1);
+      fetchLeaves(1, searchKeyword);
+    }, 300); // Debounce search by 300ms
 
-    const filtered = leaves.filter((entry) => {
-      const matchesKeyword =
-        !keyword ||
-        entry.name.toLowerCase().includes(keyword) ||
-        normalizeSearch(keyword, entry.igaCode) ||
-        entry.status.toLowerCase().includes(keyword);
+    return () => clearTimeout(timeoutId);
+  }, [searchKeyword, statusFilter]);
 
-      const matchesStatus =
-        statusFilter === "All" || entry.status === statusFilter;
-
-      return matchesKeyword && matchesStatus;
-    });
-
-    // Sort filtered results by created_at date (latest first)
-    filtered.sort((a, b) => {
-      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return dateB - dateA;
-    });
-
-    setFilteredLeaves(filtered);
-  }, [searchKeyword, leaves, statusFilter]);
+  // Set filteredLeaves to leaves since filtering is now done server-side
+  useEffect(() => {
+    setFilteredLeaves(leaves);
+  }, [leaves]);
 
   // API search function for crew data
   const searchCrewByIGA = async (igaCode: string) => {
@@ -328,11 +376,11 @@ function FlightopsUrtiPage() {
       };
 
       // ✅ Get logged-in user info for created_by
-      const userInfo = JSON.parse(localStorage.getItem("userInfo") || "{}");
-      const fullName = `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() || "Unknown";
+      const userInfo = getUserInfo();
+      const fullName = `${userInfo?.first_name || ''} ${userInfo?.last_name || ''}`.trim() || "Unknown";
       const creator = {
         name: fullName,
-        iga_code: userInfo.iga_code ?? userInfo.igaCode ?? "ADMIN"
+        iga_code: userInfo?.iga_code || ""
       };
 
       const requestBody = {
@@ -376,7 +424,14 @@ function FlightopsUrtiPage() {
         console.log('❌ Step 7: API call failed with status:', response.status);
         const errorData = await response.json().catch(() => ({}));
         console.log('❌ Error data:', errorData);
-        setErrorMessage(`Failed to create leave: ${errorData.message || response.statusText}`);
+        
+        // Clean up error message to remove all IDs
+        let errorMsg = errorData.detail || errorData.message || `Failed to create leave: ${response.statusText}`;
+        if (errorMsg.includes('ID:')) {
+          errorMsg = errorMsg.replace(/ID: [^,]+, /g, '').replace(/; ;/g, ';');
+        }
+        
+        setErrorMessage(errorMsg);
         setShowErrorPopup(true);
       }
     } catch (error) {
@@ -397,14 +452,15 @@ function FlightopsUrtiPage() {
     setSelectedCrewData(null);
     setApiSuggestions([]);
     setHasSearched(false);
+    setBaseError("");
     setShowForm(false);
   };
 
   const handleEmployeeSelect = (employeeName: string, crewData?: any) => {
     if (crewData) {
       // Check if employee's base matches user's base
-      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
-      const userBase = userInfo.user_base === 'CORP' ? 'DEL' : (userInfo.user_base || 'DEL');
+      const userInfo = getUserInfo();
+      const userBase = userInfo?.user_base === 'CORP' ? 'DEL' : (userInfo?.user_base || 'DEL');
       
       if (crewData.base && crewData.base !== userBase) {
         setBaseError(`You can only apply leaves for employees from your base (${userBase}). This employee is from ${crewData.base}.`);
@@ -1205,6 +1261,75 @@ function FlightopsUrtiPage() {
                   </p>
                 </div>
               )}
+            </div>
+          )}
+          
+          {/* Pagination */}
+          {!isLoadingLeaves && totalPages > 1 && (
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+              <div className="text-sm text-gray-700">
+                Showing page {currentPage} of {totalPages} ({totalRecords} total records)
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handlePageChange(1)}
+                  disabled={currentPage === 1}
+                  className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  First
+                </button>
+                <button
+                  onClick={handlePrevPage}
+                  disabled={currentPage === 1}
+                  className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                    
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => handlePageChange(pageNum)}
+                        className={`px-3 py-2 text-sm font-medium rounded-md ${
+                          currentPage === pageNum
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-gray-500 bg-white border border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                </div>
+                
+                <button
+                  onClick={handleNextPage}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+                <button
+                  onClick={() => handlePageChange(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Last
+                </button>
+              </div>
             </div>
           )}
         </div>
