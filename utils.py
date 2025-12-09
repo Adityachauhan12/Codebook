@@ -1,40 +1,3 @@
-@app.post("/api/createLeave")
-def create_leave(request: LeaveRequest):
-    start_date_obj = datetime.strptime(request.start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(request.end_date, "%Y-%m-%d")
-    duration_days = (end_date_obj - start_date_obj).days + 1
- 
-    record = {
-        "iga_code": request.iga_code,
-        "employee_name": request.employee_name,
-        "base": request.base,
-        "start_date": request.start_date,
-        "end_date": request.end_date,
-        "duration_days": duration_days,
-        "comment": request.comment,
-        "status": "pending",
-        "created_by": {"name": request.applied_by_name or "Unknown", "iga_code": request.applied_by or "ADMIN"},
-        "status_updated_by": None
-    }
- 
-    logger.info(f"Creating leave request for {request.iga_code} from {request.start_date} to {request.end_date}")
-    try:
-        leave_id = upsert_leave_record(record)
-        logger.info(f"Leave request created successfully with ID {leave_id}")
-        return {
-            "message": "Leave request created successfully",
-            "id": leave_id,
-            "status": "pending",
-            "created_by": record["created_by"],
-            "status_updated_by": None
-        }
-    except ValueError as e:
-        logger.error(f"Validation error creating leave request: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error creating leave request: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
- 
 @app.get("/api/listLeaves")
 def list_leaves(
     page: int = Query(1, ge=1),
@@ -46,15 +9,49 @@ def list_leaves(
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None)
 ):
-    filters = {k: v for k, v in {"base": base, "status": status, "iga_code": iga_code, "search": search, "date_from": date_from, "date_to": date_to}.items() if v}
+    """
+    Returns:
+      {
+        "data": [...],
+        "pagination": { page, page_size, total_records, total_pages, has_next, has_prev },
+        "status_counts": { pending, approved, rejected }
+      }
+    All WHERE filters are applied consistently to counts, except that status_counts
+    deliberately ignores any incoming `status` filter so the cards can show the
+    distribution within the filtered set.
+    """
+    filters = {
+        k: v for k, v in {
+            "base": base,
+            "status": (status.lower() if status else None),  # normalize for consistency
+            "iga_code": iga_code,
+            "search": search,
+            "date_from": date_from,
+            "date_to": date_to
+        }.items() if v
+    }
+
     logger.info(f"Listing leaves with filters: {filters}, page: {page}, page_size: {page_size}")
     try:
+        # This already builds identical WHEREs for data and total_records
+        # and a status_counts query that drops the 'status' filter.
         result = query_paginated_leaves(page, page_size, filters)
-        logger.info(f"Found {result['pagination']['total_records']} total leave records")
+
+        # 🔒 Defensive: If any upstream rows have weird case, normalize before returning
+        # (keeps UI labels consistent; does NOT change DB)
+        fixed_counts = {
+            'pending': int(result.get('status_counts', {}).get('pending', 0)),
+            'approved': int(result.get('status_counts', {}).get('approved', 0)),
+            'rejected': int(result.get('status_counts', {}).get('rejected', 0)),
+        }
+        result['status_counts'] = fixed_counts
+
+        # Return the original object shape expected by Admin analytics cards
         return result
     except Exception as e:
         logger.error(f"Error listing leaves: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
  
 @app.get("/api/list_leaves_analytics")
 def list_leaves_analytics(
