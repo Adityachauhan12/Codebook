@@ -1,115 +1,424 @@
-def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Query leaves with pagination support"""
-    try:
-        # Build WHERE clause from filters
-        where_conditions = []
-        params = {}
-        is_search_active = False
-
-        if filters:
-            if filters.get('iga_code'):
-                where_conditions.append('iga_code = @iga_code')
-                params['iga_code'] = filters['iga_code']
-            if filters.get('status'):
-                where_conditions.append('status = @status')
-                params['status'] = filters['status']
-            if filters.get('base'):
-                where_conditions.append('base = @base')
-                params['base'] = filters['base']
-            if filters.get('search'):
-                where_conditions.append('LOWER(employee_name) LIKE LOWER(@search)')
-                params['search'] = f"%{filters['search']}%"
-                is_search_active = True
-            if filters.get('date_from'):
-                where_conditions.append('DATE(created_at) >= @date_from')
-                params['date_from'] = filters['date_from']
-            if filters.get('date_to'):
-                where_conditions.append('DATE(created_at) <= @date_to')
-                params['date_to'] = filters['date_to']
-
-        where_clause = 'WHERE ' + ' AND '.join(where_conditions) if where_conditions else ''
-
-        # FIX: Count total records WITH all active filters
-        count_sql = f"SELECT COUNT(*) as total FROM `{table_ref()}` {where_clause}"
-        count_result = query_rows(count_sql, params)
-        total_records = count_result[0]['total'] if count_result else 0
-
-        # Get status counts (excluding status filter for summary cards - ONLY this one)
-        status_where_conditions = [c for c in where_conditions if 'status' not in c.lower()]
-        status_where_clause = 'WHERE ' + ' AND '.join(status_where_conditions) if status_where_conditions else ''
-        status_params = {k: v for k, v in params.items() if k != 'status'}
-        
-        status_count_sql = f"""
-        SELECT
-            status,
-            COUNT(*) as count
-        FROM `{table_ref()}`
-        {status_where_clause}
-        GROUP BY status
-        """
-        
-        status_counts_result = query_rows(status_count_sql, status_params)
-        status_counts = {
-            'pending': 0,
-            'approved': 0,
-            'rejected': 0
-        }
-        
-        for row in status_counts_result:
-            status_key = row['status'].lower()
-            if status_key in status_counts:
-                status_counts[status_key] = row['count']
-
-        # If search is active, return all results without pagination
-        if is_search_active:
-            data_sql = f"""
-            SELECT * FROM `{table_ref()}`
-            {where_clause}
-            ORDER BY created_at DESC
-            """
-            records = query_rows(data_sql, params)
-            decoded_records = decode_json_fields(records)
-            return {
-                'data': decoded_records,
-                'pagination': {
-                    'page': 1,
-                    'page_size': total_records,
-                    'total_records': total_records,
-                    'total_pages': 1,
-                    'has_next': False,
-                    'has_prev': False
-                },
-                'status_counts': status_counts
-            }
-
-        # Normal pagination when no search
-        offset = (page - 1) * page_size
-        data_sql = f"""
-        SELECT * FROM `{table_ref()}`
-        {where_clause}
-        ORDER BY created_at DESC
-        LIMIT @page_size OFFSET @offset
-        """
-        
-        params['page_size'] = page_size
-        params['offset'] = offset
-        
-        records = query_rows(data_sql, params)
-        decoded_records = decode_json_fields(records)
-
-        return {
-            'data': decoded_records,
-            'pagination': {
-                'page': page,
-                'page_size': page_size,
-                'total_records': total_records,  # This now respects ALL filters including status
-                'total_pages': (total_records + page_size - 1) // page_size,
-                'has_next': page * page_size < total_records,
-                'has_prev': page > 1
-            },
-            'status_counts': status_counts
-        }
-
-    except Exception as e:
-        logger.error(f"Error in paginated query: {e}")
-        raise
+{
+  "data": [
+    {
+      "id": "108cfc30-4b63-4a69-a1e6-470027cfa927",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-10-29",
+      "end_date": "2025-10-30",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-09T10:30:04.854414+00:00",
+      "updated_at": "2025-12-09T10:30:04.854414+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "7b4eeb74-d68e-4e29-8007-2ea544c4e2df",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-10-23",
+      "end_date": "2025-10-24",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-09T10:30:00.778787+00:00",
+      "updated_at": "2025-12-09T10:30:00.778787+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "75617ac9-9a5c-47b8-8ffa-b265b7862cc4",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-10-21",
+      "end_date": "2025-10-22",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-09T10:29:56.689051+00:00",
+      "updated_at": "2025-12-09T10:29:56.689051+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "9c87f309-0462-4ec2-b0b9-1856f683aeb6",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-10-19",
+      "end_date": "2025-10-20",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-09T10:29:51.937720+00:00",
+      "updated_at": "2025-12-09T10:29:51.937720+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "3175d775-b3d5-4727-b0f5-039b5a1ff881",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-04-27",
+      "end_date": "2025-04-27",
+      "duration_days": 1,
+      "comment": "no",
+      "status": "rejected",
+      "approved_by": null,
+      "created_at": "2025-12-09T07:57:22.451432+00:00",
+      "updated_at": "2025-12-09T07:57:42.005019+00:00",
+      "created_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      },
+      "status_updated_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      }
+    },
+    {
+      "id": "a52a7e6f-fabf-47b2-a29c-5873fb7b6f27",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-06-29",
+      "end_date": "2025-07-29",
+      "duration_days": 31,
+      "comment": "yes",
+      "status": "approved",
+      "approved_by": null,
+      "created_at": "2025-12-09T06:46:21.572133+00:00",
+      "updated_at": "2025-12-09T06:46:43.987569+00:00",
+      "created_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      },
+      "status_updated_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      }
+    },
+    {
+      "id": "4bcfdc11-6610-43b1-9f48-19c05331869b",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-12-09",
+      "end_date": "2025-12-09",
+      "duration_days": 1,
+      "comment": "koo",
+      "status": "rejected",
+      "approved_by": null,
+      "created_at": "2025-12-09T06:42:11.832549+00:00",
+      "updated_at": "2025-12-09T06:42:56.000521+00:00",
+      "created_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      },
+      "status_updated_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      }
+    },
+    {
+      "id": "15f9b5f8-e3c8-4ca9-933b-48773d21fb40",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-12-08",
+      "end_date": "2025-12-08",
+      "duration_days": 1,
+      "comment": "kk",
+      "status": "approved",
+      "approved_by": null,
+      "created_at": "2025-12-09T05:57:40.249411+00:00",
+      "updated_at": "2025-12-09T05:58:25.362823+00:00",
+      "created_by": {
+        "name": "Unknown",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      }
+    },
+    {
+      "id": "7ce9b888-92c4-47fb-8526-e55c7d78de8d",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-10-26",
+      "end_date": "2025-10-28",
+      "duration_days": 3,
+      "comment": "qqqqqq",
+      "status": "approved",
+      "approved_by": null,
+      "created_at": "2025-12-09T05:17:50.176678+00:00",
+      "updated_at": "2025-12-09T05:24:54.150831+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": {
+        "name": "Unknown",
+        "iga_code": "ADMIN"
+      }
+    },
+    {
+      "id": "599bfa10-5426-4b1d-beea-d4c4451c9ecc",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-08-14",
+      "end_date": "2025-08-14",
+      "duration_days": 1,
+      "comment": ".",
+      "status": "approved",
+      "approved_by": null,
+      "created_at": "2025-12-09T05:12:33.955538+00:00",
+      "updated_at": "2025-12-09T06:30:45.385229+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": {
+        "name": "Unknown",
+        "iga_code": "ADMIN"
+      }
+    },
+    {
+      "id": "64476c93-19c4-489f-a3b2-e048923d4416",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-08-12",
+      "end_date": "2025-08-13",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-09T04:59:18.320141+00:00",
+      "updated_at": "2025-12-09T04:59:18.320141+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "4947e4b0-18c6-40d7-b1d2-f912c14f185f",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-12-06",
+      "end_date": "2025-12-06",
+      "duration_days": 1,
+      "comment": "ki",
+      "status": "rejected",
+      "approved_by": null,
+      "created_at": "2025-12-08T08:10:04.896135+00:00",
+      "updated_at": "2025-12-08T08:10:34.204600+00:00",
+      "created_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      },
+      "status_updated_by": {
+        "name": "Anirban De",
+        "iga_code": "93872"
+      }
+    },
+    {
+      "id": "91d467ce-23b7-4e9c-867e-2dba07067742",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-11-21",
+      "end_date": "2025-11-22",
+      "duration_days": 2,
+      "comment": "hiii",
+      "status": "approved",
+      "approved_by": null,
+      "created_at": "2025-12-08T07:47:11.260329+00:00",
+      "updated_at": "2025-12-08T07:48:13.194139+00:00",
+      "created_by": {
+        "name": "Ankit Yadav",
+        "iga_code": "93872"
+      },
+      "status_updated_by": {
+        "name": "Ankit Yadav",
+        "iga_code": "93872"
+      }
+    },
+    {
+      "id": "46184903-573a-4969-b1bd-17cca8e9e4e7",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-11-14",
+      "end_date": "2025-11-15",
+      "duration_days": 2,
+      "comment": "",
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T10:06:19.114384+00:00",
+      "updated_at": "2025-12-05T10:06:19.114384+00:00",
+      "created_by": {
+        "name": "Ankit Yadav",
+        "iga_code": "93872"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "61a89bf2-88d1-4f31-b19e-45f39c1e0191",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2013-11-14",
+      "end_date": "2013-11-15",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T10:04:41.312601+00:00",
+      "updated_at": "2025-12-05T10:04:41.312601+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "f2c8c007-36e9-437c-9083-5bccc27398e2",
+      "iga_code": "IGA1111",
+      "employee_name": "John Doe",
+      "base": "DEL",
+      "start_date": "2025-12-01",
+      "end_date": "2025-12-04",
+      "duration_days": 4,
+      "comment": "ok",
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T09:40:21.679010+00:00",
+      "updated_at": "2025-12-05T09:40:21.679010+00:00",
+      "created_by": {
+        "name": "IGA94030",
+        "iga_code": "Aditya Chauhan"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "de26417f-278d-45d9-849c-cc10de661a44",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2013-11-12",
+      "end_date": "2013-11-13",
+      "duration_days": 2,
+      "comment": null,
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T09:30:43.556301+00:00",
+      "updated_at": "2025-12-05T09:30:43.556301+00:00",
+      "created_by": {
+        "name": "Jatin Agarwal",
+        "iga_code": "ADMIN"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "17de87d1-09f3-4e71-849e-34b5f708d32f",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-10-01",
+      "end_date": "2025-10-07",
+      "duration_days": 7,
+      "comment": "APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPROVE APPR",
+      "status": "approved",
+      "approved_by": null,
+      "created_at": "2025-12-05T07:26:54.217814+00:00",
+      "updated_at": "2025-12-05T07:28:10.892480+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      }
+    },
+    {
+      "id": "c5878da1-48be-427a-9411-ed3cdfb7e619",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-12-04",
+      "end_date": "2025-12-05",
+      "duration_days": 2,
+      "comment": "",
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T07:11:54.310138+00:00",
+      "updated_at": "2025-12-05T07:11:54.310138+00:00",
+      "created_by": {
+        "name": "Ankit Yadav",
+        "iga_code": "93872"
+      },
+      "status_updated_by": null
+    },
+    {
+      "id": "3c76c076-dd76-4845-8e8f-58bc7ef8ba8c",
+      "iga_code": "32743",
+      "employee_name": "Mukherjee, Shriya",
+      "base": "DEL",
+      "start_date": "2025-11-02",
+      "end_date": "2025-11-05",
+      "duration_days": 4,
+      "comment": "",
+      "status": "pending",
+      "approved_by": null,
+      "created_at": "2025-12-05T07:03:51.501040+00:00",
+      "updated_at": "2025-12-05T07:03:51.501040+00:00",
+      "created_by": {
+        "name": "Simran Chibber",
+        "iga_code": "1001"
+      },
+      "status_updated_by": null
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "page_size": 20,
+    "total_records": 333,
+    "total_pages": 17,
+    "has_next": true,
+    "has_prev": false
+  },
+  "status_counts": {
+    "pending": 221,
+    "approved": 1,
+    "rejected": 29
+  }
+}
