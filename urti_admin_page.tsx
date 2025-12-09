@@ -3,6 +3,7 @@ import Layout from "../../components/Layout";
 import { Calendar } from "lucide-react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
+import { useUserData } from "../../hooks/useUserData";
 
 interface LeaveRecord {
   id: string;
@@ -40,6 +41,7 @@ interface Attendance {
 }
 
 const AdminUrtiPage: React.FC = () => {
+  const { getUserInfo, clearUser } = useUserData();
   const [attendances, setAttendances] = useState<Attendance[]>([]);
   const [selectedBase, setSelectedBase] = useState("All");
   const [dateFilter, setDateFilter] = useState("All");
@@ -73,11 +75,20 @@ const AdminUrtiPage: React.FC = () => {
   const [showCommentModal, setShowCommentModal] = useState(false);
   const [selectedComment, setSelectedComment] = useState("");
   const [isShowingRejectionReason, setIsShowingRejectionReason] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [statusCounts, setStatusCounts] = useState<{
+    pending: number;
+    approved: number;
+    rejected: number;
+  }>({
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+  });
 
-  const handleLogout = () => {
-    localStorage.clear();
-    window.location.href = "/";
-  };
+
 
   // Format API date (YYYY-MM-DD or ISO) to DD-MM-YYYY
   const formatApiDateToDisplay = (dateString: string): string => {
@@ -109,21 +120,17 @@ const AdminUrtiPage: React.FC = () => {
     try {
       setActionLoading(leaveId);
 
-      // Get actual user info from localStorage
-      const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
-      const fullName = `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() || "Unknown";
-      const igaCode = userInfo.iga_code ?? userInfo.igaCode ?? "ADMIN";
-
-      // Get token from localStorage
-      const token = localStorage.getItem('token') || localStorage.getItem('authToken');
+      // Get actual user info from UserContext
+      const userInfo = getUserInfo();
+      const fullName = userInfo ? `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() || "Unknown" : "Unknown";
+      const igaCode = userInfo?.iga_code || "";
       
       const response = await fetch(
         `${window.IFS_365_API_URL}/api/ApproveRejectLeave/${leaveId}`,
         {
           method: "PATCH",
           headers: {
-            "Content-Type": "application/json",
-            ...(token && { "Authorization": `Bearer ${token}` })
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({
             status: action === "approved" ? 1 : 0,
@@ -148,7 +155,7 @@ const AdminUrtiPage: React.FC = () => {
       const result = await response.json();
 
       // Refresh data after status update
-      await fetchLeaveData();
+      await fetchLeaveData(currentPage, searchKeyword);
 
       return result;
     } catch (error) {
@@ -160,7 +167,7 @@ const AdminUrtiPage: React.FC = () => {
   };
 
   // API function to fetch leave data
-  const fetchLeaveData = async () => {
+  const fetchLeaveData = async (page: number = 1, search: string = '') => {
     try {
       setIsLoadingData(true);
       const params = new URLSearchParams();
@@ -171,10 +178,33 @@ const AdminUrtiPage: React.FC = () => {
       if (appliedFilters.statusFilter !== "All") {
         params.append("status", appliedFilters.statusFilter.toLowerCase());
       }
+      if (search.trim()) {
+        params.append("search", search.trim());
+      }
+      
+      // Add date filters
+      if (appliedFilters.dateFilter === "Last Week") {
+        const weekAgo = new Date();
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        params.append("date_from", weekAgo.toISOString().split('T')[0]);
+      } else if (appliedFilters.dateFilter === "Last Month") {
+        const monthAgo = new Date();
+        monthAgo.setMonth(monthAgo.getMonth() - 1);
+        params.append("date_from", monthAgo.toISOString().split('T')[0]);
+      } else if (appliedFilters.dateFilter === "Last 30 Days") {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        params.append("date_from", thirtyDaysAgo.toISOString().split('T')[0]);
+      } else if (appliedFilters.dateFilter === "Custom" && appliedFilters.customFromDate) {
+        params.append("date_from", appliedFilters.customFromDate.toISOString().split('T')[0]);
+        if (appliedFilters.customToDate) {
+          params.append("date_to", appliedFilters.customToDate.toISOString().split('T')[0]);
+        }
+      }
+      
+      params.append("page", page.toString());
 
-      const url = `${window.IFS_365_API_URL}/api/listLeaves${
-        params.toString() ? `?${params.toString()}` : ""
-      }`;
+      const url = `${window.IFS_365_API_URL}/api/listLeaves?${params.toString()}`;
 
       const response = await fetch(url,{
         cache: 'no-store'
@@ -182,7 +212,8 @@ const AdminUrtiPage: React.FC = () => {
 
       if (!response.ok) throw new Error("Failed to fetch leave data");
 
-      const data: LeaveRecord[] = await response.json();
+      const response_data = await response.json();
+      const data: LeaveRecord[] = response_data.data || [];
 
       // Transform API data to match component interface
       const transformedData: Attendance[] = data.map((leave: any) => {
@@ -209,10 +240,44 @@ const AdminUrtiPage: React.FC = () => {
       });
 
       setAttendances(transformedData);
+      
+      // Set pagination data
+      if (response_data.pagination) {
+        setCurrentPage(response_data.pagination.page);
+        setTotalPages(response_data.pagination.total_pages);
+        setTotalRecords(response_data.pagination.total_records);
+      }
+
+      // Set status counts from API
+      if (response_data.status_counts) {
+        setStatusCounts({
+          pending: response_data.status_counts.pending || 0,
+          approved: response_data.status_counts.approved || 0,
+          rejected: response_data.status_counts.rejected || 0,
+        });
+      }
     } catch (error) {
       console.error("Error fetching leave data:", error);
     } finally {
       setIsLoadingData(false);
+    }
+  };
+
+  // Pagination handlers
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    fetchLeaveData(page, searchKeyword);
+  };
+
+  const handlePrevPage = () => {
+    if (currentPage > 1) {
+      handlePageChange(currentPage - 1);
+    }
+  };
+
+  const handleNextPage = () => {
+    if (currentPage < totalPages) {
+      handlePageChange(currentPage + 1);
     }
   };
 
@@ -391,8 +456,19 @@ const AdminUrtiPage: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchLeaveData();
-  }, [appliedFilters.selectedBase, appliedFilters.statusFilter]);
+    setCurrentPage(1); // Reset to first page when filters change
+    fetchLeaveData(1, searchKeyword);
+  }, [appliedFilters.selectedBase, appliedFilters.statusFilter, appliedFilters.dateFilter, appliedFilters.customFromDate, appliedFilters.customToDate]);
+
+  // Trigger search when searchKeyword changes
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setCurrentPage(1);
+      fetchLeaveData(1, searchKeyword);
+    }, 300); // Debounce search by 300ms
+
+    return () => clearTimeout(timeoutId);
+  }, [searchKeyword]);
 
   useEffect(
     () => applyFiltersToData(),
@@ -422,7 +498,7 @@ const AdminUrtiPage: React.FC = () => {
   }, [showCommentModal]);
 
   return (
-    <Layout userRole="Admin" onLogout={handleLogout}>
+    <Layout userRole="Admin">
       {/* Modal Popup */}
       {modal.show && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -593,11 +669,19 @@ const AdminUrtiPage: React.FC = () => {
 
           {/* Stats */}
           <div className="flex gap-3 ml-auto">
+            {appliedFilters.statusFilter === "All" && (
+              <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+                <div className="text-xs font-bold text-indigo-primary">Total</div>
+                <div className="text-lg font-extrabold text-indigo-primary">
+                  {statusCounts.pending + statusCounts.approved + statusCounts.rejected}
+                </div>
+              </div>
+            )}
             {(appliedFilters.statusFilter === "All" || appliedFilters.statusFilter === "Pending") && (
               <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
                 <div className="text-xs font-bold text-amber-600">Pending</div>
                 <div className="text-lg font-extrabold text-amber-600">
-                  {filteredAttendances.filter((a) => a.status === "Pending").length}
+                  {statusCounts.pending}
                 </div>
               </div>
             )}
@@ -607,7 +691,7 @@ const AdminUrtiPage: React.FC = () => {
                   Approved
                 </div>
                 <div className="text-lg font-extrabold text-[rgb(139,170,21)]">
-                  {filteredAttendances.filter((a) => a.status === "Approved").length}
+                  {statusCounts.approved}
                 </div>
               </div>
             )}
@@ -617,7 +701,7 @@ const AdminUrtiPage: React.FC = () => {
                   Rejected
                 </div>
                 <div className="text-lg font-extrabold text-[rgb(224,107,20)]">
-                  {filteredAttendances.filter((a) => a.status === "Rejected").length}
+                  {statusCounts.rejected}
                 </div>
               </div>
             )}
@@ -639,6 +723,7 @@ const AdminUrtiPage: React.FC = () => {
                 onChange={(date: Date | null) => setCustomFromDate(date)}
                 dateFormat="dd/MM/yyyy"
                 placeholderText="Select date"
+                maxDate={new Date()}
                 className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
                 wrapperClassName="w-full"
                 popperClassName="z-50"
@@ -657,6 +742,7 @@ const AdminUrtiPage: React.FC = () => {
                 dateFormat="dd/MM/yyyy"
                 placeholderText="Select date"
                 minDate={customFromDate || undefined}
+                maxDate={new Date()}
                 className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
                 wrapperClassName="w-full"
                 popperClassName="z-50"
@@ -770,16 +856,15 @@ const AdminUrtiPage: React.FC = () => {
                       Applied By
                     </th>
                     <th className="px-6 py-4 text-left font-semibold">
-                      Reviewed By
-                    </th>
-                    <th className="px-6 py-4 text-left font-semibold">
                       Status
                     </th>
-                    <th className="px-6 py-4 text-left font-semibold">
+                    <th className="px-6 py-4 text-left font-semibold min-w-[200px]">
                       Comment
                     </th>
                     <th className="px-6 py-4 text-left font-semibold">
-                      Actions
+                      <div className="whitespace-nowrap">
+                        Actions / Reviewed By
+                      </div>
                     </th>
                   </tr>
                 </thead>
@@ -815,12 +900,6 @@ const AdminUrtiPage: React.FC = () => {
                           '--'
                         }
                       </td>
-                      <td className="px-6 py-3 text-sm">
-                        {e.statusUpdatedBy ? 
-                          `${e.statusUpdatedBy.name} (${e.statusUpdatedBy.iga_code})` : 
-                          '--'
-                        }
-                      </td>
                       <td className="px-6 py-3">
                         <span className={getBadgeClasses(e.status)}>
                           {e.status}
@@ -850,14 +929,14 @@ const AdminUrtiPage: React.FC = () => {
                             </span>
                           )
                         ) : (
-                          <div>
+                          <div className="min-w-[180px]">
                             <input
                               value={e.comment}
                               onChange={(ev) =>
                                 updateComment(idx, ev.target.value)
                               }
                               maxLength={100}
-                              className="w-full px-3 py-2 border-2 rounded-lg text-sm transition-all border-indigo-primary/20 focus:ring-indigo-primary/50 focus:border-indigo-primary bg-white"
+                              className="w-full min-w-[180px] px-3 py-2 border-2 rounded-lg text-sm transition-all border-indigo-primary/20 focus:ring-indigo-primary/50 focus:border-indigo-primary bg-white"
                               placeholder="Add comment…"
                             />
                             {e.comment.length > 100 && (
@@ -869,36 +948,43 @@ const AdminUrtiPage: React.FC = () => {
                         )}
                       </td>
                       <td className="px-6 py-3">
-                        <div className="flex gap-2 justify-center">
-                          {e.status === "Pending" && (
-                            <button
-                              onClick={() =>
-                                handleStatusUpdate(idx, "Approved")
-                              }
-                              disabled={actionLoading === e.id}
-                              className="px-4 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-50 hover:brightness-110 transition-all animate-scale-hover bg-gradient-to-r from-[rgb(139,170,21)] to-[rgb(111,134,18)]"
-                            >
-                              {actionLoading === e.id ? "..." : "Approve"}
-                            </button>
-                          )}
-                          {e.status === "Pending" && (
-                            <button
-                              onClick={() =>
-                                handleStatusUpdate(idx, "Rejected")
-                              }
-                              disabled={actionLoading === e.id}
-                              className="px-4 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-50 hover:brightness-110 transition-all animate-scale-hover bg-gradient-to-r from-[rgb(224,107,20)] to-[rgb(181,84,15)]"
-                            >
-                              {actionLoading === e.id ? "..." : "Reject"}
-                            </button>
-                          )}
-                          {(e.status === "Approved" ||
-                            e.status === "Rejected") && (
-                            <span className="px-4 py-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg">
-                              {e.status === "Approved"
-                                ? "Approved"
-                                : "Rejected"}
-                            </span>
+                        <div className="flex flex-col items-center gap-2">
+                          <div className="flex gap-2 justify-center">
+                            {e.status === "Pending" && (
+                              <button
+                                onClick={() =>
+                                  handleStatusUpdate(idx, "Approved")
+                                }
+                                disabled={actionLoading === e.id}
+                                className="px-4 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-50 hover:brightness-110 transition-all animate-scale-hover bg-gradient-to-r from-[rgb(139,170,21)] to-[rgb(111,134,18)]"
+                              >
+                                {actionLoading === e.id ? "..." : "Approve"}
+                              </button>
+                            )}
+                            {e.status === "Pending" && (
+                              <button
+                                onClick={() =>
+                                  handleStatusUpdate(idx, "Rejected")
+                                }
+                                disabled={actionLoading === e.id}
+                                className="px-4 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-50 hover:brightness-110 transition-all animate-scale-hover bg-gradient-to-r from-[rgb(224,107,20)] to-[rgb(181,84,15)]"
+                              >
+                                {actionLoading === e.id ? "..." : "Reject"}
+                              </button>
+                            )}
+                            {(e.status === "Approved" ||
+                              e.status === "Rejected") && (
+                              <span className="px-4 py-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg">
+                                {e.status === "Approved"
+                                  ? "Approved"
+                                  : "Rejected"}
+                              </span>
+                            )}
+                          </div>
+                          {e.statusUpdatedBy && (
+                            <div className="text-xs text-gray-600 text-center">
+                              {e.statusUpdatedBy.name} ({e.statusUpdatedBy.iga_code})
+                            </div>
                           )}
                         </div>
                       </td>
@@ -912,6 +998,75 @@ const AdminUrtiPage: React.FC = () => {
                   No records found
                 </div>
               )}
+            </div>
+          )}
+          
+          {/* Pagination */}
+          {!isLoadingData && totalPages > 1 && (
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+              <div className="text-sm text-gray-700">
+                Showing page {currentPage} of {totalPages} ({totalRecords} total records)
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handlePageChange(1)}
+                  disabled={currentPage === 1}
+                  className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  First
+                </button>
+                <button
+                  onClick={handlePrevPage}
+                  disabled={currentPage === 1}
+                  className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                    
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => handlePageChange(pageNum)}
+                        className={`px-3 py-2 text-sm font-medium rounded-md ${
+                          currentPage === pageNum
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-gray-500 bg-white border border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                </div>
+                
+                <button
+                  onClick={handleNextPage}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+                <button
+                  onClick={() => handlePageChange(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Last
+                </button>
+              </div>
             </div>
           )}
         </div>
