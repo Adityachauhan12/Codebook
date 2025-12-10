@@ -1,4 +1,4 @@
-@app.get("/api/listLeaves")
+@app.get("/api/leave/listLeaves")
 def list_leaves(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -30,13 +30,13 @@ def list_leaves(
             "date_to": date_to
         }.items() if v
     }
-
+ 
     logger.info(f"Listing leaves with filters: {filters}, page: {page}, page_size: {page_size}")
     try:
         # This already builds identical WHEREs for data and total_records
         # and a status_counts query that drops the 'status' filter.
         result = query_paginated_leaves(page, page_size, filters)
-
+ 
         # 🔒 Defensive: If any upstream rows have weird case, normalize before returning
         # (keeps UI labels consistent; does NOT change DB)
         fixed_counts = {
@@ -45,15 +45,14 @@ def list_leaves(
             'rejected': int(result.get('status_counts', {}).get('rejected', 0)),
         }
         result['status_counts'] = fixed_counts
-
+ 
         # Return the original object shape expected by Admin analytics cards
         return result
     except Exception as e:
         logger.error(f"Error listing leaves: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
- 
-@app.get("/api/list_leaves_analytics")
+    
+@app.get("/api/leave/list_leaves_analytics")
 def list_leaves_analytics(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
@@ -73,8 +72,8 @@ def list_leaves_analytics(
     except Exception as e:
         logger.error(f"Error listing leaves analytics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
- 
-@app.patch("/api/ApproveRejectLeave/{leave_id}")
+    
+@app.patch("/api/leave/ApproveRejectLeave/{leave_id}")
 def approve_or_reject_leave(leave_id: str, action: AdminAction):
     try:
         status = {1: "approved", 0: "rejected"}.get(action.status)
@@ -118,8 +117,9 @@ def approve_or_reject_leave(leave_id: str, action: AdminAction):
     except Exception as e:
         logger.error(f"Error updating leave {leave_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
- 
-@app.get("/api/getEmployeeLeaves/{iga_code}")
+    
+    
+@app.get("/api/leave/getEmployeeLeaves/{iga_code}")
 def get_employee_leaves(
     iga_code: str,
     page: int = Query(1, ge=1),
@@ -133,8 +133,8 @@ def get_employee_leaves(
     except Exception as e:
         logger.error(f"Error fetching leaves for employee {iga_code}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
- 
-@app.get("/api/leaveSummary")
+    
+@app.get("/api/leave/leaveSummary")
 def leave_summary():
     sql = f"""
     SELECT
