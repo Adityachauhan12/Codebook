@@ -88,9 +88,9 @@ def query_paginated_leaves(page: int = 1, page_size: int = 20, filters: Optional
             if status_key in status_counts:
                 status_counts[status_key] = row['count']
         
-        # Count total records using SAME filters as status_counts (excluding status filter)
-        count_sql = f"SELECT COUNT(*) as total FROM `{table_ref()}` {status_where_clause}"
-        count_result = query_rows(count_sql, status_params)
+        # Count total records for pagination (including ALL filters)
+        count_sql = f"SELECT COUNT(*) as total FROM `{table_ref()}` {where_clause}"
+        count_result = query_rows(count_sql, params)
         total_records = count_result[0]['total'] if count_result else 0
         
         # If search is active, return all results without pagination
