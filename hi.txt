@@ -1,4 +1,1 @@
-OPENAI_VERSION=2024-12-01-preview
-fe=BQoJrw8Hpb9bEW9zxCqZLOcM6kt4yupPOkAm1d3ZKACUinCxINLPJQQJ99BFACYeBjFXJ3w3AAABACOGrUZBz kqqqf
-OPENAI_BASE=https://openai-eastus-2.openai.azure.com
- 
+
