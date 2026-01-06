@@ -328,9 +328,13 @@ from gcs_utils import (  # noqa: E402
 
 app = FastAPI(title="Grooming Checks + Insights API", version="2.0.0")
 
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")],
+    allow_origins=[
+        "https://6e-ifs-365-dev.goindigo.in",
+        "https://6e-ifs-365-uat.goindigo.in"  # Added UAT URL
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -813,22 +817,47 @@ async def individual_analysis(
         print(f"[INDIVIDUAL-ANALYSIS] Filtered to {len(crew_records)} crew records")
 
         if not crew_records:
-            print(f"[INDIVIDUAL-ANALYSIS] No records found for {iga_search} / {crew_search}")
-            return JSONResponse(
-                {
-                    "error": "No assessments found for this crew in given date range",
-                    "debug": {
-                        "searchedFor": {
-                            "igaCode": igaCode,
-                            "crewName": crewName or "(not specified - all crew members)",
-                            "dateRange": f"{dateFrom} to {dateTo}"
-                        },
-                        "totalRecordsInRange": len(all_records),
-                        "matchingRecords": 0,
-                    }
+            print(f"[INDIVIDUAL-ANALYSIS] No records found for {iga_search} / {crew_search} - returning empty data")
+            
+            # Build empty daily trends for the date range
+            empty_trend_list = []
+            current_date = start_date
+            while current_date <= end_date:
+                empty_trend_list.append({
+                    "date": current_date.isoformat(),
+                    "compliant": 0,
+                    "nonCompliant": 0
+                })
+                current_date += timedelta(days=1)
+            
+            # Return proper structure with zero data instead of 404 error
+            return {
+                "crew": {
+                    "igaCode": igaCode,
+                    "name": crewName if crewName else "(All crew members with this IGA code)"
                 },
-                status_code=404
-            )
+                "dateRange": {
+                    "from": dateFrom,
+                    "to": dateTo,
+                    "daysAnalyzed": (end_date - start_date).days + 1
+                },
+                "summary": {
+                    "totalAssessments": 0,
+                    "compliant": 0,
+                    "nonCompliant": 0,
+                    "passRate": "0.00",
+                    "passRatePercentage": "0.00%"
+                },
+                "nonComplianceByCategory": {
+                    "uniform": {"violations": 0, "percentage": 0.00},
+                    "hairstyle": {"violations": 0, "percentage": 0.00},
+                    "makeup": {"violations": 0, "percentage": 0.00},
+                    "nails": {"violations": 0, "percentage": 0.00},
+                    "accessories": {"violations": 0, "percentage": 0.00}
+                },
+                "trend": empty_trend_list,
+                "recentAssessments": []
+            }
 
         # ============= CALCULATE SUMMARY STATISTICS =============
         total = len(crew_records)
@@ -953,4 +982,3 @@ async def individual_analysis(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=True)
-
