@@ -1,2 +1,2 @@
-SARVAM_TRANSLATE_URL = os.getenv("SARVAM_TRANSLATE_URL", "https://api.sarvam.ai/translate")
-SARVAM_TTS_URL = os.getenv("SARVAM_TTS_URL", "https://api.sarvam.ai/text-to-speech")
+SARVAM_TRANSLATE_URL=https://api.sarvam.ai/translate
+SARVAM_TTS_URL=https://api.sarvam.ai/text-to-speech
