@@ -1,251 +1,78 @@
-import React, { useState } from 'react';
-import axios from 'axios';
-
-interface CampaignOutputProps {
-  option: string;
-  response: {
-    success: boolean;
-    type: string;
-    data: any;
-  } | null;
-}
-
-const CampaignOutput: React.FC<CampaignOutputProps> = ({ option, response }) => {
-  const [isLoading, setIsLoading] = useState(false);
-  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [recipient, setRecipient] = useState('');
-  const [showEmailForm, setShowEmailForm] = useState(false);
-
-  if (!response || !response.success) return null;
-
-  const output = response.data;
-  if (!output) {
-    return <p className="text-red-500">⚠️ No data in response.</p>;
-  }
-
-  const sendEmail = async () => {
-    if (!recipient.trim()) {
-      setNotification({ type: 'error', message: 'Please enter recipient email' });
-      setTimeout(() => setNotification(null), 3000);
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const apiDomain = `${(window as any).REACT_APP_REDIRECT_URL}`;
-      const emailData = {
-        collection: "IBC_mails",
-        doc_id: "mails_cust",
-        app_name: "bluechip",
-        template_name: "market",
-        subject: "BlueChip Market Update",
-        recipient: recipient
-      };
-
-      await axios.post(
-        'https://6e-mailer-service-dev.goindigo.in/send-bluechip-emails',
-        emailData,
-        {
-          headers: {
-            'accept': 'application/json',
-            'Content-Type': 'application/json'
-          },
-          withCredentials: false
-        }
-      );
-
-      setNotification({ type: 'success', message: 'Email sent successfully!' });
-      setShowEmailForm(false);
-      setRecipient('');
-      setTimeout(() => setNotification(null), 5000);
-    } catch (error: any) {
-      console.error('Email send error:', error);
-      if (error.code === 'ERR_NETWORK' || error.message?.includes('CORS')) {
-        setNotification({ type: 'error', message: 'CORS error: Please contact admin to enable CORS on email service' });
-      } else {
-        setNotification({ type: 'error', message: 'Failed to send email. Please try again.' });
-      }
-      setTimeout(() => setNotification(null), 5000);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-return (
-    <div className="space-y-6 bg-white p-6 rounded-lg shadow-lg border border-gray-200">
-      {/* Notification Popup */}
-      {notification && (
-        <div className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg ${
-          notification.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-        }`}>
-          <div className="flex items-center gap-2">
-            <span>{notification.type === 'success' ? '✅' : '❌'}</span>
-            <span>{notification.message}</span>
-          </div>
-        </div>
-      )}
-      {option === 'Push Notification' && (
-        <div>
-          <div className="text-green-600 font-semibold mb-4 flex items-center">
-            <span className="mr-2">✅</span>
-            Push Notification Generated
-          </div>
-          <div className="space-y-4">
-            <div>
-              <span className="font-semibold text-gray-700">🔔 Title:</span>
-              <span className="ml-2">{output.notification_title || 'N/A'}</span>
-            </div>
-            <div>
-              <span className="font-semibold text-gray-700">💬 Message:</span>
-              <span className="ml-2">{output.notification_message || 'N/A'}</span>
-            </div>
-            <div>
-              <span className="font-semibold text-gray-700">👉 CTA:</span>
-              <span className="ml-2">{output.cta_text || 'N/A'}</span>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🖼️ Image Idea</h3>
-              <pre className="bg-gray-100 p-3 rounded-md text-sm overflow-auto border">
-                {JSON.stringify(output.image_idea || {}, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🎨 Image Description</h3>
-              <p className="bg-gray-100 p-3 rounded-md text-sm border text-gray-700">
-                {output.image_natural_description || 'No description provided.'}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {option === 'Social Media Post' && (
-        <div>
-          <div className="text-green-600 font-semibold mb-4 flex items-center">
-            <span className="mr-2">✅</span>
-            Social Media Post Generated
-          </div>
-          <div className="space-y-4">
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">✍️ Post Text</h3>
-              <p className="text-gray-700">{output.post_text || 'No text provided.'}</p>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🖼️ Image Idea</h3>
-              <pre className="bg-gray-100 p-3 rounded-md text-sm overflow-auto border">
-                {JSON.stringify(output.image_idea || {}, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🎨 Image Description</h3>
-              <p className="bg-gray-100 p-3 rounded-md text-sm border text-gray-700">
-                {output.image_natural_description || 'No description provided.'}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {option === 'Email' && (
-        <div>
-          <div className="text-green-600 font-semibold mb-4 flex items-center">
-            <span className="mr-2">✅</span>
-            Email Campaign Generated
-          </div>
-          <div className="space-y-4">
-            <div>
-              <span className="font-semibold text-gray-700">✉️ Subject:</span>
-              <span className="ml-2">{output.email_subject || ''}</span>
-            </div>
-            <div>
-              <span className="font-semibold text-gray-700">📌 Preview:</span>
-              <span className="ml-2">{output.email_preview || ''}</span>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">📄 Body</h3>
-              <p className="text-gray-700">{output.email_body || ''}</p>
-            </div>
-            <div>
-              <span className="font-semibold text-gray-700">👉 CTA:</span>
-              <a
-                href={output.cta_url || '#'}
-                className="ml-2 text-blue-600 underline hover:text-blue-800"
-              >
-                {output.cta_text || ''}
-              </a>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">📝 Footer Note</h3>
-              <p className="text-gray-500 text-sm">{output.footer_note || ''}</p>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🎨 Email Visual Idea</h3>
-              <pre className="bg-gray-100 p-3 rounded-md text-sm overflow-auto border">
-                {JSON.stringify(output.image_idea || {}, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🖼️ Image Description</h3>
-              <p className="bg-gray-100 p-3 rounded-md text-sm border text-gray-700">
-                {output.image_natural_description || 'No description provided.'}
-              </p>
-            </div>
-            
-            {/* Send Email Section */}
-            <div className="pt-4 border-t border-gray-200">
-              {!showEmailForm ? (
-                <button
-                  onClick={() => setShowEmailForm(true)}
-                  className="bg-[#000099] text-white px-6 py-2 rounded-md hover:bg-[#0000cc] focus:outline-none focus:ring-2 focus:ring-[#000099] focus:ring-offset-2 transition-colors flex items-center gap-2"
-                >
-                  ✉️ Send Email
-                </button>
-              ) : (
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Recipient Email:
-                    </label>
-                    <input
-                      type="email"
-                      value={recipient}
-                      onChange={(e) => setRecipient(e.target.value)}
-                      placeholder="Enter recipient email"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#000099] focus:border-[#000099]"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={sendEmail}
-                      disabled={isLoading}
-                      className="bg-[#000099] text-white px-4 py-2 rounded-md hover:bg-[#0000cc] focus:outline-none focus:ring-2 focus:ring-[#000099] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-                    >
-                      {isLoading ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                          Sending...
-                        </>
-                      ) : (
-                        'Send'
-                      )}
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowEmailForm(false);
-                        setRecipient('');
-                      }}
-                      className="bg-gray-500 text-white px-4 py-2 rounded-md hover:bg-gray-600 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default CampaignOutput;
+Access to XMLHttpRequest at 'https://6e-mailer-service-dev.goindigo.in/send-bluechip-emails' from origin 'http://localhost:3000' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.Understand this error
+CampaignOutput.tsx:62 Email send error: AxiosError {message: 'Network Error', name: 'AxiosError', code: 'ERR_NETWORK', config: {…}, request: XMLHttpRequest, …}code: "ERR_NETWORK"config: {transitional: {…}, adapter: Array(3), transformRequest: Array(1), transformResponse: Array(1), timeout: 0, …}event: ProgressEvent {isTrusted: true, lengthComputable: false, loaded: 0, total: 0, type: 'error', …}message: "Network Error"name: "AxiosError"request: XMLHttpRequest {onreadystatechange: null, readyState: 4, timeout: 0, withCredentials: false, upload: XMLHttpRequestUpload, …}stack: "AxiosError: Network Error\n    at XMLHttpRequest.handleError (http://localhost:3000/static/js/vendors-node_modules_axios_lib_axios_js.chunk.js:499:19)\n    at Axios.request (http://localhost:3000/static/js/vendors-node_modules_axios_lib_axios_js.chunk.js:945:41)\n    at async sendEmail (http://localhost:3000/static/js/src_features_Marketing_tsx.chunk.js:280:7)"[[Prototype]]: Error
+sendEmail @ CampaignOutput.tsx:62
+await in sendEmail
+executeDispatch @ react-dom-client.development.js:19116
+runWithFiberInDEV @ react-dom-client.development.js:870
+processDispatchQueue @ react-dom-client.development.js:19165
+(anonymous) @ react-dom-client.development.js:19767
+batchedUpdates$1 @ react-dom-client.development.js:3255
+dispatchEventForPluginEventSystem @ react-dom-client.development.js:19320
+dispatchEvent @ react-dom-client.development.js:23584
+dispatchDiscreteEvent @ react-dom-client.development.js:23552
+<button>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:327
+CampaignOutput @ CampaignOutput.tsx:216
+react_stack_bottom_frame @ react-dom-client.development.js:25904
+renderWithHooks @ react-dom-client.development.js:7662
+updateFunctionComponent @ react-dom-client.development.js:10166
+beginWork @ react-dom-client.development.js:11778
+runWithFiberInDEV @ react-dom-client.development.js:870
+performUnitOfWork @ react-dom-client.development.js:17639
+workLoopSync @ react-dom-client.development.js:17469
+renderRootSync @ react-dom-client.development.js:17450
+performWorkOnRoot @ react-dom-client.development.js:16498
+performSyncWorkOnRoot @ react-dom-client.development.js:18972
+flushSyncWorkAcrossRoots_impl @ react-dom-client.development.js:18803
+processRootScheduleInMicrotask @ react-dom-client.development.js:18851
+(anonymous) @ react-dom-client.development.js:18986
+<CampaignOutput>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:327
+CampaignForm @ CampaignForm.tsx:104
+react_stack_bottom_frame @ react-dom-client.development.js:25904
+renderWithHooks @ react-dom-client.development.js:7662
+updateFunctionComponent @ react-dom-client.development.js:10166
+beginWork @ react-dom-client.development.js:11778
+runWithFiberInDEV @ react-dom-client.development.js:870
+performUnitOfWork @ react-dom-client.development.js:17639
+workLoopSync @ react-dom-client.development.js:17469
+renderRootSync @ react-dom-client.development.js:17450
+performWorkOnRoot @ react-dom-client.development.js:16498
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:18957
+performWorkUntilDeadline @ scheduler.development.js:45
+<CampaignForm>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:327
+Marketing @ Marketing.tsx:23
+react_stack_bottom_frame @ react-dom-client.development.js:25904
+renderWithHooks @ react-dom-client.development.js:7662
+updateFunctionComponent @ react-dom-client.development.js:10166
+beginWork @ react-dom-client.development.js:11702
+runWithFiberInDEV @ react-dom-client.development.js:870
+performUnitOfWork @ react-dom-client.development.js:17639
+workLoopConcurrentByScheduler @ react-dom-client.development.js:17634
+renderRootConcurrent @ react-dom-client.development.js:17615
+performWorkOnRoot @ react-dom-client.development.js:16498
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:18957
+performWorkUntilDeadline @ scheduler.development.js:45
+<...>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:327
+App @ App.tsx:157
+react_stack_bottom_frame @ react-dom-client.development.js:25904
+renderWithHooks @ react-dom-client.development.js:7662
+updateFunctionComponent @ react-dom-client.development.js:10166
+beginWork @ react-dom-client.development.js:11778
+runWithFiberInDEV @ react-dom-client.development.js:870
+performUnitOfWork @ react-dom-client.development.js:17639
+workLoopSync @ react-dom-client.development.js:17469
+renderRootSync @ react-dom-client.development.js:17450
+performWorkOnRoot @ react-dom-client.development.js:16498
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:18957
+performWorkUntilDeadline @ scheduler.development.js:45
+<App>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:327
+./src/index.tsx @ index.tsx:8
+options.factory @ react refresh:37
+__webpack_require__ @ bootstrap:22
+(anonymous) @ startup:7
+(anonymous) @ startup:7Understand this error
+CampaignOutput.tsx:45  POST https://6e-mailer-service-dev.goindigo.in/send-bluechip-emails net::ERR_FAILED
