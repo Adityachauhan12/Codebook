@@ -1,2 +1,201 @@
-SARVAM_TRANSLATE_URL=https://api.sarvam.ai/translate
-SARVAM_TTS_URL=https://api.sarvam.ai/text-to-speech
+import React, { useState } from 'react';
+import axios from 'axios';
+
+interface CampaignOutputProps {
+  option: string;
+  response: {
+    success: boolean;
+    type: string;
+    data: any;
+  } | null;
+}
+
+const CampaignOutput: React.FC<CampaignOutputProps> = ({ option, response }) => {
+  const [isLoading, setIsLoading] = useState(false);
+  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  if (!response || !response.success) return null;
+
+  const output = response.data;
+  if (!output) {
+    return <p className="text-red-500">⚠️ No data in response.</p>;
+  }
+
+  const sendEmail = async () => {
+    setIsLoading(true);
+    try {
+      const emailData = {
+        collection: "IBC_mails",
+        doc_id: "mails_cust",
+        app_name: "bluechip",
+        template_name: "market",
+        subject: "BlueChip Market Update"
+      };
+
+      await axios.post(
+        'https://6e-mailer-service-dev.goindigo.in/send-bluechip-emails',
+        emailData,
+        {
+          headers: {
+            'accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      setNotification({ type: 'success', message: 'Email sent successfully!' });
+      setTimeout(() => setNotification(null), 5000);
+    } catch (error) {
+      setNotification({ type: 'error', message: 'Failed to send email. Please try again.' });
+      setTimeout(() => setNotification(null), 5000);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+return (
+    <div className="space-y-6 bg-white p-6 rounded-lg shadow-lg border border-gray-200">
+      {/* Notification Popup */}
+      {notification && (
+        <div className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg ${
+          notification.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+        }`}>
+          <div className="flex items-center gap-2">
+            <span>{notification.type === 'success' ? '✅' : '❌'}</span>
+            <span>{notification.message}</span>
+          </div>
+        </div>
+      )}
+      {option === 'Push Notification' && (
+        <div>
+          <div className="text-green-600 font-semibold mb-4 flex items-center">
+            <span className="mr-2">✅</span>
+            Push Notification Generated
+          </div>
+          <div className="space-y-4">
+            <div>
+              <span className="font-semibold text-gray-700">🔔 Title:</span>
+              <span className="ml-2">{output.notification_title || 'N/A'}</span>
+            </div>
+            <div>
+              <span className="font-semibold text-gray-700">💬 Message:</span>
+              <span className="ml-2">{output.notification_message || 'N/A'}</span>
+            </div>
+            <div>
+              <span className="font-semibold text-gray-700">👉 CTA:</span>
+              <span className="ml-2">{output.cta_text || 'N/A'}</span>
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg text-gray-800 mb-2">🖼️ Image Idea</h3>
+              <pre className="bg-gray-100 p-3 rounded-md text-sm overflow-auto border">
+                {JSON.stringify(output.image_idea || {}, null, 2)}
+              </pre>
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg text-gray-800 mb-2">🎨 Image Description</h3>
+              <p className="bg-gray-100 p-3 rounded-md text-sm border text-gray-700">
+                {output.image_natural_description || 'No description provided.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {option === 'Social Media Post' && (
+        <div>
+          <div className="text-green-600 font-semibold mb-4 flex items-center">
+            <span className="mr-2">✅</span>
+            Social Media Post Generated
+          </div>
+          <div className="space-y-4">
+            <div>
+              <h3 className="font-semibold text-lg text-gray-800 mb-2">✍️ Post Text</h3>
+              <p className="text-gray-700">{output.post_text || 'No text provided.'}</p>
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg text-gray-800 mb-2">🖼️ Image Idea</h3>
+              <pre className="bg-gray-100 p-3 rounded-md text-sm overflow-auto border">
+                {JSON.stringify(output.image_idea || {}, null, 2)}
+              </pre>
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg text-gray-800 mb-2">🎨 Image Description</h3>
+              <p className="bg-gray-100 p-3 rounded-md text-sm border text-gray-700">
+                {output.image_natural_description || 'No description provided.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {option === 'Email' && (
+        <div>
+          <div className="text-green-600 font-semibold mb-4 flex items-center">
+            <span className="mr-2">✅</span>
+            Email Campaign Generated
+          </div>
+          <div className="space-y-4">
+            <div>
+              <span className="font-semibold text-gray-700">✉️ Subject:</span>
+              <span className="ml-2">{output.email_subject || ''}</span>
+            </div>
+            <div>
+              <span className="font-semibold text-gray-700">📌 Preview:</span>
+              <span className="ml-2">{output.email_preview || ''}</span>
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg text-gray-800 mb-2">📄 Body</h3>
+              <p className="text-gray-700">{output.email_body || ''}</p>
+            </div>
+            <div>
+              <span className="font-semibold text-gray-700">👉 CTA:</span>
+              <a
+                href={output.cta_url || '#'}
+                className="ml-2 text-blue-600 underline hover:text-blue-800"
+              >
+                {output.cta_text || ''}
+              </a>
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg text-gray-800 mb-2">📝 Footer Note</h3>
+              <p className="text-gray-500 text-sm">{output.footer_note || ''}</p>
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg text-gray-800 mb-2">🎨 Email Visual Idea</h3>
+              <pre className="bg-gray-100 p-3 rounded-md text-sm overflow-auto border">
+                {JSON.stringify(output.image_idea || {}, null, 2)}
+              </pre>
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg text-gray-800 mb-2">🖼️ Image Description</h3>
+              <p className="bg-gray-100 p-3 rounded-md text-sm border text-gray-700">
+                {output.image_natural_description || 'No description provided.'}
+              </p>
+            </div>
+            
+            {/* Send Email Button */}
+            <div className="pt-4 border-t border-gray-200">
+              <button
+                onClick={sendEmail}
+                disabled={isLoading}
+                className="bg-[#000099] text-white px-6 py-2 rounded-md hover:bg-[#0000cc] focus:outline-none focus:ring-2 focus:ring-[#000099] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+              >
+                {isLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    Sending...
+                  </>
+                ) : (
+                  <>
+                    ✉️ Send Email
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default CampaignOutput;
