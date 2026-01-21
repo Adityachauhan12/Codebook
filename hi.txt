@@ -43,13 +43,14 @@ const CampaignOutput: React.FC<CampaignOutputProps> = ({ option, response }) => 
       };
 
       await axios.post(
-        '/send-bluechip-emails',
+        'https://6e-mailer-service-dev.goindigo.in/send-bluechip-emails',
         emailData,
         {
           headers: {
             'accept': 'application/json',
             'Content-Type': 'application/json'
-          }
+          },
+          withCredentials: false
         }
       );
 
@@ -57,8 +58,13 @@ const CampaignOutput: React.FC<CampaignOutputProps> = ({ option, response }) => 
       setShowEmailForm(false);
       setRecipient('');
       setTimeout(() => setNotification(null), 5000);
-    } catch (error) {
-      setNotification({ type: 'error', message: 'Failed to send email. Please try again.' });
+    } catch (error: any) {
+      console.error('Email send error:', error);
+      if (error.code === 'ERR_NETWORK' || error.message?.includes('CORS')) {
+        setNotification({ type: 'error', message: 'CORS error: Please contact admin to enable CORS on email service' });
+      } else {
+        setNotification({ type: 'error', message: 'Failed to send email. Please try again.' });
+      }
       setTimeout(() => setNotification(null), 5000);
     } finally {
       setIsLoading(false);
