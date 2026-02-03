@@ -1,201 +1,428 @@
-import React, { useState } from 'react';
-import axios from 'axios';
-
-interface CampaignOutputProps {
-  option: string;
-  response: {
-    success: boolean;
-    type: string;
-    data: any;
-  } | null;
+/* IndiGo Brand Colors */
+:root {
+  --indigo-blue: #001b94;
+  --indigo-orange: #f14658;
+  --indigo-light-blue: #e3f2fd;
+  --indigo-gray: #f5f5f5;
 }
 
-const CampaignOutput: React.FC<CampaignOutputProps> = ({ option, response }) => {
-  const [isLoading, setIsLoading] = useState(false);
-  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+/* Reset and base styles */
+* {
+  box-sizing: border-box;
+}
 
-  if (!response || !response.success) return null;
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #fafafa;
+}
 
-  const output = response.data;
-  if (!output) {
-    return <p className="text-red-500">⚠️ No data in response.</p>;
+/* Chat container styles */
+.chat-container {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: white;
+}
+
+/* Header styles matching Sky design */
+.chat-header {
+  background: linear-gradient(135deg, var(--indigo-blue) 0%, #0066cc 100%);
+  color: white;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.header-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.header-info h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.header-info p {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+/* Chat messages area */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  background: #fafafa;
+}
+
+.message {
+  margin-bottom: 16px;
+  display: flex;
+}
+
+.message.user {
+  justify-content: flex-end;
+}
+
+.message.bot {
+  justify-content: flex-start;
+}
+
+.message-content {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 18px;
+  word-wrap: break-word;
+}
+
+.message.user .message-content {
+  background: var(--indigo-light-blue);
+  border-bottom-right-radius: 4px;
+  color: #333;
+}
+
+.message.bot .message-content {
+  background: var(--indigo-gray);
+  border-bottom-left-radius: 4px;
+  color: #333;
+}
+
+/* Avatar video styles */
+.avatar-video {
+  width: 100%;
+  max-width: 300px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  pointer-events: none;
+}
+
+.avatar-video::-webkit-media-controls {
+  display: none !important;
+}
+
+.avatar-video::-webkit-media-controls-panel {
+  display: none !important;
+}
+
+.avatar-video::-webkit-media-controls-play-button {
+  display: none !important;
+}
+
+.avatar-video::-webkit-media-controls-start-playback-button {
+  display: none !important;
+}
+
+video {
+  pointer-events: none;
+}
+
+video::-webkit-media-controls {
+  display: none !important;
+}
+
+video::-webkit-media-controls-panel {
+  display: none !important;
+}
+
+video::-webkit-media-controls-play-button {
+  display: none !important;
+}
+
+video::-webkit-media-controls-start-playback-button {
+  display: none !important;
+}
+
+/* Step input containers */
+.step-container {
+  margin-top: 8px;
+  padding: 16px;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #eee;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.step-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+.step-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.step-input:focus {
+  outline: none;
+  border-color: var(--indigo-blue);
+}
+
+.step-button {
+  width: 100%;
+  padding: 10px;
+  background: var(--indigo-blue);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+
+.step-button:hover:not(:disabled) {
+  background: #000080;
+}
+
+.step-button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+/* Passenger selection grid */
+.passenger-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.passenger-item {
+  text-align: center;
+}
+
+.passenger-label {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.passenger-select {
+  width: 100%;
+  padding: 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+/* Quick actions */
+.quick-actions {
+  padding: 8px 16px;
+  background: white;
+  border-top: 1px solid #eee;
+}
+
+.quick-actions-title {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.quick-actions-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.quick-action-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--indigo-blue);
+  background: white;
+  color: var(--indigo-blue);
+  border-radius: 16px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.quick-action-btn:hover {
+  background: var(--indigo-blue);
+  color: white;
+}
+
+/* Input area */
+.chat-input-area {
+  padding: 16px;
+  background: white;
+  border-top: 1px solid #eee;
+}
+
+.input-container {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 24px;
+  border: 2px solid var(--indigo-blue);
+  background: white;
+}
+
+.chat-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.send-button {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--indigo-blue);
+  color: white;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.3s;
+}
+
+.send-button:hover:not(:disabled) {
+  background: #000080;
+}
+
+.send-button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.disclaimer {
+  font-size: 10px;
+  color: #666;
+  text-align: center;
+  margin-top: 8px;
+}
+
+/* Loading animation */
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--indigo-gray);
+  border-radius: 18px 18px 18px 4px;
+  font-size: 14px;
+  color: #666;
+}
+
+.typing-dots {
+  display: flex;
+  gap: 2px;
+}
+
+.typing-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #666;
+  animation: typing 1.4s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(1) { animation-delay: -0.32s; }
+.typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes typing {
+  0%, 80%, 100% {
+    transform: scale(0);
+    opacity: 0.5;
   }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
 
-  const sendEmail = async () => {
-    setIsLoading(true);
-    try {
-      const emailData = {
-        collection: "IBC_mails",
-        doc_id: "mails_cust",
-        app_name: "bluechip",
-        template_name: "market",
-        subject: "BlueChip Market Update"
-      };
+/* Responsive design */
+@media (max-width: 768px) {
+  .chat-messages {
+    padding: 12px;
+  }
+  
+  .message-content {
+    max-width: 90%;
+  }
+  
+  .passenger-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  
+  .quick-actions-buttons {
+    flex-direction: column;
+  }
+  
+  .quick-action-btn {
+    width: 100%;
+    text-align: center;
+  }
+}
 
-      await axios.post(
-        'https://6e-mailer-service-dev.goindigo.in/send-bluechip-emails',
-        emailData,
-        {
-          headers: {
-            'accept': 'application/json',
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+/* Scrollbar styling */
+.chat-messages::-webkit-scrollbar {
+  width: 4px;
+}
 
-      setNotification({ type: 'success', message: 'Email sent successfully!' });
-      setTimeout(() => setNotification(null), 5000);
-    } catch (error: any) {
-      setNotification({ type: 'error', message: 'Failed to send email. Please try again.' });
-      setTimeout(() => setNotification(null), 5000);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-return (
-    <div className="space-y-6 bg-white p-6 rounded-lg shadow-lg border border-gray-200">
-      {/* Notification Popup */}
-      {notification && (
-        <div className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg ${
-          notification.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-        }`}>
-          <div className="flex items-center gap-2">
-            <span>{notification.type === 'success' ? '✅' : '❌'}</span>
-            <span>{notification.message}</span>
-          </div>
-        </div>
-      )}
-      {option === 'Push Notification' && (
-        <div>
-          <div className="text-green-600 font-semibold mb-4 flex items-center">
-            <span className="mr-2">✅</span>
-            Push Notification Generated
-          </div>
-          <div className="space-y-4">
-            <div>
-              <span className="font-semibold text-gray-700">🔔 Title:</span>
-              <span className="ml-2">{output.notification_title || 'N/A'}</span>
-            </div>
-            <div>
-              <span className="font-semibold text-gray-700">💬 Message:</span>
-              <span className="ml-2">{output.notification_message || 'N/A'}</span>
-            </div>
-            <div>
-              <span className="font-semibold text-gray-700">👉 CTA:</span>
-              <span className="ml-2">{output.cta_text || 'N/A'}</span>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🖼️ Image Idea</h3>
-              <pre className="bg-gray-100 p-3 rounded-md text-sm overflow-auto border">
-                {JSON.stringify(output.image_idea || {}, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🎨 Image Description</h3>
-              <p className="bg-gray-100 p-3 rounded-md text-sm border text-gray-700">
-                {output.image_natural_description || 'No description provided.'}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+.chat-messages::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
 
-      {option === 'Social Media Post' && (
-        <div>
-          <div className="text-green-600 font-semibold mb-4 flex items-center">
-            <span className="mr-2">✅</span>
-            Social Media Post Generated
-          </div>
-          <div className="space-y-4">
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">✍️ Post Text</h3>
-              <p className="text-gray-700">{output.post_text || 'No text provided.'}</p>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🖼️ Image Idea</h3>
-              <pre className="bg-gray-100 p-3 rounded-md text-sm overflow-auto border">
-                {JSON.stringify(output.image_idea || {}, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🎨 Image Description</h3>
-              <p className="bg-gray-100 p-3 rounded-md text-sm border text-gray-700">
-                {output.image_natural_description || 'No description provided.'}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+.chat-messages::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 2px;
+}
 
-      {option === 'Email' && (
-        <div>
-          <div className="text-green-600 font-semibold mb-4 flex items-center">
-            <span className="mr-2">✅</span>
-            Email Campaign Generated
-          </div>
-          <div className="space-y-4">
-            <div>
-              <span className="font-semibold text-gray-700">✉️ Subject:</span>
-              <span className="ml-2">{output.email_subject || ''}</span>
-            </div>
-            <div>
-              <span className="font-semibold text-gray-700">📌 Preview:</span>
-              <span className="ml-2">{output.email_preview || ''}</span>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">📄 Body</h3>
-              <p className="text-gray-700">{output.email_body || ''}</p>
-            </div>
-            <div>
-              <span className="font-semibold text-gray-700">👉 CTA:</span>
-              <a
-                href={output.cta_url || '#'}
-                className="ml-2 text-blue-600 underline hover:text-blue-800"
-              >
-                {output.cta_text || ''}
-              </a>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">📝 Footer Note</h3>
-              <p className="text-gray-500 text-sm">{output.footer_note || ''}</p>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🎨 Email Visual Idea</h3>
-              <pre className="bg-gray-100 p-3 rounded-md text-sm overflow-auto border">
-                {JSON.stringify(output.image_idea || {}, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg text-gray-800 mb-2">🖼️ Image Description</h3>
-              <p className="bg-gray-100 p-3 rounded-md text-sm border text-gray-700">
-                {output.image_natural_description || 'No description provided.'}
-              </p>
-            </div>
-            
-            {/* Send Email Button */}
-            <div className="pt-4 border-t border-gray-200">
-              <button
-                onClick={sendEmail}
-                disabled={isLoading}
-                className="bg-[#000099] text-white px-6 py-2 rounded-md hover:bg-[#0000cc] focus:outline-none focus:ring-2 focus:ring-[#000099] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-              >
-                {isLoading ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                    Sending...
-                  </>
-                ) : (
-                  <>
-                    ✉️ Send Email
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+.chat-messages::-webkit-scrollbar-thumb:hover {
+  background: #999;
+}
 
-export default CampaignOutput;
+/* Loading spinner animation */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #f3f3f3;
+  border-top: 2px solid var(--indigo-blue);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Focus states for accessibility */
+.step-input:focus,
+.chat-input:focus {
+  box-shadow: 0 0 0 2px rgba(0, 27, 148, 0.2);
+}
+
+.step-button:focus,
+.send-button:focus,
+.quick-action-btn:focus {
+  outline: 2px solid var(--indigo-blue);
+  outline-offset: 2px;
+}
