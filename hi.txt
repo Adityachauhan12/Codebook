@@ -1,908 +1,121 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  Box,
-  Card,
-  Button,
-  Typography,
-  InputBase,
-  IconButton,
-  Paper,
-  TextField,
-  FormControl,
-  Select,
-  MenuItem
-} from '@mui/material';
-import SendIcon from '@mui/icons-material/Send';
-import './App.css';
+import os
+import requests
+from typing import Dict, Any, Optional
+import logging
 
-// IndiGo brand colors
-const indigoBlue = '#001b94';
-const indigoOrange = '#f14658';
+logger = logging.getLogger(__name__)
 
-function App() {
-  // State management
-  const [currentStep, setCurrentStep] = useState('welcome');
-  const [language, setLanguage] = useState('en');
-  const [avatarVideo, setAvatarVideo] = useState('');
-  const [message, setMessage] = useState('');
-  const [uid, setUid] = useState('');
-  const [bookingData, setBookingData] = useState({});
-  const [isLoading, setIsLoading] = useState(false);
-  const [chats, setChats] = useState([]);
-  const [inputText, setInputText] = useState('');
-  const [showAvatarFlow, setShowAvatarFlow] = useState(false);
-
-  const videoRef = useRef(null);
-  const inputRef = useRef(null);
-  const chatEndRef = useRef(null);
-  const API_BASE = 'http://localhost:8000';
-
-  // Get welcome message based on language
-  const getWelcomeMessage = (lang) => {
-    return lang === 'hi' 
-      ? 'नमस्ते! 6Eskai में आपका स्वागत है। मैं चरणबद्ध अवतार मार्गदर्शन के साथ उड़ानें बुक करने में आपकी सहायता कर सकता हूं।'
-      : 'Hello! Welcome to 6Eskai. I can help you book flights with step-by-step avatar guidance.';
-  };
-
-  // Initialize on mount
-  useEffect(() => {
-    const newUid = 'uid_' + Math.random().toString(36).substr(2, 9);
-    setUid(newUid);
-
-    // Welcome message
-    setChats([{
-      type: 'text',
-      text: getWelcomeMessage(language),
-      sender: 'bot',
-      timestamp: new Date().toISOString()
-    }]);
-  }, []);
-
-  // Reset chat when language changes
-  const handleLanguageChange = async (newLanguage) => {
-    console.log('🔄 Language changing from', language, 'to', newLanguage);
+class SarvamService:
+    """
+    Integration with Sarvam AI for translation and text-to-speech
+    """
     
-    // Clear backend session first
-    if (uid) {
-      try {
-        await fetch(`${API_BASE}/session/${uid}`, {
-          method: 'DELETE'
-        });
-        console.log('🗑️ Backend session cleared');
-      } catch (error) {
-        console.warn('Failed to clear backend session:', error);
-      }
-    }
-    
-    // Generate new UID for fresh session
-    const newUid = 'uid_' + Math.random().toString(36).substr(2, 9);
-    setUid(newUid);
-    
-    setLanguage(newLanguage);
-    setCurrentStep('welcome');
-    setShowAvatarFlow(false);
-    setBookingData({});
-    setChats([{
-      type: 'text',
-      text: getWelcomeMessage(newLanguage),
-      sender: 'bot',
-      timestamp: new Date().toISOString()
-    }]);
-    
-    console.log('✅ Language changed successfully, new UID:', newUid);
-  };
-
-  // Auto scroll to latest message
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chats]);
-
-  // Start avatar flow
-  const startAvatarFlow = async () => {
-    try {
-      console.log('🚀 Starting avatar flow...');
-      console.log('UID:', uid);
-      console.log('Language:', language);
-      
-      setIsLoading(true);
-      setShowAvatarFlow(true);
-
-      const requestData = {
-        query: language === 'hi' ? 'अवतार के साथ उड़ान बुक करें' : 'book flight with avatar',
-        uid: uid,
-        language: language
-      };
-      
-      console.log('📤 Sending request:', requestData);
-
-      const response = await fetch(`${API_BASE}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestData)
-      });
-
-      console.log('📥 Response status:', response.status);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      console.log('📥 Response data:', data);
-
-      if (data.type === 'avatar_flow') {
-        setCurrentStep(data.step);
-        setAvatarVideo(data.avatar_video);
-        setMessage(data.message);
-
-        setChats(prev => [...prev, {
-          type: 'avatar_message',
-          text: data.message,
-          sender: 'bot',
-          video: data.avatar_video,
-          step: data.step,
-          nextStep: data.next_step,
-          timestamp: new Date().toISOString()
-        }]);
+    def __init__(self):
+        self.api_key = os.getenv("SARVAM_API_KEY")
+        self.translate_url = os.getenv("SARVAM_TRANSLATE_URL")
+        self.tts_url = os.getenv("SARVAM_TTS_URL")
         
-        console.log('✅ Avatar flow started successfully!');
-      } else {
-        console.log('⚠️ Unexpected response type:', data.type);
-      }
-    } catch (error) {
-      console.error('❌ Error starting avatar flow:', error);
-      const errorMessage = language === 'hi' 
-        ? 'अवतार प्रवाह शुरू करने में त्रुटि। कृपया पुनः प्रयास करें।'
-        : 'Error starting avatar flow. Please try again.';
-      setChats(prev => [...prev, {
-        type: 'text',
-        text: errorMessage + ` (${error.message})`,
-        sender: 'bot',
-        timestamp: new Date().toISOString()
-      }]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  /**
-   * CRITICAL FIX: handleSend only processes chatbot messages when NOT in avatar flow.
-   * Once avatar flow starts (showAvatarFlow = true), all user input goes through
-   * step components which call processStep() directly.
-   */
-  const handleSend = async (customText = '') => {
-    const textToSend = customText || inputText;
-    if (!textToSend.trim()) return;
-
-    // If already in avatar flow, ignore this and let step components handle input
-    if (showAvatarFlow) {
-      console.log('Already in avatar flow - use step components for input');
-      return;
-    }
-
-    // Add user message to chat
-    setChats(prev => [...prev, {
-      type: 'text',
-      text: textToSend,
-      sender: 'user',
-      timestamp: new Date().toISOString()
-    }]);
-
-    setInputText('');
-    setIsLoading(true);
-
-    try {
-      // Only call /chat for initial chatbot conversation (not in avatar flow)
-      const response = await fetch(`${API_BASE}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: textToSend,
-          uid: uid,
-          language: language
-        })
-      });
-
-      const data = await response.json();
-
-      // If chatbot triggers avatar flow
-      if (data.type === 'avatar_flow') {
-        setShowAvatarFlow(true);
-        setCurrentStep(data.step);
-        setAvatarVideo(data.avatar_video);
-        setMessage(data.message);
-
-        setChats(prev => [...prev, {
-          type: 'avatar_message',
-          text: data.message,
-          sender: 'bot',
-          video: data.avatar_video,
-          step: data.step,
-          nextStep: data.next_step,
-          timestamp: new Date().toISOString()
-        }]);
-      } else {
-        // Regular chatbot response
-        setChats(prev => [...prev, {
-          type: 'text',
-          text: data.message || 'How can I help you with your flight booking?',
-          sender: 'bot',
-          timestamp: new Date().toISOString()
-        }]);
-      }
-    } catch (error) {
-      console.error('Error:', error);
-      setChats(prev => [...prev, {
-        type: 'text',
-        text: 'Sorry, there was an error. Please try again.',
-        sender: 'bot',
-        timestamp: new Date().toISOString()
-      }]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  /**
-   * processStep is called when user completes a step.
-   */
-  const processStep = async (completedStep, userInput) => {
-    try {
-      setIsLoading(true);
-
-      // Add user response to chat
-      const userInputText = typeof userInput === 'string' 
-        ? userInput 
-        : Object.values(userInput).join(', ');
-
-      setChats(prev => [...prev, {
-        type: 'text',
-        text: userInputText,
-        sender: 'user',
-        timestamp: new Date().toISOString()
-      }]);
-
-      // Call backend
-      const response = await fetch(`${API_BASE}/avatar-step`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: uid,
-          step: completedStep,
-          user_input: typeof userInput === 'string' ? { response: userInput } : userInput,
-          language: language
-        })
-      });
-
-      const data = await response.json();
-      console.log('Backend response:', data);
-
-      // Update state with response data
-      setCurrentStep(data.step);
-      setAvatarVideo(data.avatar_video);
-      setMessage(data.message);
-
-      // Add bot response
-      setChats(prev => [...prev, {
-        type: data.type || 'avatar_step',
-        text: data.message,
-        sender: 'bot',
-        video: data.avatar_video,
-        step: data.step,
-        nextStep: data.next_step,
-        flights: data.flights,
-        timestamp: new Date().toISOString()
-      }]);
-
-      setBookingData(prev => ({ ...prev, [completedStep]: userInput }));
-
-      // Handle completion
-      if (data.step === 'payment' || data.next_step === 'complete') {
-        setTimeout(() => {
-          setChats(prev => [...prev, {
-            type: 'text',
-            text: '✅ Booking complete! Check your email for confirmation.',
-            sender: 'bot',
-            timestamp: new Date().toISOString()
-          }]);
-          // End avatar flow completely
-          setShowAvatarFlow(false);
-          setCurrentStep(null);
-        }, 3000);
-      }
-    } catch (error) {
-      console.error('Error:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Render chat message
-  const renderChatMessage = (chat, index) => {
-    if (chat.sender === 'user') {
-      return (
-        <Box key={index} sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-          <Paper sx={{ p: 1.5, bgcolor: indigoBlue, color: 'white', maxWidth: '80%', borderRadius: 2 }}>
-            <Typography variant="body2" sx={{ fontSize: '13px' }}>{chat.text}</Typography>
-          </Paper>
-        </Box>
-      );
-    }
-
-    // Bot message
-    return (
-      <Box key={index} sx={{ display: 'flex', justifyContent: 'flex-start', mb: 1 }}>
-        <Card sx={{ p: 1.5, width: '100%', borderRadius: 2, bgcolor: '#f5f5f5' }}>
-          {chat.video && (
-            <Box sx={{ width: '100%', mb: 1 }}>
-              <video
-                key={chat.video}
-                width="100%"
-                height="200px"
-                autoPlay
-                style={{ borderRadius: 8, objectFit: 'cover' }}
-                onError={(e) => console.error('Video error:', e, 'URL:', chat.video)}
-              >
-                <source src={chat.video} type="video/mp4" />
-                Your browser does not support the video tag.
-              </video>
-            </Box>
-          )}
-
-          <Typography variant="body2" sx={{ mb: 1, fontSize: '13px' }}>{chat.text}</Typography>
-
-          {/* Flight results */}
-          {chat.type === 'flight_results' && chat.flights && index === chats.length - 1 && (
-            <Box sx={{ mt: 2 }}>
-              {renderFlightResults(chat.flights)}
-            </Box>
-          )}
-
-          {/* Booking summary for review step */}
-          {chat.step === 'review_booking' && index === chats.length - 1 && (
-            <Box sx={{ mt: 2 }}>
-              {renderBookingSummary()}
-            </Box>
-          )}
-
-          {/* Step input component */}
-          {(chat.type === 'avatar_step' || chat.type === 'avatar_message') && chat.step && index === chats.length - 1 && (
-            <Box sx={{ mt: 2 }}>
-              {renderStepInput(chat.step, chat.nextStep)}
-              {/* Next button for steps that don't require input */}
-              {!requiresInput(chat.step) && chat.step !== 'flight_search' && (
-                <Button
-                  fullWidth
-                  variant="contained"
-                  onClick={() => processStep(chat.step, { continue: true })}
-                  sx={{ bgcolor: indigoBlue, mt: 1 }}
-                >
-                  Continue
-                </Button>
-              )}
-            </Box>
-          )}
-        </Card>
-      </Box>
-    );
-  };
-
-  // Render flight results
-  const renderFlightResults = (flights) => {
-    if (!flights || flights.length === 0) return null;
-
-    return (
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>Available Flights:</Typography>
-        {flights.map((flight, idx) => (
-          <Card
-            key={idx}
-            sx={{
-              p: 1.5,
-              mb: 1,
-              cursor: 'pointer',
-              border: `2px solid ${indigoBlue}`,
-              '&:hover': { bgcolor: '#f0f0f0' }
-            }}
-            onClick={() => processStep('flight_selection', { selected_flight: flight.flight_number })}
-          >
-            <Typography variant="caption" sx={{ fontWeight: 'bold' }}>
-              {flight.flight_number}
-            </Typography>
-            <Typography variant="caption" sx={{ display: 'block' }}>
-              {flight.departure} → {flight.arrival} ({flight.duration})
-            </Typography>
-            <Typography variant="caption" sx={{ color: indigoOrange, fontWeight: 'bold' }}>
-              {flight.price}
-            </Typography>
-          </Card>
-        ))}
-      </Box>
-    );
-  };
-
-  // Render booking summary
-  const renderBookingSummary = () => {
-    return (
-      <Card sx={{ p: 2, bgcolor: '#f8f9fa', border: `1px solid ${indigoBlue}` }}>
-        <Typography variant="h6" sx={{ mb: 2, color: indigoBlue }}>Booking Summary</Typography>
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
         
-        <Box sx={{ display: 'grid', gap: 1 }}>
-          {bookingData.origin_selection && (
-            <Typography variant="body2"><strong>From:</strong> {bookingData.origin_selection.origin}</Typography>
-          )}
-          {bookingData.destination_selection && (
-            <Typography variant="body2"><strong>To:</strong> {bookingData.destination_selection.destination}</Typography>
-          )}
-          {bookingData.date_selection && (
-            <Typography variant="body2"><strong>Date:</strong> {bookingData.date_selection.date}</Typography>
-          )}
-          {bookingData.passenger_selection && (
-            <Typography variant="body2">
-              <strong>Passengers:</strong> {bookingData.passenger_selection.adults} Adults
-              {bookingData.passenger_selection.children > 0 && `, ${bookingData.passenger_selection.children} Children`}
-              {bookingData.passenger_selection.infants > 0 && `, ${bookingData.passenger_selection.infants} Infants`}
-            </Typography>
-          )}
-          {bookingData.flight_selection && (
-            <Typography variant="body2"><strong>Flight:</strong> {bookingData.flight_selection.selected_flight}</Typography>
-          )}
-          
-          {/* Individual Passenger Details */}
-          {bookingData.passenger_details && bookingData.passenger_details.passengers && (
-            <Box sx={{ mt: 1 }}>
-              <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>Passenger Details:</Typography>
-              {bookingData.passenger_details.passengers.map((passenger, index) => (
-                <Box key={index} sx={{ ml: 2, mb: 1, p: 1, bgcolor: 'white', borderRadius: 1 }}>
-                  <Typography variant="body2">
-                    <strong>{index + 1}. {passenger.name}</strong> - Age: {passenger.age}, {passenger.gender}
-                  </Typography>
-                </Box>
-              ))}
-            </Box>
-          )}
-          
-          {bookingData.contact_details && (
-            <Box sx={{ mt: 1 }}>
-              <Typography variant="body2"><strong>Contact:</strong></Typography>
-              <Typography variant="body2" sx={{ ml: 2 }}>Email: {bookingData.contact_details.email}</Typography>
-              <Typography variant="body2" sx={{ ml: 2 }}>Phone: {bookingData.contact_details.phone}</Typography>
-            </Box>
-          )}
-        </Box>
-        
-        <Button
-          fullWidth
-          variant="contained"
-          onClick={() => processStep('review_booking', { confirmed: true })}
-          sx={{ bgcolor: indigoBlue, mt: 2 }}
-        >
-          Confirm & Pay
-        </Button>
-      </Card>
-    );
-  };
-
-  // Check if step requires user input
-  const requiresInput = (step) => {
-    const inputSteps = ['origin_selection', 'destination_selection', 'date_selection', 'passenger_selection', 'passenger_details', 'contact_details', 'flight_selection'];
-    return inputSteps.includes(step);
-  };
-
-  // Render step-specific input
-  const renderStepInput = (step, nextStep) => {
-    // Only show input for current step that needs it
-    if (!requiresInput(step)) return null;
+        # Language mapping
+        self.lang_codes = {
+            "en": "en-IN",
+            "hi": "hi-IN"
+        }
     
-    switch (step) {
-      case 'origin_selection':
-        return <OriginSelection onNext={(data) => processStep('origin_selection', data)} />;
-
-      case 'destination_selection':
-        return <DestinationSelection onNext={(data) => processStep('destination_selection', data)} />;
-
-      case 'date_selection':
-        return <DateSelection onNext={(data) => processStep('date_selection', data)} />;
-
-      case 'passenger_selection':
-        return <PassengerSelection onNext={(data) => processStep('passenger_selection', data)} />;
-
-      case 'passenger_details':
-        return <PassengerDetails onNext={(data) => processStep('passenger_details', data)} passengerCount={bookingData.passenger_selection} />;
-
-      case 'contact_details':
-        return <ContactDetails onNext={(data) => processStep('contact_details', data)} />;
-
-      case 'flight_selection':
-        return null; // Flight selection handled by flight cards
-
-      default:
-        return null;
-    }
-  };
-
-  // Step Components
-  const OriginSelection = ({ onNext }) => {
-    const [city, setCity] = useState('');
-
-    return (
-      <Box>
-        <TextField
-          fullWidth
-          placeholder="e.g., Delhi, Mumbai, Bangalore"
-          value={city}
-          onChange={(e) => setCity(e.target.value)}
-          size="small"
-          sx={{ mb: 1 }}
-        />
-        <Button
-          fullWidth
-          variant="contained"
-          onClick={() => onNext({ origin: city })}
-          disabled={!city.trim()}
-          sx={{ bgcolor: indigoBlue }}
-        >
-          Next
-        </Button>
-      </Box>
-    );
-  };
-
-  const DestinationSelection = ({ onNext }) => {
-    const [city, setCity] = useState('');
-
-    return (
-      <Box>
-        <TextField
-          fullWidth
-          placeholder="Enter destination city"
-          value={city}
-          onChange={(e) => setCity(e.target.value)}
-          size="small"
-          sx={{ mb: 1 }}
-        />
-        <Button
-          fullWidth
-          variant="contained"
-          onClick={() => onNext({ destination: city })}
-          disabled={!city.trim()}
-          sx={{ bgcolor: indigoBlue }}
-        >
-          Next
-        </Button>
-      </Box>
-    );
-  };
-
-  const DateSelection = ({ onNext }) => {
-    const [date, setDate] = useState('');
-
-    return (
-      <Box>
-        <TextField
-          type="date"
-          fullWidth
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          InputLabelProps={{ shrink: true }}
-          inputProps={{ min: new Date().toISOString().split('T')[0] }}
-          size="small"
-          sx={{ mb: 1 }}
-        />
-        <Button
-          fullWidth
-          variant="contained"
-          onClick={() => onNext({ date: date })}
-          disabled={!date}
-          sx={{ bgcolor: indigoBlue }}
-        >
-          Next
-        </Button>
-      </Box>
-    );
-  };
-
-  const PassengerSelection = ({ onNext }) => {
-    const [adults, setAdults] = useState(1);
-    const [children, setChildren] = useState(0);
-    const [infants, setInfants] = useState(0);
-
-    return (
-      <Box>
-        <FormControl fullWidth size="small" sx={{ mb: 1 }}>
-          <Typography variant="caption" sx={{ mb: 0.5 }}>Adults</Typography>
-          <Select value={adults} onChange={(e) => setAdults(e.target.value)}>
-            {[1, 2, 3, 4, 5, 6].map(n => <MenuItem key={n} value={n}>{n}</MenuItem>)}
-          </Select>
-        </FormControl>
-
-        <FormControl fullWidth size="small" sx={{ mb: 1 }}>
-          <Typography variant="caption" sx={{ mb: 0.5 }}>Children</Typography>
-          <Select value={children} onChange={(e) => setChildren(e.target.value)}>
-            {[0, 1, 2, 3, 4].map(n => <MenuItem key={n} value={n}>{n}</MenuItem>)}
-          </Select>
-        </FormControl>
-
-        <FormControl fullWidth size="small" sx={{ mb: 1 }}>
-          <Typography variant="caption" sx={{ mb: 0.5 }}>Infants</Typography>
-          <Select value={infants} onChange={(e) => setInfants(e.target.value)}>
-            {[0, 1, 2, 3].map(n => <MenuItem key={n} value={n}>{n}</MenuItem>)}
-          </Select>
-        </FormControl>
-
-        <Button
-          fullWidth
-          variant="contained"
-          onClick={() => onNext({ adults, children, infants })}
-          sx={{ bgcolor: indigoBlue }}
-        >
-          Search Flights
-        </Button>
-      </Box>
-    );
-  };
-
-  const PassengerDetails = ({ onNext, passengerCount }) => {
-    const totalPassengers = passengerCount ? (passengerCount.adults + passengerCount.children) : 1;
-    const [passengers, setPassengers] = useState(
-      Array.from({ length: totalPassengers }, (_, i) => ({
-        name: '',
-        age: '',
-        gender: 'male'
-      }))
-    );
-
-    const updatePassenger = (index, field, value) => {
-      const updated = [...passengers];
-      updated[index][field] = value;
-      setPassengers(updated);
-    };
-
-    const isValid = passengers.every(p => p.name.trim() && p.age.trim());
-
-    return (
-      <Box>
-        <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>
-          Passenger Details ({totalPassengers} passengers)
-        </Typography>
-        {passengers.map((passenger, index) => (
-          <Card key={index} sx={{ p: 2, mb: 2, bgcolor: '#f8f9fa' }}>
-            <Typography variant="caption" sx={{ fontWeight: 'bold', mb: 1, display: 'block' }}>
-              Passenger {index + 1} {index < (passengerCount?.adults || 1) ? '(Adult)' : '(Child)'}
-            </Typography>
-            <TextField
-              fullWidth
-              placeholder="Full Name"
-              value={passenger.name}
-              onChange={(e) => updatePassenger(index, 'name', e.target.value)}
-              size="small"
-              sx={{ mb: 1 }}
-            />
-            <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-              <TextField
-                placeholder="Age"
-                type="number"
-                value={passenger.age}
-                onChange={(e) => updatePassenger(index, 'age', e.target.value)}
-                size="small"
-                sx={{ width: '80px' }}
-              />
-              <FormControl size="small" sx={{ minWidth: 100 }}>
-                <Select
-                  value={passenger.gender}
-                  onChange={(e) => updatePassenger(index, 'gender', e.target.value)}
-                >
-                  <MenuItem value="male">Male</MenuItem>
-                  <MenuItem value="female">Female</MenuItem>
-                </Select>
-              </FormControl>
-            </Box>
-          </Card>
-        ))}
-        <Button
-          fullWidth
-          variant="contained"
-          onClick={() => onNext({ passengers })}
-          disabled={!isValid}
-          sx={{ bgcolor: indigoBlue }}
-        >
-          Continue
-        </Button>
-      </Box>
-    );
-  };
-
-  const ContactDetails = ({ onNext }) => {
-    const [email, setEmail] = useState('');
-    const [phone, setPhone] = useState('');
-
-    return (
-      <Box>
-        <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>Contact Information</Typography>
-        <TextField
-          fullWidth
-          placeholder="Email Address"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          size="small"
-          sx={{ mb: 1 }}
-        />
-        <TextField
-          fullWidth
-          placeholder="Phone Number"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          size="small"
-          sx={{ mb: 1 }}
-        />
-        <Button
-          fullWidth
-          variant="contained"
-          onClick={() => onNext({ email, phone })}
-          disabled={!email.trim() || !phone.trim()}
-          sx={{ bgcolor: indigoBlue }}
-        >
-          Continue
-        </Button>
-      </Box>
-    );
-  };
-
-  const FlightSearch = ({ onNext }) => {
-    useEffect(() => {
-      // Auto-proceed to show flight results after 2 seconds
-      const timer = setTimeout(() => {
-        onNext({ search_completed: true });
-      }, 2000);
-      return () => clearTimeout(timer);
-    }, [onNext]);
-
-    return (
-      <Box sx={{ textAlign: 'center', p: 2 }}>
-        <Typography variant="body2">🔍 Searching for flights...</Typography>
-      </Box>
-    );
-  };
-
-  // Main render
-  return (
-    <Box sx={{ position: 'relative', height: '100vh', bgcolor: '#f0f2f5' }}>
-      {/* Main content area - simulating IndiGo website */}
-      <Box sx={{ height: '100%', p: 4 }}>
-        <Typography variant="h4" sx={{ color: indigoBlue, mb: 2 }}>IndiGo Flight Booking</Typography>
-        <Typography variant="body1" sx={{ color: '#666' }}>Welcome to IndiGo. Book your flights with our AI assistant.</Typography>
-      </Box>
-
-      {/* Floating Chat Widget */}
-      <Box
-        sx={{
-          position: 'fixed',
-          bottom: 20,
-          right: 20,
-          width: 500,
-          height: 700,
-          bgcolor: 'white',
-          borderRadius: 3,
-          boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          zIndex: 1000
-        }}
-      >
-        {/* Chat Header */}
-        <Box
-          sx={{
-            bgcolor: indigoBlue,
-            color: 'white',
-            p: 2,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
-          }}
-        >
-          <Box>
-            <Typography variant="h6" sx={{ fontWeight: 'bold' }}>6Eskai</Typography>
-            <Typography variant="caption">AI Flight Assistant</Typography>
-          </Box>
-          <FormControl size="small" sx={{ width: 80, bgcolor: 'white' }}>
-            <Select value={language} onChange={(e) => handleLanguageChange(e.target.value)}>
-              <MenuItem value="en">EN</MenuItem>
-              <MenuItem value="hi">हि</MenuItem>
-            </Select>
-          </FormControl>
-        </Box>
-
-        {/* Chat Area */}
-        <Box
-          sx={{
-            flex: 1,
-            overflow: 'auto',
-            p: 2,
-            bgcolor: '#fafafa'
-          }}
-        >
-          {chats.map((chat, idx) => renderChatMessage(chat, idx))}
-
-          {isLoading && (
-            <Box sx={{ display: 'flex', justifyContent: 'flex-start' }}>
-              <Typography variant="body2" sx={{ color: '#999' }}>Bot is typing...</Typography>
-            </Box>
-          )}
-
-          <div ref={chatEndRef} />
-        </Box>
-
-        {/* Quick Actions (only before avatar flow) */}
-        {!showAvatarFlow && chats.length <= 2 && (
-          <Box sx={{ p: 1, bgcolor: 'white', borderTop: `1px solid #eee`, display: 'flex', gap: 1, overflowX: 'auto' }}>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => {
-                console.log('🎯 Avatar button clicked!');
-                startAvatarFlow();
-              }}
-              sx={{ borderColor: indigoBlue, color: indigoBlue, fontSize: '10px' }}
-            >
-              📱 {language === 'hi' ? 'अवतार' : 'Avatar'}
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => handleSend(language === 'hi' ? 'चेक-इन' : 'Check-in')}
-              sx={{ borderColor: indigoBlue, color: indigoBlue, fontSize: '10px' }}
-            >
-              ✈️ {language === 'hi' ? 'चेक-इन' : 'Check-in'}
-            </Button>
-          </Box>
-        )}
-
-        {/* Input Area (only outside avatar flow) */}
-        {!showAvatarFlow && currentStep === null && (
-          <Paper
-            component="form"
-            sx={{
-              p: '8px',
-              display: 'flex',
-              alignItems: 'center',
-              borderTop: `1px solid #eee`,
-              borderRadius: 0
-            }}
-          >
-            <InputBase
-              ref={inputRef}
-              sx={{ ml: 1, flex: 1, fontSize: '14px' }}
-              placeholder={language === 'hi' ? 'अपना संदेश टाइप करें...' : 'Type your message...'}
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              disabled={isLoading}
-            />
-            <IconButton
-              color="primary"
-              sx={{ p: '8px', bgcolor: indigoBlue, color: 'white' }}
-              onClick={() => handleSend()}
-              disabled={isLoading || !inputText.trim()}
-            >
-              <SendIcon fontSize="small" />
-            </IconButton>
-          </Paper>
-        )}
-
-        {/* Footer */}
-        <Typography variant="caption" sx={{ textAlign: 'center', p: 1, bgcolor: '#f5f5f5', color: '#999', fontSize: '10px' }}>
-          Powered by IndiGo AI
-        </Typography>
-      </Box>
-    </Box>
-  );
-}
-
-export default App;
+    async def translate_text(self, text: str, target_language: str, source_language: str = "en") -> str:
+        """
+        Translate text using Sarvam AI
+        
+        Args:
+            text: Text to translate
+            target_language: Target language code (en, hi)
+            source_language: Source language code (default: en)
+            
+        Returns:
+            Translated text
+        """
+        try:
+            # If same language, return original text
+            if source_language == target_language:
+                return text
+            
+            # Get Sarvam language codes
+            source_lang = self.lang_codes.get(source_language, "en-IN")
+            target_lang = self.lang_codes.get(target_language, "hi-IN")
+            
+            payload = {
+                "input": text,
+                "source_language_code": source_lang,
+                "target_language_code": target_lang,
+                "speaker_gender": "Female",
+                "mode": "formal",
+                "model": "mayura:v1",
+                "enable_preprocessing": True
+            }
+            
+            response = requests.post(
+                self.translate_url,
+                headers=self.headers,
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("translated_text", text)
+            else:
+                logger.error(f"Translation failed: {response.status_code} - {response.text}")
+                return text
+                
+        except Exception as e:
+            logger.error(f"Translation error: {str(e)}")
+            return text
+    
+    async def generate_speech(self, text: str, language: str = "hi") -> Optional[str]:
+        """
+        Generate speech using Sarvam TTS
+        
+        Args:
+            text: Text to convert to speech
+            language: Language code (en, hi)
+            
+        Returns:
+            Audio URL or None if failed
+        """
+        try:
+            lang_code = self.lang_codes.get(language, "hi-IN")
+            
+            payload = {
+                "inputs": [text],
+                "target_language_code": lang_code,
+                "speaker": "meera",
+                "pitch": 0,
+                "pace": 1.0,
+                "loudness": 1.0,
+                "speech_sample_rate": 8000,
+                "enable_preprocessing": True,
+                "model": "bulbul:v1"
+            }
+            
+            response = requests.post(
+                self.tts_url,
+                headers=self.headers,
+                json=payload,
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                # Return the audio data or URL
+                return result.get("audios", [None])[0]
+            else:
+                logger.error(f"TTS failed: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"TTS error: {str(e)}")
+            return None
