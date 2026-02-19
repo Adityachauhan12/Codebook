@@ -1,189 +1,59 @@
-
-from typing import Dict, Any
-from avatar_engine import AvatarEngine
+from typing import Optional
 
 
-class FlowController:
-    """
-    Controls the flight booking flow.
-    - Manages step progression
-    - Stores booking data
-    - Returns correct messages and videos for each step
-    """
+class AvatarEngine:
+    """Handles avatar video URL generation for multilingual support"""
 
-    def __init__(self, uid: str, language: str = "en"):
-        self.uid = uid
-        self.language = language
-        self.avatar_engine = AvatarEngine()
-        self.current_step = None
-        self.booking_data = {}
-
-        # Messages for each step in different languages
-        self.messages = {
-            "en": {
-                "welcome": "Hello! I'll help you book your flight. Let's get started!",
-                "origin_selection": "Great! Let's start by selecting your departure city. Where would you like to fly from?",
-                "destination_selection": "Perfect! Now, where would you like to fly to?",
-                "date_selection": "Excellent! When would you like to travel? Please select your preferred date.",
-                "passenger_selection": "Now let's select the number of passengers. How many people will be traveling?",
-                "passenger_details": "Now I need details for all passengers. Please provide information for each traveler.",
-                "flight_search": "Searching for flights based on your preferences...",
-                "flight_selection": "Here are the available flights. Please select your preferred option.",
-                "contact_details": "Please provide contact details for booking.",
-                "review_booking": "Please review your booking details before proceeding to payment.",
-                "payment": "Redirecting to secure payment gateway..."
-            },
-            "hi": {
-                "welcome": "नमस्ते! मैं आपकी फ्लाइट बुकिंग में मदद करूंगा। चलिए शुरुआत करते हैं!",
-                "origin_selection": "बहुत अच्छा! चलिए अपने प्रस्थान शहर को चुनकर शुरुआत करते हैं। आप कहाँ से उड़ान भरना चाहते हैं?",
-                "destination_selection": "बिल्कुल! अब आप कहाँ जाना चाहते हैं?",
-                "date_selection": "शानदार! आप कब यात्रा करना चाहते हैं? अपनी पसंदीदा तारीख चुनें।",
-                "passenger_selection": "अब आइए यात्रियों की संख्या चुनें। कितने लोग यात्रा करेंगे?",
-                "passenger_details": "अब मुझे सभी यात्रियों का विवरण चाहिए। कृपया प्रत्येक यात्री की जानकारी प्रदान करें।",
-                "flight_search": "आपकी पसंद के अनुसार उड़ानों की खोज जारी है...",
-                "flight_selection": "यहाँ उपलब्ध उड़ानें हैं। अपनी पसंदीदा उड़ान चुनें।",
-                "contact_details": "बुकिंग के लिए संपर्क विवरण प्रदान करें।",
-                "review_booking": "भुगतान के लिए आगे बढ़ने से पहले अपने बुकिंग विवरण की समीक्षा करें।",
-                "payment": "सुरक्षित भुगतान गेटवे पर पुनर्निर्देशित किया जा रहा है..."
-            }
+    def __init__(self):
+        # Use environment variable or default to localhost
+        import os
+        self.base_url = os.getenv('AVATAR_CDN_URL', 'http://localhost:8000/videos')
+        if not self.base_url.startswith('http'):
+            self.base_url = f"http://localhost:8000{self.base_url}"
+        
+        # Language folder mapping
+        self.language_folders = {
+            "en": "english",
+            "hi": "hindi"
+        }
+        
+        # Video filename mapping (without language suffix)
+        self.video_files = {
+            "welcome": "welcome",
+            "language_selection": "language_selection",
+            "origin_selection": "origin_selection",
+            "destination_selection": "destination_selection",
+            "date_selection": "date_selection",
+            "passenger_selection": "passenger_selection",
+            "flight_search": "flight_search",
+            "flight_selection": "flight_selection",
+            "passenger_details": "passenger_details",
+            "review_booking": "review_booking",
+            "payment": "payment_handoff"
         }
 
-        # Define the flow sequence - which step comes after which
-        self.step_flow = {
-            "welcome": "origin_selection",
-            "origin_selection": "destination_selection",
-            "destination_selection": "date_selection",
-            "date_selection": "passenger_selection",
-            "passenger_selection": "passenger_details",
-            "passenger_details": "flight_search",
-            "flight_search": "flight_selection",
-            "flight_selection": "contact_details",
-            "contact_details": "review_booking",
-            "review_booking": "payment",
-            "payment": "complete"
-        }
-
-    async def start_avatar_flow(self, query: str, language: str) -> Dict[str, Any]:
+    def get_video_url(self, step: str, language: str = "en") -> Optional[str]:
         """
-        Start the avatar-guided booking flow.
+        Get avatar video URL for a given step and language.
         
-        Returns the welcome step with video and message.
+        Args:
+            step: The booking flow step name
+            language: Language code (en, hi)
+            
+        Returns:
+            Full video URL or None if not found
         """
-        self.language = language
-        self.current_step = "welcome"
-        
-        video_url = self.avatar_engine.get_video_url("welcome", language)
-        message = self.messages.get(language, self.messages["en"]).get("welcome")
+        if step in self.video_files:
+            lang_folder = self.language_folders.get(language, "english")
+            lang_suffix = "en" if language == "en" else "hi"
+            filename = f"{self.video_files[step]}_{lang_suffix}.mp4"
+            return f"{self.base_url}/{lang_folder}/{filename}"
+        return None
 
-        return {
-            "type": "avatar_flow",
-            "step": "welcome",
-            "avatar_video": video_url,
-            "message": message,
-            "next_step": "origin_selection",
-            "uid": self.uid,
-            "show_input": True
-        }
+    def get_subtitle_url(self, step: str, language: str = "en") -> Optional[str]:
+        """Get subtitle URL for accessibility."""
+        return None
 
-    async def process_step(
-        self, 
-        step: str, 
-        user_input: Dict[str, Any], 
-        language: str
-    ) -> Dict[str, Any]:
-        """
-        Process a booking step and return the current step data.
-        """
-        self.language = language
-        
-        # Store user input
-        if user_input:
-            self.booking_data[step] = user_input
-
-        # Get the NEXT step to show
-        next_step = self.step_flow.get(step, "complete")
-        self.current_step = next_step
-
-        # Get message and video for the NEXT step
-        message_dict = self.messages.get(language, self.messages["en"])
-        message = message_dict.get(next_step, f"Processing {next_step}")
-        video_url = self.avatar_engine.get_video_url(next_step, language)
-
-        response = {
-            "type": "avatar_step",
-            "step": next_step,
-            "next_step": self.step_flow.get(next_step, "complete"),
-            "avatar_video": video_url,
-            "message": message,
-            "booking_data": self.booking_data
-        }
-
-        # Special handling for flight search
-        if next_step == "flight_search":
-            # Auto-show flight results
-            flights = self._get_dummy_flights()
-            response["flights"] = flights
-            response["type"] = "flight_results"
-            response["message"] = f"Found {len(flights)} flights"
-            response["next_step"] = "flight_selection"
-        
-        # Special handling for review_booking - don't auto-progress
-        if next_step == "review_booking":
-            response["type"] = "review_booking"
-            response["requires_confirmation"] = True
-        
-        # Special handling for payment - final step
-        if next_step == "payment":
-            response["type"] = "payment"
-            response["message"] = "Redirecting to secure payment gateway..."
-            response["next_step"] = "complete"
-        
-        # Complete step - end of flow
-        if next_step == "complete":
-            response["type"] = "complete"
-            response["message"] = "Processing complete"
-            response["avatar_video"] = None
-            response["next_step"] = None
-
-        return response
-
-    def get_booking_summary(self) -> Dict[str, Any]:
-        """Get current booking summary"""
-        return {
-            "current_step": self.current_step,
-            "booking_data": self.booking_data,
-            "progress": self._calculate_progress()
-        }
-
-    def _calculate_progress(self) -> int:
-        """Calculate booking progress as percentage"""
-        steps = list(self.step_flow.keys())
-        if self.current_step in steps:
-            return int((steps.index(self.current_step) + 1) / len(steps) * 100)
-        return 0
-
-    def _get_dummy_flights(self) -> list:
-        """Return dummy flight data for demonstration"""
-        return [
-            {
-                "flight_number": "6E-123",
-                "departure": "06:00",
-                "arrival": "08:30",
-                "duration": "2h 30m",
-                "price": "₹4,500"
-            },
-            {
-                "flight_number": "6E-456",
-                "departure": "14:15",
-                "arrival": "16:45",
-                "duration": "2h 30m",
-                "price": "₹5,200"
-            },
-            {
-                "flight_number": "6E-789",
-                "departure": "20:30",
-                "arrival": "23:00",
-                "duration": "2h 30m",
-                "price": "₹4,800"
-            }
-        ]
+    def validate_video_exists(self, step: str) -> bool:
+        """Check if video file mapping exists for a step"""
+        return step in self.video_files
