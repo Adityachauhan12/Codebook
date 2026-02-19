@@ -1,565 +1,209 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, ScrollView, KeyboardAvoidingView, Platform, Modal, Dimensions } from 'react-native';
-import { Provider as PaperProvider, Text, Button, TextInput, Card, Menu } from 'react-native-paper';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { Video } from 'expo-av';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import axios from 'axios';
+>> npx expo start
+Need to install the following packages:
+create-expo-app@3.5.3
+Ok to proceed? (y) y
 
-const { width, height } = Dimensions.get('window');
+Creating an Expo project using the blank template.
 
-const API_BASE = 'https://pomologically-overminute-linette.ngrok-free.dev';
-const indigoBlue = '#001b94';
-const indigoOrange = '#f14658';
+√ Downloaded and extracted project files.
+> npm install
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
-export default function App() {
-  return (
-    <SafeAreaProvider>
-      <PaperProvider>
-        <AvatarBookingApp />
-      </PaperProvider>
-    </SafeAreaProvider>
-  );
-}
+added 693 packages, and audited 694 packages in 4m
 
-function AvatarBookingApp() {
-  const [language, setLanguage] = useState('en');
-  const [uid, setUid] = useState('');
-  const [chats, setChats] = useState([]);
-  const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [showAvatarFlow, setShowAvatarFlow] = useState(false);
-  const [currentStep, setCurrentStep] = useState(null);
-  const [bookingData, setBookingData] = useState({});
-  const [menuVisible, setMenuVisible] = useState(false);
-  const [fullscreenVideo, setFullscreenVideo] = useState(null);
-  const [showStepInput, setShowStepInput] = useState(false);
-  const [pendingStepData, setPendingStepData] = useState(null);
-  const chatEndRef = useRef(null);
-  const videoRef = useRef(null);
+53 packages are looking for funding
+  run `npm fund` for details
 
-  const getWelcomeMessage = (lang) => {
-    return lang === 'hi' 
-      ? 'नमस्ते! 6Eskai में आपका स्वागत है। मैं चरणबद्ध अवतार मार्गदर्शन के साथ उड़ानें बुक करने में आपकी सहायता कर सकता हूं।'
-      : 'Hello! Welcome to 6Eskai. I can help you book flights with step-by-step avatar guidance.';
-  };
+19 high severity vulnerabilities
 
-  useEffect(() => {
-    const newUid = 'uid_' + Math.random().toString(36).substr(2, 9);
-    setUid(newUid);
-    setChats([{
-      type: 'text',
-      text: getWelcomeMessage(language),
-      sender: 'bot',
-      timestamp: new Date().toISOString()
-    }]);
-  }, []);
+To address all issues (including breaking changes), run:
+  npm audit fix --force
 
-  const startAvatarFlow = async () => {
-    try {
-      setIsLoading(true);
-      setShowAvatarFlow(true);
+Run `npm audit` for details.
 
-      const response = await fetch(`${API_BASE}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: language === 'hi' ? 'अवतार के साथ उड़ान बुक करें' : 'book flight with avatar',
-          uid: uid,
-          language: language
-        })
-      });
+✅ Your project is ready!
 
-      const data = await response.json();
-      if (data.type === 'avatar_flow') {
-        setCurrentStep(data.step);
-        setPendingStepData(data);
-        setFullscreenVideo(data.avatar_video);
-        setShowStepInput(false);
-      }
-    } catch (error) {
-      console.error('Error:', error);
-      setChats(prev => [...prev, {
-        type: 'text',
-        text: 'Error connecting to server. Please check backend is running.',
-        sender: 'bot',
-        timestamp: new Date().toISOString()
-      }]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+To run your project, navigate to the directory and run one of the following npm commands.        
 
-  const processStep = async (step, userInput) => {
-    try {
-      setIsLoading(true);
-      setShowStepInput(false);
+- cd mobile-app
+- npm run android
+- npm run ios # you need to use macOS to build the iOS project - use the Expo app if you need to do iOS development without a Mac
+- npm run web
+npm notice
+npm notice New major version of npm available! 10.9.2 -> 11.10.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.10.0
+npm notice To update run: npm install -g npm@11.10.0
+npm notice
 
-      // Format user input for display
-      let userInputText = '';
-      if (typeof userInput === 'string') {
-        userInputText = userInput;
-      } else if (typeof userInput === 'object') {
-        if (userInput.origin) userInputText = `From: ${userInput.origin}`;
-        else if (userInput.destination) userInputText = `To: ${userInput.destination}`;
-        else if (userInput.date) userInputText = `Date: ${userInput.date}`;
-        else if (userInput.adults !== undefined) {
-          userInputText = `${userInput.adults} Adult(s)`;
-          if (userInput.children > 0) userInputText += `, ${userInput.children} Child(ren)`;
-          if (userInput.infants > 0) userInputText += `, ${userInput.infants} Infant(s)`;
-        }
-        else if (userInput.passengers) userInputText = `${userInput.passengers.length} passenger(s) details provided`;
-        else if (userInput.email) userInputText = `Email: ${userInput.email}, Phone: ${userInput.phone}`;
-        else if (userInput.selected_flight) userInputText = `Selected: ${userInput.selected_flight}`;
-        else if (userInput.confirmed) userInputText = 'Booking confirmed';
-        else if (userInput.continue) userInputText = null; // Don't show "continue: true"
-        else userInputText = JSON.stringify(userInput);
-      }
+added 1 package, and audited 695 packages in 14s
 
-      if (userInputText) {
-        setChats(prev => [...prev, {
-          type: 'text',
-          text: userInputText,
-          sender: 'user',
-          timestamp: new Date().toISOString()
-        }]);
-      }
+53 packages are looking for funding
+  run `npm fund` for details
 
-      const response = await fetch(`${API_BASE}/avatar-step`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: uid,
-          step: step,
-          user_input: typeof userInput === 'string' ? { response: userInput } : userInput,
-          language: language
-        })
-      });
+20 high severity vulnerabilities
 
-      const data = await response.json();
-      setCurrentStep(data.step);
-      setBookingData(prev => ({ ...prev, [step]: userInput }));
-      setPendingStepData(data);
+To address all issues (including breaking changes), run:
+  npm audit fix --force
 
-      // Handle complete step - stop the flow
-      if (data.step === 'complete' || data.type === 'complete') {
-        setChats(prev => [...prev, {
-          type: 'text',
-          text: '✅ Booking complete! Thank you for using 6Eskai.',
-          sender: 'bot',
-          timestamp: new Date().toISOString()
-        }]);
-        setShowAvatarFlow(false);
-        setCurrentStep(null);
-        setShowStepInput(false);
-        setIsLoading(false);
-        return;
-      }
+Run `npm audit` for details.
 
-      if (data.avatar_video) {
-        setFullscreenVideo(data.avatar_video);
-      } else {
-        handleVideoEnd(data);
-      }
-    } catch (error) {
-      console.error('Error:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+added 1 package, and audited 696 packages in 11s
 
-  const handleVideoEnd = (stepData) => {
-    setFullscreenVideo(null);
-    
-    // Don't add message for complete step
-    if (stepData.step !== 'complete') {
-      setChats(prev => [...prev, {
-        type: stepData.type || 'avatar_step',
-        text: stepData.message,
-        sender: 'bot',
-        step: stepData.step,
-        flights: stepData.flights,
-        timestamp: new Date().toISOString()
-      }]);
-    }
-    
-    // Auto-progress for steps that don't need input (except review_booking and payment)
-    if (!requiresInput(stepData.step) && 
-        stepData.step !== 'flight_search' && 
-        stepData.step !== 'review_booking' && 
-        stepData.step !== 'payment' &&
-        stepData.step !== 'complete') {
-      setTimeout(() => {
-        processStep(stepData.step, { continue: true });
-      }, 500);
-    } else if (stepData.step === 'complete') {
-      // End the flow completely
-      setTimeout(() => {
-        setChats(prev => [...prev, {
-          type: 'text',
-          text: '✅ Booking complete! Thank you for using 6Eskai.',
-          sender: 'bot',
-          timestamp: new Date().toISOString()
-        }]);
-        setShowAvatarFlow(false);
-        setCurrentStep(null);
-        setShowStepInput(false);
-      }, 1000);
-    } else {
-      setShowStepInput(true);
-    }
-  };
+53 packages are looking for funding
+  run `npm fund` for details
 
-  const renderChatMessage = (chat, index) => {
-    if (chat.sender === 'user') {
-      return (
-        <View key={index} style={styles.userMessageContainer}>
-          <Card style={styles.userMessage}>
-            <Card.Content>
-              <Text style={styles.userMessageText}>{chat.text}</Text>
-            </Card.Content>
-          </Card>
-        </View>
-      );
-    }
+20 high severity vulnerabilities
 
-    return (
-      <View key={index} style={styles.botMessageContainer}>
-        <Card style={styles.botMessage}>
-          <Card.Content>
-            <Text style={styles.botMessageText}>{chat.text}</Text>
+To address all issues (including breaking changes), run:
+  npm audit fix --force
 
-            {chat.flights && index === chats.length - 1 && showStepInput && (
-              <View style={styles.flightsContainer}>
-                <Text style={styles.flightsTitle}>Available Flights:</Text>
-                {chat.flights.map((flight, idx) => (
-                  <Card key={idx} style={styles.flightCard} onPress={() => processStep('flight_selection', { selected_flight: flight.flight_number })}>
-                    <Card.Content>
-                      <Text style={styles.flightNumber}>{flight.flight_number}</Text>
-                      <Text style={styles.flightDetails}>{flight.departure} → {flight.arrival} ({flight.duration})</Text>
-                      <Text style={styles.flightPrice}>{flight.price}</Text>
-                    </Card.Content>
-                  </Card>
-                ))}
-              </View>
-            )}
+Run `npm audit` for details.
 
-            {chat.step === 'review_booking' && index === chats.length - 1 && showStepInput && currentStep === 'review_booking' && (
-              <ReviewBooking bookingData={bookingData} onNext={(data) => processStep('review_booking', data)} language={language} />
-            )}
+added 2 packages, removed 2 packages, and audited 696 packages in 9s
 
-            {chat.step && index === chats.length - 1 && showStepInput && chat.step === currentStep && (
-              <View style={styles.stepInputContainer}>
-                {renderStepInput(chat.step)}
-              </View>
-            )}
-          </Card.Content>
-        </Card>
-      </View>
-    );
-  };
+53 packages are looking for funding
+  run `npm fund` for details
 
-  const requiresInput = (step) => {
-    return ['origin_selection', 'destination_selection', 'date_selection', 'passenger_selection', 'passenger_details', 'contact_details', 'flight_selection', 'review_booking'].includes(step);
-  };
+20 high severity vulnerabilities
 
-  const renderStepInput = (step) => {
-    if (!requiresInput(step)) return null;
-    
-    switch (step) {
-      case 'origin_selection':
-        return <OriginSelection onNext={(data) => processStep('origin_selection', data)} language={language} />;
-      case 'destination_selection':
-        return <DestinationSelection onNext={(data) => processStep('destination_selection', data)} language={language} />;
-      case 'date_selection':
-        return <DateSelection onNext={(data) => processStep('date_selection', data)} language={language} />;
-      case 'passenger_selection':
-        return <PassengerSelection onNext={(data) => processStep('passenger_selection', data)} language={language} />;
-      case 'passenger_details':
-        return <PassengerDetails onNext={(data) => processStep('passenger_details', data)} passengerCount={bookingData.passenger_selection} />;
-      case 'contact_details':
-        return <ContactDetails onNext={(data) => processStep('contact_details', data)} language={language} />;
-      default:
-        return null;
-    }
-  };
+To address all issues (including breaking changes), run:
+  npm audit fix --force
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.container}
-      >
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.headerTitle}>6Eskai</Text>
-            <Text style={styles.headerSubtitle}>AI Flight Assistant</Text>
-          </View>
-          <Menu
-            visible={menuVisible}
-            onDismiss={() => setMenuVisible(false)}
-            anchor={
-              <Button onPress={() => setMenuVisible(true)} textColor="white">
-                {language === 'en' ? 'EN' : 'हि'}
-              </Button>
-            }
-          >
-            <Menu.Item onPress={() => { setLanguage('en'); setMenuVisible(false); }} title="English" />
-            <Menu.Item onPress={() => { setLanguage('hi'); setMenuVisible(false); }} title="हिंदी" />
-          </Menu>
-        </View>
+Run `npm audit` for details.
 
-        <ScrollView 
-          style={styles.chatArea}
-          ref={chatEndRef}
-          onContentSizeChange={() => chatEndRef.current?.scrollToEnd({ animated: true })}
-        >
-          {chats.map((chat, idx) => renderChatMessage(chat, idx))}
-          {isLoading && <Text style={styles.loadingText}>Bot is typing...</Text>}
-        </ScrollView>
+added 11 packages, and audited 707 packages in 23s
 
-        {!showAvatarFlow && chats.length <= 2 && (
-          <View style={styles.quickActions}>
-            <Button mode="outlined" onPress={startAvatarFlow} style={styles.quickButton}>
-              📱 {language === 'hi' ? 'अवतार' : 'Avatar'}
-            </Button>
-          </View>
-        )}
+53 packages are looking for funding
+  run `npm fund` for details
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Powered by IndiGo AI</Text>
-        </View>
+20 high severity vulnerabilities
 
-        <Modal visible={!!fullscreenVideo} animationType="fade" onRequestClose={() => {}}>
-          <View style={styles.fullscreenContainer}>
-            <Video
-              ref={videoRef}
-              source={{ uri: fullscreenVideo }}
-              style={styles.fullscreenVideo}
-              resizeMode="contain"
-              shouldPlay
-              onPlaybackStatusUpdate={(status) => {
-                if (status.didJustFinish) {
-                  handleVideoEnd(pendingStepData);
-                }
-              }}
-              onError={(e) => {
-                console.log('Video error:', e);
-                handleVideoEnd(pendingStepData);
-              }}
-            />
-          </View>
-        </Modal>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
-  );
-}
+To address issues that do not require attention, run:
+  npm audit fix
 
-// Step Components
-function OriginSelection({ onNext, language }) {
-  const [city, setCity] = useState('');
-  return (
-    <View>
-      <TextInput mode="outlined" placeholder={language === 'hi' ? 'शहर दर्ज करें' : 'Enter city'} value={city} onChangeText={setCity} style={styles.input} />
-      <Button mode="contained" onPress={() => onNext({ origin: city })} disabled={!city.trim()} style={styles.button} buttonColor={indigoBlue}>
-        {language === 'hi' ? 'अगला' : 'Next'}
-      </Button>
-    </View>
-  );
-}
+To address all issues (including breaking changes), run:
+  npm audit fix --force
 
-function DestinationSelection({ onNext, language }) {
-  const [city, setCity] = useState('');
-  return (
-    <View>
-      <TextInput mode="outlined" placeholder={language === 'hi' ? 'शहर दर्ज करें' : 'Enter city'} value={city} onChangeText={setCity} style={styles.input} />
-      <Button mode="contained" onPress={() => onNext({ destination: city })} disabled={!city.trim()} style={styles.button} buttonColor={indigoBlue}>
-        {language === 'hi' ? 'अगला' : 'Next'}
-      </Button>
-    </View>
-  );
-}
+Run `npm audit` for details.
 
-function DateSelection({ onNext, language }) {
-  const [date, setDate] = useState(new Date());
-  const [show, setShow] = useState(false);
-  const [dateString, setDateString] = useState('');
-  
-  const onChange = (event, selectedDate) => {
-    setShow(Platform.OS === 'ios');
-    if (selectedDate) {
-      setDate(selectedDate);
-      const formatted = selectedDate.toISOString().split('T')[0];
-      setDateString(formatted);
-    }
-  };
-  
-  return (
-    <View>
-      <Button 
-        mode="outlined" 
-        onPress={() => setShow(true)} 
-        style={styles.input}
-        icon="calendar"
-      >
-        {dateString || (language === 'hi' ? 'तारीख चुनें' : 'Select Date')}
-      </Button>
-      {show && (
-        <DateTimePicker
-          value={date}
-          mode="date"
-          display="default"
-          onChange={onChange}
-          minimumDate={new Date()}
-        />
-      )}
-      <Button 
-        mode="contained" 
-        onPress={() => onNext({ date: dateString })} 
-        disabled={!dateString} 
-        style={styles.button} 
-        buttonColor={indigoBlue}
-      >
-        {language === 'hi' ? 'अगला' : 'Next'}
-      </Button>
-    </View>
-  );
-}
+up to date, audited 707 packages in 10s
 
-function PassengerSelection({ onNext, language }) {
-  const [adults, setAdults] = useState('1');
-  const [children, setChildren] = useState('0');
-  const [infants, setInfants] = useState('0');
-  return (
-    <View>
-      <TextInput mode="outlined" label={language === 'hi' ? 'वयस्क' : 'Adults'} value={adults} onChangeText={setAdults} keyboardType="numeric" style={styles.input} />
-      <TextInput mode="outlined" label={language === 'hi' ? 'बच्चे' : 'Children'} value={children} onChangeText={setChildren} keyboardType="numeric" style={styles.input} />
-      <TextInput mode="outlined" label={language === 'hi' ? 'शिशु' : 'Infants'} value={infants} onChangeText={setInfants} keyboardType="numeric" style={styles.input} />
-      <Button mode="contained" onPress={() => onNext({ adults: parseInt(adults), children: parseInt(children), infants: parseInt(infants) })} style={styles.button} buttonColor={indigoBlue}>
-        {language === 'hi' ? 'उड़ानें खोजें' : 'Search Flights'}
-      </Button>
-    </View>
-  );
-}
+53 packages are looking for funding
+  run `npm fund` for details
 
-function PassengerDetails({ onNext, passengerCount }) {
-  const totalPassengers = passengerCount ? (passengerCount.adults + passengerCount.children + passengerCount.infants) : 1;
-  const [passengers, setPassengers] = useState(Array.from({ length: totalPassengers }, (_, i) => {
-    let type = 'Adult';
-    if (passengerCount) {
-      if (i >= passengerCount.adults + passengerCount.children) type = 'Infant';
-      else if (i >= passengerCount.adults) type = 'Child';
-    }
-    return { name: '', age: '', gender: 'male', type };
-  }));
+20 high severity vulnerabilities
 
-  const updatePassenger = (index, field, value) => {
-    const updated = [...passengers];
-    updated[index][field] = value;
-    setPassengers(updated);
-  };
+To address all issues (including breaking changes), run:
+  npm audit fix --force
 
-  const isValid = passengers.every(p => p.name.trim() && p.age.trim());
+Run `npm audit` for details.
 
-  return (
-    <View>
-      <Text style={styles.sectionTitle}>Passenger Details</Text>
-      {passengers.map((passenger, index) => (
-        <View key={index} style={styles.passengerForm}>
-          <Text>Passenger {index + 1} ({passenger.type})</Text>
-          <TextInput mode="outlined" placeholder="Full Name" value={passenger.name} onChangeText={(val) => updatePassenger(index, 'name', val)} style={styles.input} />
-          <TextInput mode="outlined" placeholder="Age" value={passenger.age} onChangeText={(val) => updatePassenger(index, 'age', val)} keyboardType="numeric" style={styles.input} />
-        </View>
-      ))}
-      <Button mode="contained" onPress={() => onNext({ passengers })} disabled={!isValid} style={styles.button} buttonColor={indigoBlue}>Continue</Button>
-    </View>
-  );
-}
+added 19 packages, and audited 726 packages in 11s
 
-function ContactDetails({ onNext, language }) {
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  return (
-    <View>
-      <Text style={styles.sectionTitle}>{language === 'hi' ? 'संपर्क जानकारी' : 'Contact Information'}</Text>
-      <TextInput mode="outlined" placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" style={styles.input} />
-      <TextInput mode="outlined" placeholder="Phone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" style={styles.input} />
-      <Button mode="contained" onPress={() => onNext({ email, phone })} disabled={!email.trim() || !phone.trim()} style={styles.button} buttonColor={indigoBlue}>
-        {language === 'hi' ? 'जारी रखें' : 'Continue'}
-      </Button>
-    </View>
-  );
-}
+58 packages are looking for funding
+  run `npm fund` for details
 
-function ReviewBooking({ bookingData, onNext, language }) {
-  return (
-    <Card style={styles.reviewCard}>
-      <Card.Content>
-        <Text style={styles.reviewTitle}>{language === 'hi' ? 'बुकिंग समीक्षा' : 'Booking Summary'}</Text>
-        {bookingData.origin_selection && (
-          <Text style={styles.reviewText}>From: {bookingData.origin_selection.origin}</Text>
-        )}
-        {bookingData.destination_selection && (
-          <Text style={styles.reviewText}>To: {bookingData.destination_selection.destination}</Text>
-        )}
-        {bookingData.date_selection && (
-          <Text style={styles.reviewText}>Date: {bookingData.date_selection.date}</Text>
-        )}
-        {bookingData.passenger_selection && (
-          <Text style={styles.reviewText}>
-            Passengers: {bookingData.passenger_selection.adults} Adult(s)
-            {bookingData.passenger_selection.children > 0 && `, ${bookingData.passenger_selection.children} Child(ren)`}
-            {bookingData.passenger_selection.infants > 0 && `, ${bookingData.passenger_selection.infants} Infant(s)`}
-          </Text>
-        )}
-        {bookingData.flight_selection && (
-          <Text style={styles.reviewText}>Flight: {bookingData.flight_selection.selected_flight}</Text>
-        )}
-        {bookingData.contact_details && (
-          <View>
-            <Text style={styles.reviewText}>Email: {bookingData.contact_details.email}</Text>
-            <Text style={styles.reviewText}>Phone: {bookingData.contact_details.phone}</Text>
-          </View>
-        )}
-        <Button mode="contained" onPress={() => onNext({ confirmed: true })} style={[styles.button, {marginTop: 16}]} buttonColor={indigoBlue}>
-          {language === 'hi' ? 'पुष्टि करें और भुगतान करें' : 'Confirm & Pay'}
-        </Button>
-      </Card.Content>
-    </Card>
-  );
-}
+20 high severity vulnerabilities
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f2f5' },
-  header: { backgroundColor: indigoBlue, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  headerTitle: { color: 'white', fontSize: 20, fontWeight: 'bold' },
-  headerSubtitle: { color: 'white', fontSize: 12 },
-  chatArea: { flex: 1, padding: 8, backgroundColor: '#fafafa' },
-  userMessageContainer: { alignItems: 'flex-end', marginBottom: 8 },
-  userMessage: { backgroundColor: indigoBlue, maxWidth: '80%', borderRadius: 12 },
-  userMessageText: { color: 'white', fontSize: 13 },
-  botMessageContainer: { alignItems: 'flex-start', marginBottom: 8 },
-  botMessage: { backgroundColor: '#f5f5f5', width: '100%', borderRadius: 12 },
-  botMessageText: { fontSize: 13, marginTop: 8 },
-  flightsContainer: { marginTop: 16 },
-  flightsTitle: { fontWeight: 'bold', marginBottom: 8 },
-  flightCard: { marginBottom: 8, borderWidth: 2, borderColor: indigoBlue },
-  flightNumber: { fontWeight: 'bold' },
-  flightDetails: { fontSize: 12 },
-  flightPrice: { color: indigoOrange, fontWeight: 'bold' },
-  stepInputContainer: { marginTop: 16 },
-  input: { marginBottom: 12 },
-  button: { marginTop: 8 },
-  sectionTitle: { fontWeight: 'bold', marginBottom: 12 },
-  passengerForm: { marginBottom: 16 },
-  reviewCard: { marginTop: 16, backgroundColor: '#f8f9fa', borderWidth: 1, borderColor: indigoBlue },
-  reviewTitle: { fontSize: 18, fontWeight: 'bold', color: indigoBlue, marginBottom: 12 },
-  reviewText: { fontSize: 14, marginBottom: 8 },
-  quickActions: { padding: 8, backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#eee', flexDirection: 'row', gap: 8 },
-  quickButton: { borderColor: indigoBlue },
-  footer: { padding: 8, backgroundColor: '#f5f5f5', alignItems: 'center' },
-  footerText: { fontSize: 10, color: '#999' },
-  loadingText: { color: '#999', padding: 8 },
-  fullscreenContainer: { flex: 1, backgroundColor: 'black', justifyContent: 'center', alignItems: 'center' },
-  fullscreenVideo: { width: width, height: height }
-});
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+
+added 12 packages, and audited 738 packages in 14s
+
+59 packages are looking for funding
+  run `npm fund` for details
+
+20 high severity vulnerabilities
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+
+added 11 packages, and audited 749 packages in 26s
+
+59 packages are looking for funding
+  run `npm fund` for details
+
+20 high severity vulnerabilities
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+
+changed 1 package, and audited 749 packages in 17s
+
+59 packages are looking for funding
+  run `npm fund` for details
+
+20 high severity vulnerabilities
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+
+changed 1 package, and audited 749 packages in 20s
+
+59 packages are looking for funding
+  run `npm fund` for details
+
+20 high severity vulnerabilities
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+mkdir : An item with the specified name C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation 
+Limited\Desktop\vernacular-avatar-booking\mobile-app\assets already exists.
+At line:19 char:1
++ mkdir assets
++ ~~~~~~~~~~~~
+    + CategoryInfo          : ResourceExists: (C:\Users\aditya...bile-app\assets:String) [New-I  
+   tem], IOException
+    + FullyQualifiedErrorId : DirectoryExist,Microsoft.PowerShell.Commands.NewItemCommand        
+
+Starting project at C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app
+Starting Metro Bundler
+TypeError: fetch failed
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:13510:13
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at fetchWithCredentials (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\api\rest\client.ts:98:24)
+    at cachedFetch (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\api\rest\cache\wrapFetchWithCache.ts:26:24)
+    at getNativeModuleVersionsAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\api\getNativeModuleVersions.ts:39:20)
+    at getVersionedNativeModulesAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\bundledNativeModules.ts:33:14)
+    at getCombinedKnownVersionsAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\getVersionedPackages.ts:58:7)
+    at getVersionedDependenciesAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\validateDependenciesVersions.ts:100:33)
+    at validateDependenciesVersionsAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\validateDependenciesVersions.ts:49:25)
+    at startAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\startAsync.ts:110:5)
+PS C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app> npx expo start
+Starting project at C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app
+Starting Metro Bundler
+TypeError: fetch failed
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:13510:13
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at fetchWithCredentials (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\api\rest\client.ts:98:24)
+    at cachedFetch (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\api\rest\cache\wrapFetchWithCache.ts:26:24)
+    at getNativeModuleVersionsAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\api\getNativeModuleVersions.ts:39:20)
+    at getVersionedNativeModulesAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\bundledNativeModules.ts:33:14)
+    at getCombinedKnownVersionsAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\getVersionedPackages.ts:58:7)
+    at getVersionedDependenciesAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\validateDependenciesVersions.ts:100:33)
+    at validateDependenciesVersionsAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\validateDependenciesVersions.ts:49:25)
+    at startAsync (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\startAsync.ts:110:5)
+PS C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\vernacular-avatar-booking\mobile-app>
