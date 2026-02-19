@@ -1,166 +1,189 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
-import uuid
-import os
-from dotenv import load_dotenv
 
+from typing import Dict, Any
 from avatar_engine import AvatarEngine
-from flow_controller import FlowController
-from chatbot_integration import ChatbotIntegration
 
-# Load environment variables
-load_dotenv()
 
-app = FastAPI(title="Vernacular Avatar Flight Booking", version="1.0.0")
+class FlowController:
+    """
+    Controls the flight booking flow.
+    - Manages step progression
+    - Stores booking data
+    - Returns correct messages and videos for each step
+    """
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    def __init__(self, uid: str, language: str = "en"):
+        self.uid = uid
+        self.language = language
+        self.avatar_engine = AvatarEngine()
+        self.current_step = None
+        self.booking_data = {}
 
-class ChatRequest(BaseModel):
-    query: str
-    uid: Optional[str] = None
-    language: str = "en"
-
-class StepRequest(BaseModel):
-    uid: str
-    step: str
-    user_input: Dict[str, Any]
-    language: str = "en"
-
-# Global instances
-avatar_engine = AvatarEngine()
-sessions = {}
-
-# Mount videos directory
-video_path = os.path.join(os.path.dirname(__file__), "..", "videos")
-if os.path.exists(video_path):
-    app.mount("/videos", StaticFiles(directory=video_path), name="videos")
-
-@app.post("/chat")
-async def chat_endpoint(request: ChatRequest):
-    """Main chat endpoint for multilingual chatbot"""
-    try:
-        uid = request.uid or str(uuid.uuid4())
-
-        if uid not in sessions:
-            sessions[uid] = {
-                "flow_controller": FlowController(uid, request.language),
-                "chatbot": ChatbotIntegration(uid),
-                "current_step": None,
-                "language": request.language,
-                "booking_data": {},
-                "in_avatar_flow": False
+        # Messages for each step in different languages
+        self.messages = {
+            "en": {
+                "welcome": "Hello! I'll help you book your flight. Let's get started!",
+                "origin_selection": "Great! Let's start by selecting your departure city. Where would you like to fly from?",
+                "destination_selection": "Perfect! Now, where would you like to fly to?",
+                "date_selection": "Excellent! When would you like to travel? Please select your preferred date.",
+                "passenger_selection": "Now let's select the number of passengers. How many people will be traveling?",
+                "passenger_details": "Now I need details for all passengers. Please provide information for each traveler.",
+                "flight_search": "Searching for flights based on your preferences...",
+                "flight_selection": "Here are the available flights. Please select your preferred option.",
+                "contact_details": "Please provide contact details for booking.",
+                "review_booking": "Please review your booking details before proceeding to payment.",
+                "payment": "Redirecting to secure payment gateway..."
+            },
+            "hi": {
+                "welcome": "नमस्ते! मैं आपकी फ्लाइट बुकिंग में मदद करूंगा। चलिए शुरुआत करते हैं!",
+                "origin_selection": "बहुत अच्छा! चलिए अपने प्रस्थान शहर को चुनकर शुरुआत करते हैं। आप कहाँ से उड़ान भरना चाहते हैं?",
+                "destination_selection": "बिल्कुल! अब आप कहाँ जाना चाहते हैं?",
+                "date_selection": "शानदार! आप कब यात्रा करना चाहते हैं? अपनी पसंदीदा तारीख चुनें।",
+                "passenger_selection": "अब आइए यात्रियों की संख्या चुनें। कितने लोग यात्रा करेंगे?",
+                "passenger_details": "अब मुझे सभी यात्रियों का विवरण चाहिए। कृपया प्रत्येक यात्री की जानकारी प्रदान करें।",
+                "flight_search": "आपकी पसंद के अनुसार उड़ानों की खोज जारी है...",
+                "flight_selection": "यहाँ उपलब्ध उड़ानें हैं। अपनी पसंदीदा उड़ान चुनें।",
+                "contact_details": "बुकिंग के लिए संपर्क विवरण प्रदान करें।",
+                "review_booking": "भुगतान के लिए आगे बढ़ने से पहले अपने बुकिंग विवरण की समीक्षा करें।",
+                "payment": "सुरक्षित भुगतान गेटवे पर पुनर्निर्देशित किया जा रहा है..."
             }
+        }
 
-        session = sessions[uid]
-        session["language"] = request.language
+        # Define the flow sequence - which step comes after which
+        self.step_flow = {
+            "welcome": "origin_selection",
+            "origin_selection": "destination_selection",
+            "destination_selection": "date_selection",
+            "date_selection": "passenger_selection",
+            "passenger_selection": "passenger_details",
+            "passenger_details": "flight_search",
+            "flight_search": "flight_selection",
+            "flight_selection": "contact_details",
+            "contact_details": "review_booking",
+            "review_booking": "payment",
+            "payment": "complete"
+        }
 
-        chatbot_response = await session["chatbot"].process_query(
-            request.query,
-            request.language,
-            session["in_avatar_flow"]
-        )
+    async def start_avatar_flow(self, query: str, language: str) -> Dict[str, Any]:
+        """
+        Start the avatar-guided booking flow.
+        
+        Returns the welcome step with video and message.
+        """
+        self.language = language
+        self.current_step = "welcome"
+        
+        video_url = self.avatar_engine.get_video_url("welcome", language)
+        message = self.messages.get(language, self.messages["en"]).get("welcome")
 
-        if chatbot_response.get("trigger_avatar"):
-            session["in_avatar_flow"] = True
-            session["current_step"] = "welcome"
-            return await session["flow_controller"].start_avatar_flow(
-                request.query, 
-                request.language
-            )
+        return {
+            "type": "avatar_flow",
+            "step": "welcome",
+            "avatar_video": video_url,
+            "message": message,
+            "next_step": "origin_selection",
+            "uid": self.uid,
+            "show_input": True
+        }
 
-        return chatbot_response
+    async def process_step(
+        self, 
+        step: str, 
+        user_input: Dict[str, Any], 
+        language: str
+    ) -> Dict[str, Any]:
+        """
+        Process a booking step and return the current step data.
+        """
+        self.language = language
+        
+        # Store user input
+        if user_input:
+            self.booking_data[step] = user_input
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Get the NEXT step to show
+        next_step = self.step_flow.get(step, "complete")
+        self.current_step = next_step
 
-@app.post("/avatar-step")
-async def process_avatar_step(request: StepRequest):
-    """Process avatar booking step"""
-    try:
-        if request.uid not in sessions:
-            raise HTTPException(status_code=404, detail="Session not found")
+        # Get message and video for the NEXT step
+        message_dict = self.messages.get(language, self.messages["en"])
+        message = message_dict.get(next_step, f"Processing {next_step}")
+        video_url = self.avatar_engine.get_video_url(next_step, language)
 
-        session = sessions[request.uid]
-        session["language"] = request.language
-        session["booking_data"][request.step] = request.user_input
+        response = {
+            "type": "avatar_step",
+            "step": next_step,
+            "next_step": self.step_flow.get(next_step, "complete"),
+            "avatar_video": video_url,
+            "message": message,
+            "booking_data": self.booking_data
+        }
 
-        response = await session["flow_controller"].process_step(
-            request.step,
-            request.user_input,
-            request.language
-        )
+        # Special handling for flight search
+        if next_step == "flight_search":
+            # Auto-show flight results
+            flights = self._get_dummy_flights()
+            response["flights"] = flights
+            response["type"] = "flight_results"
+            response["message"] = f"Found {len(flights)} flights"
+            response["next_step"] = "flight_selection"
+        
+        # Special handling for review_booking - don't auto-progress
+        if next_step == "review_booking":
+            response["type"] = "review_booking"
+            response["requires_confirmation"] = True
+        
+        # Special handling for payment - final step
+        if next_step == "payment":
+            response["type"] = "payment"
+            response["message"] = "Redirecting to secure payment gateway..."
+            response["next_step"] = "complete"
+        
+        # Complete step - end of flow
+        if next_step == "complete":
+            response["type"] = "complete"
+            response["message"] = "Processing complete"
+            response["avatar_video"] = None
+            response["next_step"] = None
 
-        session["current_step"] = response.get("next_step")
         return response
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/avatar-video/{step}")
-async def get_avatar_video(step: str, language: str = "en"):
-    """Get avatar video URL for a specific step"""
-    try:
-        video_url = avatar_engine.get_video_url(step, language)
+    def get_booking_summary(self) -> Dict[str, Any]:
+        """Get current booking summary"""
         return {
-            "video_url": video_url,
-            "step": step,
-            "language": language
+            "current_step": self.current_step,
+            "booking_data": self.booking_data,
+            "progress": self._calculate_progress()
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/session/{uid}")
-async def get_session_info(uid: str):
-    """Get current session information"""
-    if uid not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+    def _calculate_progress(self) -> int:
+        """Calculate booking progress as percentage"""
+        steps = list(self.step_flow.keys())
+        if self.current_step in steps:
+            return int((steps.index(self.current_step) + 1) / len(steps) * 100)
+        return 0
 
-    session = sessions[uid]
-    return {
-        "uid": uid,
-        "current_step": session["current_step"],
-        "in_avatar_flow": session["in_avatar_flow"],
-        "booking_data": session["booking_data"],
-        "language": session["language"]
-    }
-
-@app.delete("/session/{uid}")
-async def clear_session(uid: str):
-    """Clear session data"""
-    if uid in sessions:
-        del sessions[uid]
-        return {"message": "Session cleared"}
-    return {"message": "Session not found"}
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "message": "Backend is running!"}
-
-@app.post("/test-avatar")
-async def test_avatar_trigger(request: ChatRequest):
-    """Test endpoint to verify avatar trigger logic"""
-    chatbot = ChatbotIntegration("test_uid")
-    result = await chatbot.process_query(request.query, request.language)
-    return {
-        "query": request.query,
-        "language": request.language,
-        "result": result,
-        "should_trigger": result.get("trigger_avatar", False)
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    print("🚀 Starting Vernacular Avatar Booking Backend...")
-    print("📍 Server: http://localhost:8000")
-    print("📖 API docs: http://localhost:8000/docs")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    def _get_dummy_flights(self) -> list:
+        """Return dummy flight data for demonstration"""
+        return [
+            {
+                "flight_number": "6E-123",
+                "departure": "06:00",
+                "arrival": "08:30",
+                "duration": "2h 30m",
+                "price": "₹4,500"
+            },
+            {
+                "flight_number": "6E-456",
+                "departure": "14:15",
+                "arrival": "16:45",
+                "duration": "2h 30m",
+                "price": "₹5,200"
+            },
+            {
+                "flight_number": "6E-789",
+                "departure": "20:30",
+                "arrival": "23:00",
+                "duration": "2h 30m",
+                "price": "₹4,800"
+            }
+        ]
