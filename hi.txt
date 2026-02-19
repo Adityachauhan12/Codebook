@@ -1,13 +1,3 @@
-Logs for your project will appear below. Press Ctrl+C to exit.
-Warning: Unable to resolve manifest assets. Icons and fonts might not work. This operation was aborted.
-iOS Bundled 5828ms node_modules\expo\AppEntry.js (916 modules)
- WARN  [expo-av]: Expo AV has been deprecated and will be removed in SDK 54. Use the `expo-audio` and `expo-video` packages to replace the required functionality.
-Warning: Unable to resolve manifest assets. Icons and fonts might not work. This operation was aborted.
-iOS Bundled 958ms node_modules\expo\AppEntry.js (1 module)
- WARN  [expo-av]: Expo AV has been deprecated and will be removed in SDK 54. Use the `expo-audio` and `expo-video` packages to replace the required functionality.
- ERROR  Error: [TypeError: Network request timed out]
-
-
 import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, View, ScrollView, KeyboardAvoidingView, Platform, Modal, Dimensions } from 'react-native';
 import { Provider as PaperProvider, Text, Button, TextInput, Card, Menu } from 'react-native-paper';
@@ -18,7 +8,7 @@ import axios from 'axios';
 
 const { width, height } = Dimensions.get('window');
 
-const API_BASE = 'http://10.18.102.74:8000';
+const API_BASE = 'https://pomologically-overminute-linette.ngrok-free.dev';
 const indigoBlue = '#001b94';
 const indigoOrange = '#f14658';
 
@@ -70,6 +60,9 @@ function AvatarBookingApp() {
       setIsLoading(true);
       setShowAvatarFlow(true);
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
       const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -77,13 +70,18 @@ function AvatarBookingApp() {
           query: language === 'hi' ? 'अवतार के साथ उड़ान बुक करें' : 'book flight with avatar',
           uid: uid,
           language: language
-        })
+        }),
+        signal: controller.signal
       });
 
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const data = await response.json();
-      console.log('Chat response:', data);
       if (data.type === 'avatar_flow') {
-        console.log('Avatar video URL:', data.avatar_video);
         setCurrentStep(data.step);
         setPendingStepData(data);
         setFullscreenVideo(data.avatar_video);
@@ -91,12 +89,17 @@ function AvatarBookingApp() {
       }
     } catch (error) {
       console.error('Error:', error);
+      const errorMsg = error.name === 'AbortError' 
+        ? 'Connection timeout. Please check your network and backend server.'
+        : `Error: ${error.message}. Please ensure backend is running at ${API_BASE}`;
+      
       setChats(prev => [...prev, {
         type: 'text',
-        text: 'Error connecting to server. Please check backend is running.',
+        text: errorMsg,
         sender: 'bot',
         timestamp: new Date().toISOString()
       }]);
+      setShowAvatarFlow(false);
     } finally {
       setIsLoading(false);
     }
@@ -137,6 +140,9 @@ function AvatarBookingApp() {
         }]);
       }
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
       const response = await fetch(`${API_BASE}/avatar-step`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -145,8 +151,15 @@ function AvatarBookingApp() {
           step: step,
           user_input: typeof userInput === 'string' ? { response: userInput } : userInput,
           language: language
-        })
+        }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
       const data = await response.json();
       setCurrentStep(data.step);
@@ -175,6 +188,16 @@ function AvatarBookingApp() {
       }
     } catch (error) {
       console.error('Error:', error);
+      const errorMsg = error.name === 'AbortError' 
+        ? 'Connection timeout. Please check your network.'
+        : `Error: ${error.message}`;
+      
+      setChats(prev => [...prev, {
+        type: 'text',
+        text: errorMsg,
+        sender: 'bot',
+        timestamp: new Date().toISOString()
+      }]);
     } finally {
       setIsLoading(false);
     }
@@ -575,3 +598,13 @@ const styles = StyleSheet.create({
   fullscreenContainer: { flex: 1, backgroundColor: 'black', justifyContent: 'center', alignItems: 'center' },
   fullscreenVideo: { width: width, height: height }
 });
+
+
+
+cd mobile-app
+expo start --clear
+
+cd mobile-app
+rm -rf node_modules
+npm install
+expo start --clear
