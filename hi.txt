@@ -33,6 +33,7 @@ function AvatarBookingApp() {
   const [bookingData, setBookingData] = useState({});
   const [menuVisible, setMenuVisible] = useState(false);
   const [fullscreenVideo, setFullscreenVideo] = useState(null);
+  const [videoFinished, setVideoFinished] = useState(false);
   const [showStepInput, setShowStepInput] = useState(false);
   const [pendingStepData, setPendingStepData] = useState(null);
   const chatEndRef = useRef(null);
@@ -60,9 +61,6 @@ function AvatarBookingApp() {
       setIsLoading(true);
       setShowAvatarFlow(true);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-
       const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -70,36 +68,25 @@ function AvatarBookingApp() {
           query: language === 'hi' ? 'अवतार के साथ उड़ान बुक करें' : 'book flight with avatar',
           uid: uid,
           language: language
-        }),
-        signal: controller.signal
+        })
       });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
 
       const data = await response.json();
       if (data.type === 'avatar_flow') {
         setCurrentStep(data.step);
         setPendingStepData(data);
         setFullscreenVideo(data.avatar_video);
+        setVideoFinished(false);
         setShowStepInput(false);
       }
     } catch (error) {
       console.error('Error:', error);
-      const errorMsg = error.name === 'AbortError' 
-        ? 'Connection timeout. Please check your network and backend server.'
-        : `Error: ${error.message}. Please ensure backend is running at ${API_BASE}`;
-      
       setChats(prev => [...prev, {
         type: 'text',
-        text: errorMsg,
+        text: 'Error connecting to server. Please check backend is running.',
         sender: 'bot',
         timestamp: new Date().toISOString()
       }]);
-      setShowAvatarFlow(false);
     } finally {
       setIsLoading(false);
     }
@@ -140,9 +127,6 @@ function AvatarBookingApp() {
         }]);
       }
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-
       const response = await fetch(`${API_BASE}/avatar-step`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -151,15 +135,8 @@ function AvatarBookingApp() {
           step: step,
           user_input: typeof userInput === 'string' ? { response: userInput } : userInput,
           language: language
-        }),
-        signal: controller.signal
+        })
       });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
 
       const data = await response.json();
       setCurrentStep(data.step);
@@ -183,30 +160,39 @@ function AvatarBookingApp() {
 
       if (data.avatar_video) {
         setFullscreenVideo(data.avatar_video);
+        setVideoFinished(false);
       } else {
         handleVideoEnd(data);
       }
     } catch (error) {
       console.error('Error:', error);
-      const errorMsg = error.name === 'AbortError' 
-        ? 'Connection timeout. Please check your network.'
-        : `Error: ${error.message}`;
-      
-      setChats(prev => [...prev, {
-        type: 'text',
-        text: errorMsg,
-        sender: 'bot',
-        timestamp: new Date().toISOString()
-      }]);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleVideoEnd = (stepData) => {
-    setFullscreenVideo(null);
+    setVideoFinished(true);
     
-    // Don't add message for complete step
+    // Handle complete/payment step - close modal immediately
+    if (stepData.step === 'complete' || stepData.step === 'payment' || stepData.type === 'complete') {
+      setTimeout(() => {
+        setChats(prev => [...prev, {
+          type: 'text',
+          text: stepData.message || '✅ Booking complete! Thank you for using 6Eskai.',
+          sender: 'bot',
+          timestamp: new Date().toISOString()
+        }]);
+        setShowAvatarFlow(false);
+        setCurrentStep(null);
+        setShowStepInput(false);
+        setFullscreenVideo(null);
+        setVideoFinished(false);
+      }, 1000);
+      return;
+    }
+    
+    // Add message for other steps
     if (stepData.step !== 'complete') {
       setChats(prev => [...prev, {
         type: stepData.type || 'avatar_step',
@@ -218,17 +204,18 @@ function AvatarBookingApp() {
       }]);
     }
     
-    // Auto-progress for steps that don't need input (except review_booking and payment)
+    // Auto-progress for steps that don't need input
     if (!requiresInput(stepData.step) && 
         stepData.step !== 'flight_search' && 
         stepData.step !== 'review_booking' && 
         stepData.step !== 'payment' &&
         stepData.step !== 'complete') {
       setTimeout(() => {
+        setFullscreenVideo(null);
+        setVideoFinished(false);
         processStep(stepData.step, { continue: true });
       }, 500);
     } else if (stepData.step === 'complete') {
-      // End the flow completely
       setTimeout(() => {
         setChats(prev => [...prev, {
           type: 'text',
@@ -239,6 +226,8 @@ function AvatarBookingApp() {
         setShowAvatarFlow(false);
         setCurrentStep(null);
         setShowStepInput(false);
+        setFullscreenVideo(null);
+        setVideoFinished(false);
       }, 1000);
     } else {
       setShowStepInput(true);
@@ -296,6 +285,32 @@ function AvatarBookingApp() {
 
   const requiresInput = (step) => {
     return ['origin_selection', 'destination_selection', 'date_selection', 'passenger_selection', 'passenger_details', 'contact_details', 'flight_selection', 'review_booking'].includes(step);
+  };
+
+  const renderStepInputInModal = (step) => {
+    if (!requiresInput(step)) return null;
+    
+    const closeModal = () => {
+      setFullscreenVideo(null);
+      setVideoFinished(false);
+    };
+    
+    switch (step) {
+      case 'origin_selection':
+        return <OriginSelection onNext={(data) => { closeModal(); processStep('origin_selection', data); }} language={language} />;
+      case 'destination_selection':
+        return <DestinationSelection onNext={(data) => { closeModal(); processStep('destination_selection', data); }} language={language} />;
+      case 'date_selection':
+        return <DateSelection onNext={(data) => { closeModal(); processStep('date_selection', data); }} language={language} />;
+      case 'passenger_selection':
+        return <PassengerSelection onNext={(data) => { closeModal(); processStep('passenger_selection', data); }} language={language} />;
+      case 'passenger_details':
+        return <PassengerDetails onNext={(data) => { closeModal(); processStep('passenger_details', data); }} passengerCount={bookingData.passenger_selection} />;
+      case 'contact_details':
+        return <ContactDetails onNext={(data) => { closeModal(); processStep('contact_details', data); }} language={language} />;
+      default:
+        return null;
+    }
   };
 
   const renderStepInput = (step) => {
@@ -365,25 +380,77 @@ function AvatarBookingApp() {
           <Text style={styles.footerText}>Powered by IndiGo AI</Text>
         </View>
 
-        <Modal visible={!!fullscreenVideo} animationType="fade" onRequestClose={() => {}}>
-          <View style={styles.fullscreenContainer}>
-            <Video
-              ref={videoRef}
-              source={{ uri: fullscreenVideo }}
-              style={styles.fullscreenVideo}
-              resizeMode="contain"
-              shouldPlay
-              onPlaybackStatusUpdate={(status) => {
-                if (status.didJustFinish) {
+        <Modal visible={!!fullscreenVideo} animationType="fade" transparent={true} onRequestClose={() => {}}>
+          <KeyboardAvoidingView 
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={{ flex: 1 }}
+            keyboardVerticalOffset={0}
+          >
+            <View style={styles.fullscreenContainer}>
+              <Video
+                ref={videoRef}
+                source={{ uri: fullscreenVideo }}
+                style={styles.fullscreenVideo}
+                resizeMode="contain"
+                shouldPlay={!videoFinished}
+                isLooping={false}
+                onPlaybackStatusUpdate={(status) => {
+                  if (status.didJustFinish) {
+                    handleVideoEnd(pendingStepData);
+                  }
+                }}
+                onError={(e) => {
+                  console.log('Video error:', e);
                   handleVideoEnd(pendingStepData);
-                }
-              }}
-              onError={(e) => {
-                console.log('Video error:', e);
-                handleVideoEnd(pendingStepData);
-              }}
-            />
-          </View>
+                }}
+              />
+              
+              {videoFinished && pendingStepData && (
+                <View style={styles.modalChatContainer}>
+                  <ScrollView style={styles.modalChatArea} keyboardShouldPersistTaps="handled">
+                    <Card style={styles.modalBotMessage}>
+                      <Card.Content>
+                        <Text style={styles.botMessageText}>{pendingStepData.message}</Text>
+                        
+                        {pendingStepData.flights && showStepInput && (
+                          <View style={styles.flightsContainer}>
+                            <Text style={styles.flightsTitle}>Available Flights:</Text>
+                            {pendingStepData.flights.map((flight, idx) => (
+                              <Card key={idx} style={styles.flightCard} onPress={() => {
+                                setFullscreenVideo(null);
+                                setVideoFinished(false);
+                                processStep('flight_selection', { selected_flight: flight.flight_number });
+                              }}>
+                                <Card.Content>
+                                  <Text style={styles.flightNumber}>{flight.flight_number}</Text>
+                                  <Text style={styles.flightDetails}>{flight.departure} → {flight.arrival} ({flight.duration})</Text>
+                                  <Text style={styles.flightPrice}>{flight.price}</Text>
+                                </Card.Content>
+                              </Card>
+                            ))}
+                          </View>
+                        )}
+                        
+                        {pendingStepData.step === 'review_booking' && showStepInput && (
+                          <ReviewBooking bookingData={bookingData} onNext={(data) => {
+                            setFullscreenVideo(null);
+                            setVideoFinished(false);
+                            processStep('review_booking', data);
+                          }} language={language} />
+                        )}
+                        
+                        {showStepInput && pendingStepData.step === currentStep && (
+                          <View style={styles.stepInputContainer}>
+                            {renderStepInputInModal(pendingStepData.step)}
+                          </View>
+                        )}
+                      </Card.Content>
+                    </Card>
+                  </ScrollView>
+                </View>
+              )}
+            </View>
+          </KeyboardAvoidingView>
         </Modal>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -595,16 +662,9 @@ const styles = StyleSheet.create({
   footer: { padding: 8, backgroundColor: '#f5f5f5', alignItems: 'center' },
   footerText: { fontSize: 10, color: '#999' },
   loadingText: { color: '#999', padding: 8 },
-  fullscreenContainer: { flex: 1, backgroundColor: 'black', justifyContent: 'center', alignItems: 'center' },
-  fullscreenVideo: { width: width, height: height }
+  fullscreenContainer: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.3)', justifyContent: 'flex-end' },
+  fullscreenVideo: { position: 'absolute', top: 0, left: 0, width: width, height: height },
+  modalChatContainer: { padding: 16, paddingBottom: 32 },
+  modalChatArea: { maxHeight: height * 0.7 },
+  modalBotMessage: { backgroundColor: 'white', borderRadius: 12 }
 });
-
-
-
-cd mobile-app
-expo start --clear
-
-cd mobile-app
-rm -rf node_modules
-npm install
-expo start --clear
