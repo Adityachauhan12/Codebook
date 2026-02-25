@@ -1,129 +1,136 @@
-import os
 from typing import Dict, Any
-from sarvam_service import SarvamService
+from avatar_engine import AvatarEngine
 
 
-class ChatbotIntegration:
-    """
-    Integration with the Sky chatbot system.
-    Handles initial chatbot responses before avatar flow is triggered.
-    """
+class CheckinController:
+    """Controls the web check-in flow with avatar guidance"""
 
-    def __init__(self, uid: str):
+    def __init__(self, uid: str, language: str = "en"):
         self.uid = uid
-        self.sky_api_url = os.getenv("SKY_API_URL")
-        self.conversation_count = 0
-        self.sarvam = SarvamService()
+        self.language = language
+        self.avatar_engine = AvatarEngine()
+        self.current_step = None
+        self.checkin_data = {}
 
-    async def process_query(
-        self, 
-        query: str, 
-        language: str = "en", 
-        in_avatar_flow: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Process query through chatbot.
-        
-        Returns:
-            Dict with 'message' and optionally 'trigger_avatar' or 'trigger_checkin' flag
-        """
-        self.conversation_count += 1
-
-        # Don't allow triggering avatar if already in it
-        if in_avatar_flow:
-            return {
-                "type": "chatbot_response",
-                "message": "Please use the avatar flow to continue.",
-                "trigger_avatar": False,
-                "trigger_checkin": False
+        self.messages = {
+            "en": {
+                "welcome_checkin": "Hello! I'll help you with web check-in. Let's get started!",
+                "pnr_collection": "Please enter your 6-character PNR number.",
+                "lastname_collection": "Please enter the last name used during booking.",
+                "mobile_collection": "Please provide your mobile number with country code (e.g., +91).",
+                "email_collection": "Please enter your email address to receive the boarding pass.",
+                "disclaimer_explanation": "Your check-in will be done automatically 6-12 hours before flight departure with a free seat based on availability.",
+                "seat_consent": "Do you consent to automatic seat assignment?",
+                "processing_checkin": "Processing your check-in request...",
+                "checkin_success": "Check-in successful! You'll receive your boarding pass via email 6-12 hours before departure.",
+                "checkin_error": "Unable to complete check-in. Please verify your details and try again."
+            },
+            "hi": {
+                "welcome_checkin": "नमस्ते! मैं आपकी वेब चेक-इन में मदद करूंगा। चलिए शुरू करते हैं!",
+                "pnr_collection": "कृपया अपना 6-अक्षर का PNR नंबर दर्ज करें।",
+                "lastname_collection": "कृपया बुकिंग के दौरान उपयोग किया गया अंतिम नाम दर्ज करें।",
+                "mobile_collection": "कृपया देश कोड के साथ अपना मोबाइल नंबर प्रदान करें (जैसे +91)।",
+                "email_collection": "बोर्डिंग पास प्राप्त करने के लिए अपना ईमेल पता दर्ज करें।",
+                "disclaimer_explanation": "आपकी चेक-इन उड़ान प्रस्थान से 6-12 घंटे पहले उपलब्धता के आधार पर मुफ्त सीट के साथ स्वचालित रूप से की जाएगी।",
+                "seat_consent": "क्या आप स्वचालित सीट असाइनमेंट के लिए सहमत हैं?",
+                "processing_checkin": "आपके चेक-इन अनुरोध को संसाधित किया जा रहा है...",
+                "checkin_success": "चेक-इन सफल! आपको प्रस्थान से 6-12 घंटे पहले ईमेल के माध्यम से बोर्डिंग पास प्राप्त होगा।",
+                "checkin_error": "चेक-इन पूरा करने में असमर्थ। कृपया अपने विवरण सत्यापित करें और पुनः प्रयास करें।"
             }
-
-        # Check if query should trigger check-in flow
-        if self._should_trigger_checkin(query):
-            welcome_message = "Great! I'll guide you through web check-in with step-by-step avatar assistance." if language == "en" else "बहुत अच्छा! मैं चरणबद्ध अवतार सहायता के साथ वेब चेक-इन के माध्यम से आपका मार्गदर्शन करूंगा।"
-            return {
-                "type": "checkin_trigger",
-                "message": welcome_message,
-                "trigger_checkin": True
-            }
-
-        # Check if query should trigger avatar flow
-        if self._should_trigger_avatar(query):
-            welcome_message = "Great! I'll guide you through booking with step-by-step avatar assistance." if language == "en" else "बहुत अच्छा! मैं चरणबद्ध अवतार सहायता के साथ बुकिंग के माध्यम से आपका मार्गदर्शन करूंगा।"
-            return {
-                "type": "avatar_trigger",
-                "message": welcome_message,
-                "trigger_avatar": True
-            }
-
-        # Default chatbot responses in English
-        responses_en = [
-            "Hello! I can help you with flight bookings, check-in, seat selection, and more. Would you like to book a flight with avatar guidance?",
-            "I'm here to assist with your travel needs. Would you like me to guide you through booking a flight with our avatar assistant?",
-            "How can I help you today? I can assist with flight bookings, flight status, check-in, and more. Want to try avatar-guided booking?"
-        ]
-
-        response_index = min(self.conversation_count - 1, len(responses_en) - 1)
-        base_message = responses_en[response_index]
-        
-        # Translate to target language if needed
-        if language != "en":
-            translated_message = await self.sarvam.translate_text(base_message, language, "en")
-        else:
-            translated_message = base_message
-
-        return {
-            "type": "chatbot_response",
-            "message": translated_message,
-            "trigger_avatar": False,
-            "show_quick_actions": True
         }
 
-    def _should_trigger_avatar(self, query: str) -> bool:
-        """
-        Determine if avatar flow should be triggered based on user input.
-        """
-        avatar_triggers = [
-            "book flight",
-            "flight booking",
-            "book ticket",
-            "avatar help",
-            "step by step",
-            "guided booking",
-            "avatar guidance",
-            "book a flight",
-            "flight reservation",
-            "new booking",
-            "booking",
-            "avatar",
-            "अवतार के साथ उड़ान बुक करें",  # Hindi avatar trigger
-            "book flight with avatar",      # English avatar trigger
-            "फ्लाइट बुक",
-            "बुकिंग",
-            "अवतार",
-            "टिकट बुक"
-        ]
+        self.step_flow = {
+            "welcome_checkin": "pnr_collection",
+            "pnr_collection": "lastname_collection",
+            "lastname_collection": "mobile_collection",
+            "mobile_collection": "email_collection",
+            "email_collection": "disclaimer_explanation",
+            "disclaimer_explanation": "seat_consent",
+            "seat_consent": "processing_checkin",
+            "processing_checkin": "checkin_success",
+            "checkin_success": "complete",
+            "checkin_error": "complete"
+        }
 
-        query_lower = query.lower().strip()
-        return any(trigger in query_lower for trigger in avatar_triggers)
-    
-    def _should_trigger_checkin(self, query: str) -> bool:
-        """
-        Determine if check-in flow should be triggered based on user input.
-        """
-        checkin_triggers = [
-            "check in",
-            "check-in",
-            "checkin",
-            "web check in",
-            "web checkin",
-            "boarding pass",
-            "online check in",
-            "चेक इन",
-            "वेब चेक इन",
-            "बोर्डिंग पास",
-            "ऑनलाइन चेक इन"
-        ]
+    async def start_checkin_flow(self, query: str, language: str) -> Dict[str, Any]:
+        """Start the avatar-guided check-in flow"""
+        self.language = language
+        self.current_step = "welcome_checkin"
+        
+        video_url = self.avatar_engine.get_video_url("welcome_checkin", language, folder="avatar_checkin")
+        message = self.messages.get(language, self.messages["en"]).get("welcome_checkin")
 
-        query_lower = query.lower().strip()
-        return any(trigger in query_lower for trigger in checkin_triggers)
+        return {
+            "type": "avatar_checkin_flow",
+            "step": "welcome_checkin",
+            "avatar_video": video_url,
+            "message": message,
+            "next_step": "pnr_collection",
+            "uid": self.uid,
+            "show_input": True
+        }
+
+    async def process_step(
+        self, 
+        step: str, 
+        user_input: Dict[str, Any], 
+        language: str
+    ) -> Dict[str, Any]:
+        """Process a check-in step"""
+        self.language = language
+        
+        if user_input:
+            self.checkin_data[step] = user_input
+
+        # Validation logic
+        if step == "pnr_collection" and user_input:
+            pnr = user_input.get("pnr", "")
+            if len(pnr) != 6:
+                return {
+                    "type": "validation_error",
+                    "step": step,
+                    "message": "PNR must be 6 characters" if language == "en" else "PNR 6 अक्षर का होना चाहिए",
+                    "avatar_video": self.avatar_engine.get_video_url(step, language, folder="avatar_checkin")
+                }
+
+        # Get next step
+        next_step = self.step_flow.get(step, "complete")
+        
+        # Special handling for processing step
+        if next_step == "processing_checkin":
+            # Simulate API call
+            success = await self._process_checkin()
+            next_step = "checkin_success" if success else "checkin_error"
+        
+        self.current_step = next_step
+
+        message_dict = self.messages.get(language, self.messages["en"])
+        message = message_dict.get(next_step, f"Processing {next_step}")
+        video_url = self.avatar_engine.get_video_url(next_step, language, folder="avatar_checkin")
+
+        response = {
+            "type": "avatar_checkin_step",
+            "step": next_step,
+            "next_step": self.step_flow.get(next_step, "complete"),
+            "avatar_video": video_url,
+            "message": message,
+            "checkin_data": self.checkin_data
+        }
+
+        if next_step in ["checkin_success", "checkin_error"]:
+            response["type"] = "checkin_complete"
+            response["success"] = next_step == "checkin_success"
+
+        if next_step == "complete":
+            response["type"] = "complete"
+            response["avatar_video"] = None
+            response["next_step"] = None
+
+        return response
+
+    async def _process_checkin(self) -> bool:
+        """Simulate check-in processing - integrate with actual API"""
+        # TODO: Integrate with actual check-in API
+        # For now, return success if all required fields are present
+        required_fields = ["pnr_collection", "lastname_collection", "mobile_collection", "email_collection"]
+        return all(field in self.checkin_data for field in required_fields)
