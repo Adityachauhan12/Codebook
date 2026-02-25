@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet, View, ScrollView, KeyboardAvoidingView,
-  Platform, Modal, Dimensions, ActivityIndicator, Keyboard
+  Platform, Modal, Dimensions, ActivityIndicator, Keyboard, TouchableOpacity
 } from 'react-native';
 import { Provider as PaperProvider, Text, Button, TextInput, Card, Menu } from 'react-native-paper';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -99,17 +99,11 @@ function AvatarBookingApp() {
   }, [fullscreenVideo]);
 
   const mountNextVideo = (videoUrl) => {
-    setShowVideoLoader(true);   // Show IndiGo loader
+    setShowVideoLoader(true);
     setFullscreenVideo(videoUrl);
     setVideoFinished(false);
     setShowStepInput(false);
-    // ✅ Safety fallback: if onReadyForDisplay never fires, hide loader after 6s max
-    setTimeout(() => {
-      setShowVideoLoader(prev => {
-        if (prev) return false;  // only clears if still stuck
-        return prev;
-      });
-    }, 6000);
+    // No timeout here — Video component handles all 3 fallback layers
   };
 
   const startCheckinFlow = async () => {
@@ -550,17 +544,38 @@ function AvatarBookingApp() {
             <Text style={styles.headerTitle}>6Eskai</Text>
             <Text style={styles.headerSubtitle}>AI Flight Assistant</Text>
           </View>
-          <Button
-            onPress={resetApp}
-            textColor="white"
-            icon="home"
-            mode="outlined"
-            style={styles.headerResetButton}
-            labelStyle={styles.headerResetLabel}
-            compact
-          >
-            Home
-          </Button>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {/* Language toggle */}
+            <Menu
+              visible={menuVisible}
+              onDismiss={() => setMenuVisible(false)}
+              anchor={
+                <Button
+                  onPress={() => setMenuVisible(true)}
+                  textColor="white"
+                  mode="outlined"
+                  style={styles.headerButton}
+                  compact
+                >
+                  {language === 'en' ? '🌐 EN' : '🌐 HI'}
+                </Button>
+              }
+            >
+              <Menu.Item onPress={() => { setLanguage('en'); setMenuVisible(false); }} title="English" />
+              <Menu.Item onPress={() => { setLanguage('hi'); setMenuVisible(false); }} title="हिंदी" />
+            </Menu>
+            {/* Home/Reset button */}
+            <Button
+              onPress={resetApp}
+              textColor="white"
+              icon="home"
+              mode="outlined"
+              style={styles.headerButton}
+              compact
+            >
+              Home
+            </Button>
+          </View>
         </View>
 
         {/* ── IndiGo Themed Home Screen ── */}
@@ -595,11 +610,10 @@ function AvatarBookingApp() {
               <Text style={styles.homeCardsLabel}>What would you like to do?</Text>
 
               {/* Flight Booking card */}
-              <View style={styles.homeActionCard} onStartShouldSetResponder={() => true}
-                onResponderGrant={startAvatarFlow}>
+              <TouchableOpacity style={styles.homeActionCard} onPress={startAvatarFlow} activeOpacity={0.75}>
                 <View style={styles.homeActionLeft}>
                   <View style={[styles.homeActionIcon, { backgroundColor: '#e8f0ff' }]}>
-                    <Text style={styles.homeActionEmoji}>🛫</Text>
+                    <Text style={styles.homeActionEmoji}>✈️</Text>
                   </View>
                   <View>
                     <Text style={styles.homeActionTitle}>Flight Booking</Text>
@@ -611,14 +625,13 @@ function AvatarBookingApp() {
                 <View style={styles.homeActionArrow}>
                   <Text style={styles.homeActionArrowText}>›</Text>
                 </View>
-              </View>
+              </TouchableOpacity>
 
               {/* Web Check-in card */}
-              <View style={styles.homeActionCard} onStartShouldSetResponder={() => true}
-                onResponderGrant={startCheckinFlow}>
+              <TouchableOpacity style={styles.homeActionCard} onPress={startCheckinFlow} activeOpacity={0.75}>
                 <View style={styles.homeActionLeft}>
                   <View style={[styles.homeActionIcon, { backgroundColor: '#fff4e6' }]}>
-                    <Text style={styles.homeActionEmoji}>📋</Text>
+                    <Text style={styles.homeActionEmoji}>🎫</Text>
                   </View>
                   <View>
                     <Text style={styles.homeActionTitle}>Web Check-in</Text>
@@ -630,7 +643,7 @@ function AvatarBookingApp() {
                 <View style={styles.homeActionArrow}>
                   <Text style={styles.homeActionArrowText}>›</Text>
                 </View>
-              </View>
+              </TouchableOpacity>
             </View>
           </View>
         )}
@@ -679,18 +692,22 @@ function AvatarBookingApp() {
                 source={{ uri: fullscreenVideo }}
                 style={styles.fullscreenVideo}
                 resizeMode={ResizeMode.COVER}
-                shouldPlay={!videoFinished}   // Always play — loader covers it visually
+                shouldPlay={!videoFinished}
                 isLooping={false}
                 onLoad={async () => {
                   try { await videoRef.current?.setPositionAsync(0); } catch {}
+                  // Layer 3: hard timeout — if nothing else fires within 3s, force hide
+                  setTimeout(() => setShowVideoLoader(false), 3000);
                 }}
                 onReadyForDisplay={() => {
-                  // ✅ Fires ONLY when first frame is pixel-decoded and on screen
-                  // This is the only safe moment to hide the loader
+                  // Layer 1: first frame decoded (most reliable on iOS)
                   setShowVideoLoader(false);
                 }}
                 onPlaybackStatusUpdate={(status) => {
-                  // ✅ Removed isPlaying check — onReadyForDisplay handles loader hiding
+                  // Layer 2: playback started (most reliable on Android)
+                  if (status.isPlaying) {
+                    setShowVideoLoader(false);
+                  }
                   if (status.didJustFinish) {
                     handleVideoEnd(pendingStepData);
                   }
@@ -743,6 +760,22 @@ function AvatarBookingApp() {
 
             {/* Chat overlay on left while video plays */}
             {!showVideoLoader && !videoFinished && renderChatOverlay()}
+
+            {/* ✅ Floating Home button — always visible during video/loader */}
+            <View style={styles.floatingHomeBtn} pointerEvents="box-none">
+              <Button
+                onPress={resetApp}
+                textColor="white"
+                icon="home"
+                mode="contained"
+                buttonColor="rgba(0,0,0,0.45)"
+                style={styles.floatingHomeBtnInner}
+                labelStyle={{ fontSize: 12 }}
+                compact
+              >
+                Home
+              </Button>
+            </View>
 
             {/* ✅ FIX 1 + FIX 2: Step input panel — keyboard-aware + faded history */}
             {!showVideoLoader && videoFinished && pendingStepData && (
@@ -1138,8 +1171,7 @@ const styles = StyleSheet.create({
   header:               { backgroundColor: indigoBlue, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   headerTitle:          { color: 'white', fontSize: 20, fontWeight: 'bold' },
   headerSubtitle:       { color: 'white', fontSize: 12 },
-  headerResetButton:    { borderColor: 'rgba(255,255,255,0.5)', borderRadius: 20 },
-  headerResetLabel:     { color: 'white', fontSize: 12 },
+  headerButton:         { borderColor: 'rgba(255,255,255,0.5)', borderRadius: 20 },
   chatArea:             { flex: 1, padding: 8, backgroundColor: '#fafafa' },
   userMessageContainer: { alignItems: 'flex-end', marginBottom: 8 },
   userMessage:          { backgroundColor: indigoBlue, maxWidth: '80%', borderRadius: 12 },
@@ -1519,4 +1551,17 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   dot: { width: 10, height: 10, borderRadius: 5 },
+
+  // Floating Home button
+  floatingHomeBtn: {
+    position: 'absolute',
+    top: 44,
+    right: 16,
+    zIndex: 1000,
+  },
+  floatingHomeBtnInner: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
 });
