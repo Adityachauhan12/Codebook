@@ -1,7 +1,1496 @@
-fastapi==0.104.1
-uvicorn==0.24.0
-pydantic==2.5.0
-requests==2.31.0
-python-dotenv==1.0.0
-httpx==0.25.2
-python-multipart==0.0.6
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  StyleSheet, View, ScrollView, KeyboardAvoidingView,
+  Platform, Modal, Dimensions, ActivityIndicator, Keyboard, TouchableOpacity, Image
+} from 'react-native';
+import { Provider as PaperProvider, Text, Button, TextInput, Card, Menu } from 'react-native-paper';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { Video, ResizeMode } from 'expo-av';
+import DateTimePicker from '@react-native-community/datetimepicker';
+
+const { width, height } = Dimensions.get('window');
+const API_BASE = 'https://pomologically-overminute-linette.ngrok-free.dev';
+const indigoBlue = '#001b94';
+const indigoOrange = '#f14658';
+const indigoYellow = '#ffc107';
+const indigoWhite = '#ffffff';
+
+// Preload IndiGo logo for instant rendering
+const INDIGO_LOGO = require('./assets/indigo-logo.png');
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <PaperProvider>
+        <AvatarBookingApp />
+      </PaperProvider>
+    </SafeAreaProvider>
+  );
+}
+
+function AvatarBookingApp() {
+  const [language, setLanguage]       = useState('en');
+  const [uid, setUid]                 = useState('');
+  const [chats, setChats]             = useState([]);
+  const [isLoading, setIsLoading]     = useState(false);
+  const [showAvatarFlow, setShowAvatarFlow] = useState(false);
+  const [showCheckinFlow, setShowCheckinFlow] = useState(false);
+  const [currentStep, setCurrentStep] = useState(null);
+  const [bookingData, setBookingData] = useState({});
+  const [checkinData, setCheckinData] = useState({});
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [fullscreenVideo, setFullscreenVideo] = useState(null);
+  const [videoFinished, setVideoFinished]     = useState(false);
+  const [showStepInput, setShowStepInput]     = useState(false);
+  const [pendingStepData, setPendingStepData] = useState(null);
+  const [showVideoLoader, setShowVideoLoader] = useState(false);
+  const [flowChatStartIndex, setFlowChatStartIndex] = useState(0);
+  const [showHomeScreen, setShowHomeScreen] = useState(true);
+
+  // ✅ FIX 1: Track keyboard height
+  const [keyboardOffset, setKeyboardOffset]   = useState(0);
+
+  const chatEndRef = useRef(null);
+  const videoRef   = useRef(null);
+  const videoMountedAtRef = useRef(0);
+
+  const getWelcomeMessage = (lang) =>
+    lang === 'hi'
+      ? 'नमस्ते! 6Eskai में आपका स्वागत है।'
+      : 'Hello! Welcome to 6Eskai.';
+
+  const resetApp = () => {
+    const newUid = 'uid_' + Math.random().toString(36).substr(2, 9);
+    setUid(newUid);
+    setChats([{ type: 'text', text: getWelcomeMessage(language), sender: 'bot', timestamp: new Date().toISOString() }]);
+    setShowHomeScreen(true);
+    setShowAvatarFlow(false);
+    setShowCheckinFlow(false);
+    setFullscreenVideo(null);
+    setVideoFinished(false);
+    setShowStepInput(false);
+    setPendingStepData(null);
+    setShowVideoLoader(false);
+    setCurrentStep(null);
+    setBookingData({});
+    setCheckinData({});
+    setIsLoading(false);
+    setFlowChatStartIndex(0);
+    setKeyboardOffset(0);
+  };
+
+  // Init UID + welcome chat
+  useEffect(() => {
+    const newUid = 'uid_' + Math.random().toString(36).substr(2, 9);
+    setUid(newUid);
+    setChats([{ type: 'text', text: getWelcomeMessage(language), sender: 'bot', timestamp: new Date().toISOString() }]);
+  }, []);
+
+  // ✅ FIX 1: Keyboard listener — shifts panel above keyboard
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const sub1 = Keyboard.addListener(showEvt, (e) => setKeyboardOffset(e.endCoordinates.height));
+    const sub2 = Keyboard.addListener(hideEvt, () => setKeyboardOffset(0));
+    return () => { sub1.remove(); sub2.remove(); };
+  }, []);
+
+  // ✅ FIX 3: Seek to 0 on new video URL
+  useEffect(() => {
+    if (fullscreenVideo && videoRef.current) {
+      videoRef.current.setPositionAsync(0).catch(() => {});
+    }
+  }, [fullscreenVideo]);
+
+  const mountNextVideo = (videoUrl) => {
+    videoMountedAtRef.current = Date.now(); // ✅ stamp when video was set
+    setShowVideoLoader(true);
+    setFullscreenVideo(videoUrl);
+    setVideoFinished(false);
+    setShowStepInput(false);
+  };
+
+  // Only hide loader after minimum 250ms from when video URL was set
+  // Prevents Android from hiding loader before first frame is on screen
+  const tryHideLoader = () => {
+    const elapsed = Date.now() - videoMountedAtRef.current;
+    const wait = Math.max(0, 250 - elapsed);
+    setTimeout(() => setShowVideoLoader(false), wait);
+  };
+
+  const startCheckinFlow = async () => {
+    try {
+      setShowHomeScreen(false);
+      setShowVideoLoader(true);   // ✅ Show loader IMMEDIATELY — no blank screen
+      setIsLoading(true);
+      setShowCheckinFlow(true);
+      setFlowChatStartIndex(chats.length);
+
+      const response = await fetch(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: language === 'hi' ? 'चेक इन' : 'check in',
+          uid,
+          language
+        })
+      });
+      const data = await response.json();
+      if (data.type === 'avatar_checkin_flow') {
+        setCurrentStep(data.step);
+        setPendingStepData(data);
+        if (data.message) {
+          setChats(prev => [...prev, {
+            type: 'text', text: data.message,
+            sender: 'bot', timestamp: new Date().toISOString()
+          }]);
+        }
+        mountNextVideo(data.avatar_video);
+      }
+    } catch (error) {
+      console.error('Error:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const processCheckinStep = async (step, userInput) => {
+    try {
+      setShowVideoLoader(true); // ✅ cover screen immediately before API call
+      setIsLoading(true);
+      setShowStepInput(false);
+      
+      // Add user response to chat
+      if (userInput && typeof userInput === 'object') {
+        let userText = '';
+        if (userInput.pnr) userText = `PNR: ${userInput.pnr}`;
+        else if (userInput.lastname) userText = `Last Name: ${userInput.lastname}`;
+        else if (userInput.mobile) userText = `Mobile: ${userInput.mobile}`;
+        else if (userInput.email) userText = `Email: ${userInput.email}`;
+        else if (userInput.consent !== undefined) userText = userInput.consent ? 'Yes, I consent' : 'No';
+        else if (userInput.disclaimer_accepted) userText = 'I understand and accept';
+        
+        if (userText) {
+          setChats(prev => [...prev, {
+            type: 'text', text: userText,
+            sender: 'user', timestamp: new Date().toISOString()
+          }]);
+        }
+      }
+      
+      const response = await fetch(`${API_BASE}/checkin-step`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid,
+          step,
+          user_input: typeof userInput === 'string' ? { response: userInput } : userInput,
+          language
+        })
+      });
+      const data = await response.json();
+      setCurrentStep(data.step);
+      setCheckinData(prev => ({ ...prev, [step]: userInput }));
+      setPendingStepData(data);
+
+      if (data.type === 'checkin_complete') {
+        const successMsg = language === 'hi' 
+          ? '✅ चेक-इन सफल! आपको ईमेल के माध्यम से बोर्डिंग पास प्राप्त होगा।'
+          : '✅ Check-in successful! You\'ll receive your boarding pass via email.';
+        const errorMsg = language === 'hi'
+          ? '❌ चेक-इन विफल। कृपया अपने विवरण सत्यापित करें।'
+          : '❌ Check-in failed. Please verify your details.';
+        
+        setChats(prev => [...prev, {
+          type: 'text',
+          text: data.success ? successMsg : errorMsg,
+          sender: 'bot',
+          timestamp: new Date().toISOString()
+        }]);
+        setTimeout(() => {
+          setShowCheckinFlow(false);
+          setFullscreenVideo(null);
+          setVideoFinished(false);
+          setShowVideoLoader(false);
+          setShowStepInput(false);
+          setTimeout(() => chatEndRef.current?.scrollToEnd({ animated: true }), 300);
+        }, 800);
+        return;
+      }
+
+      if (data.message) {
+        setChats(prev => [...prev, {
+          type: 'text', text: data.message,
+          sender: 'bot', timestamp: new Date().toISOString()
+        }]);
+      }
+
+      if (data.avatar_video) {
+        mountNextVideo(data.avatar_video);
+      } else {
+        // No video for this step, hide loader and show input directly
+        setShowVideoLoader(false);
+        setVideoFinished(true);
+        setShowStepInput(true);
+      }
+    } catch (error) {
+      console.error('Error:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const startAvatarFlow = async () => {
+    try {
+      setShowHomeScreen(false);
+      setShowVideoLoader(true);   // ✅ Show loader IMMEDIATELY — no blank screen
+      setIsLoading(true);
+      setShowAvatarFlow(true);
+      // ✅ Change 2: Record where flow messages start (exclude welcome msg)
+      setFlowChatStartIndex(chats.length);
+
+      const response = await fetch(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: language === 'hi' ? 'अवतार के साथ उड़ान बुक करें' : 'book flight with avatar',
+          uid,
+          language
+        })
+      });
+      const data = await response.json();
+      if (data.type === 'avatar_flow') {
+        setCurrentStep(data.step);
+        setPendingStepData(data);
+        // ✅ Add first step message to chats so it shows on overlay
+        if (data.message) {
+          setChats(prev => [...prev, {
+            type: 'text', text: data.message,
+            sender: 'bot', timestamp: new Date().toISOString()
+          }]);
+        }
+        mountNextVideo(data.avatar_video);
+      }
+    } catch (error) {
+      console.error('Error:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const processStep = async (step, userInput) => {
+    try {
+      setShowVideoLoader(true); // ✅ cover screen immediately before API call
+      setIsLoading(true);
+      setShowStepInput(false);
+      
+      // Add user response to chat
+      if (userInput && typeof userInput === 'object' && !userInput.continue) {
+        let userText = '';
+        if (userInput.origin) userText = `From: ${userInput.origin}`;
+        else if (userInput.destination) userText = `To: ${userInput.destination}`;
+        else if (userInput.date) userText = `Date: ${userInput.date}`;
+        else if (userInput.adults !== undefined) userText = `Passengers: ${userInput.adults} Adult(s), ${userInput.children || 0} Child(ren), ${userInput.infants || 0} Infant(s)`;
+        else if (userInput.selected_flight) userText = `Flight: ${userInput.selected_flight}`;
+        else if (userInput.email) userText = `Email: ${userInput.email}, Phone: ${userInput.phone}`;
+        else if (userInput.confirmed) userText = 'Booking confirmed';
+        
+        if (userText) {
+          setChats(prev => [...prev, {
+            type: 'text', text: userText,
+            sender: 'user', timestamp: new Date().toISOString()
+          }]);
+        }
+      }
+      
+      const response = await fetch(`${API_BASE}/avatar-step`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid,
+          step,
+          user_input: typeof userInput === 'string' ? { response: userInput } : userInput,
+          language
+        })
+      });
+      const data = await response.json();
+      setCurrentStep(data.step);
+      setBookingData(prev => ({ ...prev, [step]: userInput }));
+      setPendingStepData(data);
+
+      // Check if booking is complete (payment step or complete step)
+      if (data.step === 'complete' || data.type === 'complete' || data.step === 'payment') {
+        const successMsg = language === 'hi'
+          ? '✅ आपकी फ्लाइट सफलतापूर्वक बुक हो गई है! IndiGo चुनने के लिए धन्यवाद। सुरक्षित यात्रा! ✈️'
+          : '✅ Your flight has been booked successfully! Thank you for choosing IndiGo. Have a great journey! ✈️';
+        
+        setChats(prev => [...prev, {
+          type: 'text',
+          text: successMsg,
+          sender: 'bot',
+          timestamp: new Date().toISOString()
+        }]);
+
+        // Return to chatbot immediately
+        setTimeout(() => {
+          setShowAvatarFlow(false);
+          setFullscreenVideo(null);
+          setVideoFinished(false);
+          setShowVideoLoader(false);
+          setShowStepInput(false);
+          setTimeout(() => chatEndRef.current?.scrollToEnd({ animated: true }), 300);
+        }, 1500);
+        return;
+      }
+
+      // ✅ Change 3: Add each step's bot message to chats for the left overlay
+      if (data.message) {
+        setChats(prev => [...prev, {
+          type: 'text', text: data.message,
+          sender: 'bot', timestamp: new Date().toISOString()
+        }]);
+      }
+
+      if (data.avatar_video) {
+        mountNextVideo(data.avatar_video);
+      } else {
+        // No video for this step, hide loader and show input directly
+        setShowVideoLoader(false);
+        setVideoFinished(true);
+        setShowStepInput(true);
+      }
+    } catch (error) {
+      console.error('Error:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVideoEnd = (stepData) => {
+    if (!stepData) return;
+    setVideoFinished(true);
+    
+    // Check-in flow handling
+    if (showCheckinFlow) {
+      // Give user time to read disclaimer_explanation (3 seconds)
+      if (stepData.step === 'disclaimer_explanation') {
+        setTimeout(() => {
+          setShowStepInput(true);
+        }, 3000);
+        return;
+      }
+      
+      if (!requiresCheckinInput(stepData.step) && stepData.step !== 'processing_checkin' && stepData.step !== 'complete') {
+        setShowVideoLoader(true); // ✅ cover the 300ms gap + API call gap
+        setTimeout(() => {
+          setVideoFinished(false);
+          processCheckinStep(stepData.step, { continue: true });
+        }, 300);
+      } else if (stepData.step === 'complete') {
+        setTimeout(() => {
+          setFullscreenVideo(null);
+          setVideoFinished(false);
+          setShowCheckinFlow(false);
+          setShowVideoLoader(false);
+        }, 1000);
+      } else {
+        setShowStepInput(true);
+      }
+      return;
+    }
+    
+    // Booking flow handling
+    if (
+      !requiresInput(stepData.step) &&
+      stepData.step !== 'flight_search' &&
+      stepData.step !== 'review_booking' &&
+      stepData.step !== 'payment' &&
+      stepData.step !== 'complete'
+    ) {
+      setShowVideoLoader(true); // ✅ cover the 300ms gap + API call gap
+      setTimeout(() => {
+        setVideoFinished(false);
+        processStep(stepData.step, { continue: true });
+      }, 300);
+    } else if (stepData.step === 'complete') {
+      setTimeout(() => {
+        setFullscreenVideo(null);
+        setVideoFinished(false);
+        setShowAvatarFlow(false);
+        setShowVideoLoader(false);
+      }, 1000);
+    } else {
+      setShowStepInput(true);
+    }
+  };
+
+  const requiresInput = (step) =>
+    ['origin_selection','destination_selection','date_selection',
+     'passenger_selection','passenger_details','contact_details',
+     'flight_selection','review_booking'].includes(step);
+
+  const requiresCheckinInput = (step) =>
+    ['pnr_collection','lastname_collection','mobile_collection',
+     'email_collection','disclaimer_explanation','seat_consent'].includes(step);
+
+  // ✅ Fix 1: Chat overlay with proper bubble styling
+  const renderChatOverlay = () => {
+    const flowChats = chats.slice(flowChatStartIndex);
+    if (!flowChats.length) return null;
+    const recent = flowChats.slice(-4); // Last 4 messages
+
+    return (
+      <View style={styles.chatOverlay} pointerEvents="none">
+        {recent.map((chat, idx) => {
+          // Oldest = 0.2 opacity, newest = 1.0
+          const opacity = 0.2 + (idx / Math.max(recent.length - 1, 1)) * 0.8;
+          const isUser = chat.sender === 'user';
+          return (
+            <View
+              key={idx}
+              style={[
+                styles.chatOverlayBubble,
+                isUser ? styles.chatOverlayUserBubble : styles.chatOverlayBotBubble,
+                { opacity }
+              ]}
+            >
+              <Text
+                style={[
+                  styles.chatOverlayText,
+                  isUser ? styles.chatOverlayUserText : styles.chatOverlayBotText
+                ]}
+                numberOfLines={3}
+              >
+                {chat.text}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    );
+  };
+
+  // ✅ Change 6: Faded history in panel — only flow messages
+  const renderFadedHistoryInPanel = () => {
+    // ✅ Same — exclude welcome message
+    const flowChats = chats.slice(flowChatStartIndex);
+    if (flowChats.length < 2) return null; // Don't show if only 1 message
+    const history = flowChats.slice(-4, -0); // All but most recent (shown in stepMessageBox)
+
+    return (
+      <View style={styles.fadedHistory} pointerEvents="none">
+        {history.map((chat, idx) => {
+          const opacity = 0.06 + (idx / Math.max(history.length - 1, 1)) * 0.22;
+          return (
+            <View key={idx} style={[styles.fadedHistoryBubble, {
+              alignSelf: chat.sender === 'user' ? 'flex-end' : 'flex-start',
+              opacity,
+            }]}>
+              <Text style={[styles.fadedHistoryText, {
+                color: chat.sender === 'user' ? indigoBlue : '#333'
+              }]} numberOfLines={1}>
+                {chat.sender === 'bot' ? '🤖 ' : '👤 '}{chat.text}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    );
+  };
+
+  const renderStepInputInModal = (step) => {
+    // Check-in inputs
+    if (showCheckinFlow) {
+      switch (step) {
+        case 'pnr_collection':
+          return <PNRInput onNext={(d) => processCheckinStep('pnr_collection', d)} language={language} />;
+        case 'lastname_collection':
+          return <LastNameInput onNext={(d) => processCheckinStep('lastname_collection', d)} language={language} />;
+        case 'mobile_collection':
+          return <MobileInput onNext={(d) => processCheckinStep('mobile_collection', d)} language={language} />;
+        case 'email_collection':
+          return <EmailInput onNext={(d) => processCheckinStep('email_collection', d)} language={language} />;
+        case 'disclaimer_explanation':
+          return <DisclaimerAcceptance onNext={(d) => processCheckinStep('disclaimer_explanation', d)} language={language} />;
+        case 'seat_consent':
+          return <SeatConsent onNext={(d) => processCheckinStep('seat_consent', d)} language={language} />;
+        default: return null;
+      }
+    }
+    
+    // Booking inputs
+    if (!requiresInput(step)) return null;
+    switch (step) {
+      case 'origin_selection':
+        return <OriginSelection onNext={(d) => processStep('origin_selection', d)} language={language} />;
+      case 'destination_selection':
+        return <DestinationSelection onNext={(d) => processStep('destination_selection', d)} language={language} />;
+      case 'date_selection':
+        return <DateSelection onNext={(d) => processStep('date_selection', d)} language={language} />;
+      case 'passenger_selection':
+        return <PassengerSelection onNext={(d) => processStep('passenger_selection', d)} language={language} />;
+      case 'passenger_details':
+        return <PassengerDetails onNext={(d) => processStep('passenger_details', d)} passengerCount={bookingData.passenger_selection} />;
+      case 'contact_details':
+        return <ContactDetails onNext={(d) => processStep('contact_details', d)} language={language} />;
+      default: return null;
+    }
+  };
+
+  const renderChatMessage = (chat, index) => {
+    if (chat.sender === 'user') {
+      return (
+        <View key={index} style={styles.userMessageContainer}>
+          <Card style={styles.userMessage}>
+            <Card.Content><Text style={styles.userMessageText}>{chat.text}</Text></Card.Content>
+          </Card>
+        </View>
+      );
+    }
+    return (
+      <View key={index} style={styles.botMessageContainer}>
+        <Card style={styles.botMessage}>
+          <Card.Content><Text style={styles.botMessageText}>{chat.text}</Text></Card.Content>
+        </Card>
+      </View>
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
+
+        {/* Header */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.headerTitle}>6Eskai</Text>
+            <Text style={styles.headerSubtitle}>AI Flight Assistant</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {/* Language toggle */}
+            <Menu
+              visible={menuVisible}
+              onDismiss={() => setMenuVisible(false)}
+              anchor={
+                <Button
+                  onPress={() => setMenuVisible(true)}
+                  textColor="white"
+                  mode="outlined"
+                  style={styles.headerButton}
+                  compact
+                >
+                  {language === 'en' ? '🌐 EN' : '🌐 HI'}
+                </Button>
+              }
+            >
+              <Menu.Item onPress={() => { setLanguage('en'); setMenuVisible(false); }} title="English" />
+              <Menu.Item onPress={() => { setLanguage('hi'); setMenuVisible(false); }} title="हिंदी" />
+            </Menu>
+            {/* Home/Reset button */}
+            <Button
+              onPress={resetApp}
+              textColor="white"
+              icon="home"
+              mode="outlined"
+              style={styles.headerButton}
+              compact
+            >
+              Home
+            </Button>
+          </View>
+        </View>
+
+        {/* ── IndiGo Themed Home Screen ── */}
+        {showHomeScreen && (
+          <View style={styles.homeScreen}>
+            {/* Blue hero section */}
+            <View style={styles.homeHero}>
+              {/* IndiGo Logo */}
+              <View style={styles.homeLogoRow}>
+                <Text style={styles.homeLogoIndigo}>IndiGo</Text>
+              </View>
+              <Text style={styles.homeTagline}>Your AI Travel Companion</Text>
+              <Text style={styles.homeSubTagline}>Lean. Clean. Flying Machine.</Text>
+
+              {/* Decorative wave strip */}
+              <View style={styles.homeWaveStrip}>
+                {[...Array(18)].map((_, i) => (
+                  <View key={i} style={[styles.homeWaveDot, { opacity: 0.12 + (i % 3) * 0.12 }]} />
+                ))}
+              </View>
+            </View>
+
+            {/* Action cards */}
+            <View style={styles.homeCardsArea}>
+              <Text style={styles.homeCardsLabel}>What would you like to do?</Text>
+
+              {/* Flight Booking card */}
+              <TouchableOpacity style={styles.homeActionCard} onPress={startAvatarFlow} activeOpacity={0.75}>
+                <View style={styles.homeActionLeft}>
+                  <View style={[styles.homeActionIcon, { backgroundColor: '#e8f0ff' }]}>
+                    <Text style={styles.homeActionEmoji}>✈️</Text>
+                  </View>
+                  <View>
+                    <Text style={styles.homeActionTitle}>Flight Booking</Text>
+                    <Text style={styles.homeActionSub}>
+                      {language === 'hi' ? 'अवतार के साथ बुक करें' : 'Book with Avatar Guidance'}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.homeActionArrow}>
+                  <Text style={styles.homeActionArrowText}>›</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Web Check-in card */}
+              <TouchableOpacity style={styles.homeActionCard} onPress={startCheckinFlow} activeOpacity={0.75}>
+                <View style={styles.homeActionLeft}>
+                  <View style={[styles.homeActionIcon, { backgroundColor: '#fff4e6' }]}>
+                    <Text style={styles.homeActionEmoji}>🎫</Text>
+                  </View>
+                  <View>
+                    <Text style={styles.homeActionTitle}>Web Check-in</Text>
+                    <Text style={styles.homeActionSub}>
+                      {language === 'hi' ? 'ऑनलाइन चेक-इन करें' : 'Check-in Online'}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.homeActionArrow}>
+                  <Text style={styles.homeActionArrowText}>›</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* Chat area — hidden during avatar flow */}
+        {!showAvatarFlow && !showCheckinFlow && !showHomeScreen && (
+          <ScrollView
+            style={styles.chatArea}
+            ref={chatEndRef}
+            onContentSizeChange={() => chatEndRef.current?.scrollToEnd({ animated: true })}
+          >
+            {chats.map((chat, idx) => renderChatMessage(chat, idx))}
+            {isLoading && <Text style={styles.loadingText}>Bot is typing...</Text>}
+          </ScrollView>
+        )}
+
+        {!showAvatarFlow && !showCheckinFlow && chats.length <= 2 && !showHomeScreen && (
+          <View style={styles.quickActions}>
+            <Button mode="outlined" onPress={startAvatarFlow} style={styles.quickButton}>
+              📱 {language === 'hi' ? 'अवतार बुकिंग शुरू करें' : 'Start Avatar Booking'}
+            </Button>
+            <Button mode="outlined" onPress={startCheckinFlow} style={styles.quickButton}>
+              ✈️ {language === 'hi' ? 'चेक इन' : 'Web Check-in'}
+            </Button>
+          </View>
+        )}
+
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>Powered by IndiGo AI</Text>
+        </View>
+
+        {/* ── Fullscreen Modal ── */}
+        <Modal
+          visible={!!fullscreenVideo || showVideoLoader}
+          animationType="fade"
+          onRequestClose={() => {}}
+          statusBarTranslucent
+        >
+          {/* ✅ Change 7: IndiGo blue not '#000' — any micro-flash matches loader color */}
+          <View style={{ flex: 1, backgroundColor: indigoBlue }}>
+
+            {/* ✅ FIX 3: Video ALWAYS renders and plays underneath — no opacity toggling */}
+            {fullscreenVideo && (
+              <Video
+                key={fullscreenVideo}
+                ref={videoRef}
+                source={{ uri: fullscreenVideo }}
+                style={styles.fullscreenVideo}
+                resizeMode={ResizeMode.COVER}
+                shouldPlay={!videoFinished}
+                isLooping={false}
+                onLoad={async () => {
+                  try { await videoRef.current?.setPositionAsync(0); } catch {}
+                  // Absolute last resort — if nothing else fires in 4s
+                  setTimeout(() => setShowVideoLoader(false), 4000);
+                }}
+                onReadyForDisplay={() => {
+                  tryHideLoader(); // ✅ gated — waits minimum 250ms
+                }}
+                onPlaybackStatusUpdate={(status) => {
+                  if (status.isPlaying) {
+                    tryHideLoader(); // ✅ gated — waits minimum 250ms
+                  }
+                  if (status.didJustFinish) {
+                    handleVideoEnd(pendingStepData);
+                  }
+                }}
+                onError={(e) => {
+                  console.log('Video error:', e);
+                  setShowVideoLoader(false); // on error, just force hide
+                  handleVideoEnd(pendingStepData);
+                }}
+              />
+            )}
+
+            {/* ✅ FIX 3: Loader as ABSOLUTE OVERLAY on top of video — no gap/black flash */}
+            {showVideoLoader && (
+              <View style={styles.loaderOverlay}>
+                {/* Top branding strip */}
+                <View style={styles.loaderTopStrip} />
+
+                {/* IndiGo Text Logo */}
+                <Text style={styles.loaderBrandName}>IndiGo</Text>
+                <View style={styles.loaderBrandUnderline} />
+
+                <Text style={styles.loaderSubtitle}>
+                  {language === 'hi' ? 'अगला चरण लोड हो रहा है...' : 'Preparing next step...'}
+                </Text>
+
+                {/* Spinner */}
+                <ActivityIndicator size="large" color={indigoOrange} style={{ marginTop: 32 }} />
+
+                {/* Orange progress dots */}
+                <View style={styles.loaderDotRow}>
+                  <View style={[styles.dot, { backgroundColor: indigoOrange, opacity: 1 }]} />
+                  <View style={[styles.dot, { backgroundColor: indigoOrange, opacity: 0.5 }]} />
+                  <View style={[styles.dot, { backgroundColor: indigoOrange, opacity: 0.2 }]} />
+                </View>
+
+                {/* Bottom strip */}
+                <View style={styles.loaderBottomStrip} />
+              </View>
+            )}
+
+            {/* Chat overlay on left while video plays */}
+            {!showVideoLoader && !videoFinished && renderChatOverlay()}
+
+            {/* ✅ Floating Home button — always visible during video/loader */}
+            <View style={styles.floatingHomeBtn} pointerEvents="box-none">
+              <Button
+                onPress={resetApp}
+                textColor="white"
+                icon="home"
+                mode="contained"
+                buttonColor="rgba(0,0,0,0.45)"
+                style={styles.floatingHomeBtnInner}
+                labelStyle={{ fontSize: 12 }}
+                compact
+              >
+                Home
+              </Button>
+            </View>
+
+            {/* ✅ FIX 1 + FIX 2: Step input panel — keyboard-aware + faded history */}
+            {!showVideoLoader && videoFinished && pendingStepData && (
+              <View style={[styles.stepInputPanel, { bottom: keyboardOffset }]}>
+                <ScrollView
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                >
+                  {/* ✅ FIX 2: Faded previous messages at top of panel */}
+                  {renderFadedHistoryInPanel()}
+
+                  {/* Step message */}
+                  <View style={styles.stepMessageBox}>
+                    <Text style={styles.stepMessage}>{pendingStepData.message}</Text>
+                  </View>
+
+                  {/* Flights */}
+                  {pendingStepData.flights && showStepInput && (
+                    <View>
+                      <Text style={styles.sectionLabel}>Available Flights</Text>
+                      {pendingStepData.flights.map((flight, idx) => (
+                        <Card
+                          key={idx}
+                          style={styles.flightCard}
+                          onPress={() => processStep('flight_selection', { selected_flight: flight.flight_number })}
+                        >
+                          <Card.Content>
+                            <Text style={{ fontWeight: 'bold' }}>{flight.flight_number}</Text>
+                            <Text style={{ fontSize: 12 }}>{flight.departure} → {flight.arrival} ({flight.duration})</Text>
+                            <Text style={{ color: indigoOrange, fontWeight: 'bold' }}>{flight.price}</Text>
+                          </Card.Content>
+                        </Card>
+                      ))}
+                    </View>
+                  )}
+
+                  {/* Review booking */}
+                  {pendingStepData.step === 'review_booking' && showStepInput && (
+                    <ReviewBooking
+                      bookingData={bookingData}
+                      onNext={(data) => processStep('review_booking', data)}
+                      language={language}
+                    />
+                  )}
+
+                  {/* Dynamic form inputs */}
+                  {showStepInput && pendingStepData.step === currentStep && (
+                    <View style={{ marginTop: 16 }}>
+                      {renderStepInputInModal(pendingStepData.step)}
+                    </View>
+                  )}
+
+                </ScrollView>
+              </View>
+            )}
+
+          </View>
+        </Modal>
+
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function OriginSelection({ onNext, language }) {
+  const [city, setCity] = useState('');
+  return (
+    <View>
+      <TextInput mode="outlined" placeholder={language === 'hi' ? 'शहर दर्ज करें' : 'Enter departure city'} value={city} onChangeText={setCity} style={styles.input} autoFocus />
+      <Button mode="contained" onPress={() => onNext({ origin: city })} disabled={!city.trim()} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'अगला' : 'Next'}
+      </Button>
+    </View>
+  );
+}
+
+function DestinationSelection({ onNext, language }) {
+  const [city, setCity] = useState('');
+  return (
+    <View>
+      <TextInput mode="outlined" placeholder={language === 'hi' ? 'शहर दर्ज करें' : 'Enter destination city'} value={city} onChangeText={setCity} style={styles.input} autoFocus />
+      <Button mode="contained" onPress={() => onNext({ destination: city })} disabled={!city.trim()} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'अगला' : 'Next'}
+      </Button>
+    </View>
+  );
+}
+
+function DateSelection({ onNext, language }) {
+  const [date, setDate]           = useState(new Date());
+  const [show, setShow]           = useState(false);
+  const [dateString, setDateString] = useState('');
+  const onChange = (event, selectedDate) => {
+    setShow(Platform.OS === 'ios');
+    if (selectedDate) {
+      setDate(selectedDate);
+      setDateString(selectedDate.toISOString().split('T')[0]);
+    }
+  };
+  return (
+    <View>
+      <Button mode="outlined" onPress={() => setShow(true)} style={styles.input} icon="calendar">
+        {dateString || (language === 'hi' ? 'तारीख चुनें' : 'Select Date')}
+      </Button>
+      {show && <DateTimePicker value={date} mode="date" display="default" onChange={onChange} minimumDate={new Date()} />}
+      <Button mode="contained" onPress={() => onNext({ date: dateString })} disabled={!dateString} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'अगला' : 'Next'}
+      </Button>
+    </View>
+  );
+}
+
+function PassengerSelection({ onNext, language }) {
+  const [adults, setAdults]     = useState('1');
+  const [children, setChildren] = useState('0');
+  const [infants, setInfants]   = useState('0');
+  return (
+    <View>
+      <TextInput mode="outlined" label={language === 'hi' ? 'वयस्क' : 'Adults'} value={adults} onChangeText={setAdults} keyboardType="numeric" style={styles.input} />
+      <TextInput mode="outlined" label={language === 'hi' ? 'बच्चे' : 'Children'} value={children} onChangeText={setChildren} keyboardType="numeric" style={styles.input} />
+      <TextInput mode="outlined" label={language === 'hi' ? 'शिशु' : 'Infants'} value={infants} onChangeText={setInfants} keyboardType="numeric" style={styles.input} />
+      <Button mode="contained" onPress={() => onNext({ adults: parseInt(adults), children: parseInt(children), infants: parseInt(infants) })} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'जारी रखें' : 'Continue'}
+      </Button>
+    </View>
+  );
+}
+
+function PassengerDetails({ onNext, passengerCount }) {
+  const total = passengerCount ? passengerCount.adults + passengerCount.children + passengerCount.infants : 1;
+  const [passengers, setPassengers] = useState(
+    Array.from({ length: total }, (_, i) => {
+      let type = 'Adult';
+      if (passengerCount) {
+        if (i >= passengerCount.adults + passengerCount.children) type = 'Infant';
+        else if (i >= passengerCount.adults) type = 'Child';
+      }
+      return { name: '', age: '', gender: 'male', type };
+    })
+  );
+  const update = (i, field, val) => {
+    const updated = [...passengers]; updated[i][field] = val; setPassengers(updated);
+  };
+  const isValid = passengers.every(p => p.name.trim() && p.age.trim());
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>Passenger Details</Text>
+      {passengers.map((p, i) => (
+        <View key={i} style={styles.passengerForm}>
+          <Text style={{ marginBottom: 6, color: indigoBlue, fontWeight: '600' }}>Passenger {i + 1} ({p.type})</Text>
+          <TextInput mode="outlined" placeholder="Full Name" value={p.name} onChangeText={v => update(i, 'name', v)} style={styles.input} />
+          <TextInput mode="outlined" placeholder="Age" value={p.age} onChangeText={v => update(i, 'age', v)} keyboardType="numeric" style={styles.input} />
+        </View>
+      ))}
+      <Button mode="contained" onPress={() => onNext({ passengers })} disabled={!isValid} style={styles.button} buttonColor={indigoBlue}>Continue</Button>
+    </View>
+  );
+}
+
+function ContactDetails({ onNext, language }) {
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>{language === 'hi' ? 'संपर्क जानकारी' : 'Contact Information'}</Text>
+      <TextInput mode="outlined" placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" style={styles.input} autoCapitalize="none" />
+      <TextInput mode="outlined" placeholder="Phone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" style={styles.input} />
+      <Button mode="contained" onPress={() => onNext({ email, phone })} disabled={!email.trim() || !phone.trim()} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'जारी रखें' : 'Continue'}
+      </Button>
+    </View>
+  );
+}
+
+// Check-in Components
+function PNRInput({ onNext, language }) {
+  const [pnr, setPnr] = useState('');
+  return (
+    <View>
+      <TextInput 
+        mode="outlined" 
+        placeholder={language === 'hi' ? 'PNR दर्ज करें' : 'Enter PNR'} 
+        value={pnr} 
+        onChangeText={setPnr} 
+        style={styles.input} 
+        autoCapitalize="characters"
+        maxLength={6}
+        autoFocus 
+      />
+      <Button mode="contained" onPress={() => onNext({ pnr: pnr.toUpperCase() })} disabled={pnr.length !== 6} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'अगला' : 'Next'}
+      </Button>
+    </View>
+  );
+}
+
+function LastNameInput({ onNext, language }) {
+  const [lastname, setLastname] = useState('');
+  return (
+    <View>
+      <TextInput 
+        mode="outlined" 
+        placeholder={language === 'hi' ? 'अंतिम नाम दर्ज करें' : 'Enter Last Name'} 
+        value={lastname} 
+        onChangeText={setLastname} 
+        style={styles.input} 
+        autoFocus 
+      />
+      <Button mode="contained" onPress={() => onNext({ lastname })} disabled={!lastname.trim()} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'अगला' : 'Next'}
+      </Button>
+    </View>
+  );
+}
+
+function MobileInput({ onNext, language }) {
+  const [mobile, setMobile] = useState('+91');
+  return (
+    <View>
+      <TextInput 
+        mode="outlined" 
+        placeholder={language === 'hi' ? 'मोबाइल नंबर (+91)' : 'Mobile Number (+91)'} 
+        value={mobile} 
+        onChangeText={setMobile} 
+        keyboardType="phone-pad" 
+        style={styles.input} 
+        autoFocus 
+      />
+      <Button mode="contained" onPress={() => onNext({ mobile })} disabled={mobile.length < 10} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'अगला' : 'Next'}
+      </Button>
+    </View>
+  );
+}
+
+function EmailInput({ onNext, language }) {
+  const [email, setEmail] = useState('');
+  return (
+    <View>
+      <TextInput 
+        mode="outlined" 
+        placeholder={language === 'hi' ? 'ईमेल दर्ज करें' : 'Enter Email'} 
+        value={email} 
+        onChangeText={setEmail} 
+        keyboardType="email-address" 
+        style={styles.input} 
+        autoCapitalize="none"
+        autoFocus 
+      />
+      <Button mode="contained" onPress={() => onNext({ email })} disabled={!email.trim() || !email.includes('@')} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'अगला' : 'Next'}
+      </Button>
+    </View>
+  );
+}
+
+function DisclaimerAcceptance({ onNext, language }) {
+  const [accepted, setAccepted] = useState(false);
+  return (
+    <View>
+      <Card style={{ backgroundColor: '#fff3cd', marginBottom: 16, borderWidth: 1, borderColor: '#ffc107' }}>
+        <Card.Content>
+          <Text style={{ fontSize: 13, lineHeight: 20, color: '#856404' }}>
+            {language === 'hi' 
+              ? '⚠️ आपकी चेक-इन उड़ान प्रस्थान से 6-12 घंटे पहले उपलब्धता के आधार पर मुफ्त सीट के साथ स्वचालित रूप से की जाएगी। एक बार चेक-इन होने पर आपको ईमेल के माध्यम से पुष्टि प्राप्त होगी।'
+              : '⚠️ Your check-in will be done automatically 6-12 hours before flight departure with a free seat based on availability. You will receive confirmation via email once checked-in.'}
+          </Text>
+        </Card.Content>
+      </Card>
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+        <Button 
+          mode={accepted ? 'contained' : 'outlined'} 
+          onPress={() => setAccepted(!accepted)} 
+          icon={accepted ? 'check-circle' : 'checkbox-blank-circle-outline'}
+          compact
+          buttonColor={accepted ? indigoBlue : 'transparent'}
+        >
+          {language === 'hi' ? 'मैं समझता हूं और स्वीकार करता हूं' : 'I understand and accept'}
+        </Button>
+      </View>
+      <Button 
+        mode="contained" 
+        onPress={() => onNext({ disclaimer_accepted: true })} 
+        disabled={!accepted} 
+        style={styles.button} 
+        buttonColor={indigoBlue}
+      >
+        {language === 'hi' ? 'जारी रखें' : 'Continue'}
+      </Button>
+    </View>
+  );
+}
+
+function SeatConsent({ onNext, language }) {
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>{language === 'hi' ? 'क्या आप स्वचालित सीट असाइनमेंट के लिए सहमत हैं?' : 'Do you consent to automatic seat assignment?'}</Text>
+      <Button mode="contained" onPress={() => onNext({ consent: true })} style={styles.button} buttonColor={indigoBlue}>
+        {language === 'hi' ? 'हां, जारी रखें' : 'Yes, Continue'}
+      </Button>
+      <Button mode="outlined" onPress={() => onNext({ consent: false })} style={[styles.button, { marginTop: 8 }]}>
+        {language === 'hi' ? 'नहीं' : 'No'}
+      </Button>
+    </View>
+  );
+}
+
+function ReviewBooking({ bookingData, onNext, language }) {
+  return (
+    <Card style={styles.reviewCard}>
+      <Card.Content>
+        <Text style={styles.reviewTitle}>
+          {language === 'hi' ? 'बुकिंग समीक्षा' : 'Booking Summary'}
+        </Text>
+
+        {/* Flight Route */}
+        {bookingData.origin_selection && (
+          <Text style={styles.reviewText}>✈️ From: {bookingData.origin_selection.origin}</Text>
+        )}
+        {bookingData.destination_selection && (
+          <Text style={styles.reviewText}>🛬 To: {bookingData.destination_selection.destination}</Text>
+        )}
+        {bookingData.date_selection && (
+          <Text style={styles.reviewText}>📅 Date: {bookingData.date_selection.date}</Text>
+        )}
+
+        {/* Passenger Count */}
+        {bookingData.passenger_selection && (
+          <Text style={styles.reviewText}>
+            👥 Passengers: {bookingData.passenger_selection.adults} Adult(s)
+            {bookingData.passenger_selection.children > 0
+              ? `, ${bookingData.passenger_selection.children} Child(ren)` : ''}
+            {bookingData.passenger_selection.infants > 0
+              ? `, ${bookingData.passenger_selection.infants} Infant(s)` : ''}
+          </Text>
+        )}
+
+        {/* ✅ Fix 2: Passenger Details (names + ages from PassengerDetails step) */}
+        {bookingData.passenger_details?.passengers?.length > 0 && (
+          <View style={styles.passengerDetailBox}>
+            <Text style={styles.passengerDetailTitle}>Passenger Details:</Text>
+            {bookingData.passenger_details.passengers.map((p, i) => (
+              <View key={i} style={styles.passengerDetailRow}>
+                <Text style={styles.passengerDetailText}>
+                  {i + 1}. {p.name}
+                </Text>
+                <Text style={styles.passengerDetailMeta}>
+                  {p.type} · Age {p.age}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Flight Selected */}
+        {bookingData.flight_selection && (
+          <Text style={styles.reviewText}>
+            🛫 Flight: {bookingData.flight_selection.selected_flight}
+          </Text>
+        )}
+
+        {/* Contact Details */}
+        {bookingData.contact_details && (
+          <View>
+            <Text style={styles.reviewText}>
+              📧 {bookingData.contact_details.email}
+            </Text>
+            <Text style={styles.reviewText}>
+              📱 {bookingData.contact_details.phone}
+            </Text>
+          </View>
+        )}
+
+        <Button
+          mode="contained"
+          onPress={() => onNext({ confirmed: true })}
+          style={[styles.button, { marginTop: 16 }]}
+          buttonColor={indigoBlue}
+        >
+          {language === 'hi' ? 'पुष्टि करें और भुगतान करें' : 'Confirm & Pay'}
+        </Button>
+      </Card.Content>
+    </Card>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  container:            { flex: 1, backgroundColor: '#f0f2f5' },
+  header:               { backgroundColor: indigoBlue, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  headerTitle:          { color: 'white', fontSize: 20, fontWeight: 'bold' },
+  headerSubtitle:       { color: 'white', fontSize: 12 },
+  headerButton:         { borderColor: 'rgba(255,255,255,0.5)', borderRadius: 20 },
+  chatArea:             { flex: 1, padding: 8, backgroundColor: '#fafafa' },
+  userMessageContainer: { alignItems: 'flex-end', marginBottom: 8 },
+  userMessage:          { backgroundColor: indigoBlue, maxWidth: '80%', borderRadius: 12 },
+  userMessageText:      { color: 'white', fontSize: 13 },
+  botMessageContainer:  { alignItems: 'flex-start', marginBottom: 8 },
+  botMessage:           { backgroundColor: '#f5f5f5', width: '100%', borderRadius: 12 },
+  botMessageText:       { fontSize: 13, marginTop: 8 },
+  input:                { marginBottom: 12 },
+  button:               { marginTop: 8 },
+  sectionTitle:         { fontWeight: 'bold', marginBottom: 12 },
+  sectionLabel:         { fontWeight: 'bold', marginBottom: 8, color: indigoBlue },
+  passengerForm:        { marginBottom: 16 },
+  reviewCard:           { marginTop: 16, backgroundColor: '#f8f9fa', borderWidth: 1, borderColor: indigoBlue },
+  reviewTitle:          { fontSize: 18, fontWeight: 'bold', color: indigoBlue, marginBottom: 12 },
+  reviewText:           { fontSize: 14, marginBottom: 8 },
+  quickActions:         { padding: 8, backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#eee', flexDirection: 'row', gap: 8 },
+  quickButton:          { borderColor: indigoBlue },
+  footer:               { padding: 8, backgroundColor: '#f5f5f5', alignItems: 'center' },
+  footerText:           { fontSize: 10, color: '#999' },
+  loadingText:          { color: '#999', padding: 8 },
+  flightCard:           { marginBottom: 8, borderWidth: 2, borderColor: indigoBlue },
+
+  // Video (always full-screen, no opacity toggling)
+  fullscreenVideo: { position: 'absolute', top: 0, left: 0, width, height },
+
+  // ✅ Loader as absolute overlay — sits ON TOP of video, no gap
+  loaderOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: indigoBlue,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 999,
+  },
+  loaderLogoCircle: {
+    width: 88, height: 88, borderRadius: 44,
+    backgroundColor: indigoOrange,
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 20,
+    shadowColor: indigoOrange,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8, shadowRadius: 20, elevation: 10,
+  },
+  loaderLogoText: { color: 'white', fontSize: 30, fontWeight: 'bold' },
+  loaderBrand:    { color: 'white', fontSize: 34, fontWeight: 'bold', letterSpacing: 3 },
+  loaderSubtitle: { color: 'rgba(255,255,255,0.65)', fontSize: 14, marginTop: 8 },
+  loaderDotRow:   { flexDirection: 'row', marginTop: 20, gap: 8 },
+  dot:            { width: 9, height: 9, borderRadius: 5 },
+
+  // Chat overlay — left side of fullscreen video
+  chatOverlay: {
+    position: 'absolute',
+    left: 10,
+    bottom: 44,
+    width: width * 0.58,
+    zIndex: 20,
+  },
+  chatOverlayBubble: {
+    marginBottom: 6,
+    maxWidth: '100%',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  chatOverlayBotBubble: {
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderBottomLeftRadius: 4,
+    alignSelf: 'flex-start',
+  },
+  chatOverlayUserBubble: {
+    backgroundColor: 'rgba(0,27,148,0.88)',
+    borderBottomRightRadius: 4,
+    alignSelf: 'flex-end',
+  },
+  chatOverlayText: { fontSize: 12, lineHeight: 17 },
+  chatOverlayBotText: { color: '#1a1a2e' },
+  chatOverlayUserText: { color: '#ffffff' },
+
+  // ✅ FIX 1: bottom dynamically set via keyboardOffset state
+  stepInputPanel: {
+    position: 'absolute',
+    left: 0, right: 0,
+    // bottom is set inline: [styles.stepInputPanel, { bottom: keyboardOffset }]
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 20,
+    maxHeight: height * 0.65,
+    zIndex: 30,
+  },
+  stepMessageBox: {
+    backgroundColor: '#e8eeff',
+    borderRadius: 12, padding: 14, marginBottom: 16,
+    borderLeftWidth: 4, borderLeftColor: indigoBlue,
+  },
+  stepMessage: { fontSize: 15, color: '#1a1a2e', lineHeight: 22 },
+
+  // ✅ FIX 2: Faded previous messages in panel
+  fadedHistory: { marginBottom: 8 },
+  fadedHistoryBubble: {
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
+    paddingHorizontal: 8, paddingVertical: 4,
+    marginBottom: 4,
+    maxWidth: '85%',
+  },
+  fadedHistoryText: { fontSize: 10, lineHeight: 14 },
+
+  // ✅ Fix 2: Passenger detail styles for ReviewBooking
+  passengerDetailBox: {
+    backgroundColor: '#f0f4ff',
+    borderRadius: 10,
+    padding: 10,
+    marginVertical: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: indigoBlue,
+  },
+  passengerDetailTitle: {
+    fontWeight: 'bold',
+    color: indigoBlue,
+    marginBottom: 6,
+    fontSize: 13,
+  },
+  passengerDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 3,
+  },
+  passengerDetailText: { fontSize: 13, color: '#1a1a2e', fontWeight: '500' },
+  passengerDetailMeta: { fontSize: 12, color: '#666' },
+
+  // ── Home Screen ─────────────────────────────────────────────────────────────
+  homeScreen: {
+    flex: 1,
+    backgroundColor: '#f0f4ff',
+  },
+
+  // Blue hero at top
+  homeHero: {
+    backgroundColor: indigoBlue,
+    paddingTop: 32,
+    paddingBottom: 48,
+    paddingHorizontal: 28,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    alignItems: 'flex-start',
+  },
+  homeLogoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 28,
+  },
+  homeLogoIndigo: {
+    color: 'white',
+    fontSize: 42,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+  },
+  homeTagline: {
+    color: 'white',
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 6,
+    letterSpacing: 0.3,
+  },
+  homeSubTagline: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 13,
+    fontStyle: 'italic',
+  },
+  homeWaveStrip: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 24,
+    gap: 6,
+  },
+  homeWaveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'white',
+  },
+
+  // Cards area
+  homeCardsArea: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 28,
+  },
+  homeCardsLabel: {
+    fontSize: 13,
+    color: '#666',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 16,
+  },
+  homeActionCard: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#001b94',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 4,
+    borderLeftWidth: 4,
+    borderLeftColor: indigoBlue,
+  },
+  homeActionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    flex: 1,
+  },
+  homeActionIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  homeActionEmoji: { fontSize: 26 },
+  homeActionTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: indigoBlue,
+    marginBottom: 3,
+  },
+  homeActionSub: {
+    fontSize: 12,
+    color: '#888',
+  },
+  homeActionArrow: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#e8f0ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  homeActionArrowText: {
+    fontSize: 22,
+    color: indigoBlue,
+    fontWeight: 'bold',
+    lineHeight: 26,
+  },
+
+  // ── Loader Overlay ───────────────────────────────────────────────────────────
+  loaderOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: indigoBlue,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 999,
+  },
+  loaderTopStrip: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0,
+    height: 5,
+    backgroundColor: indigoOrange,
+  },
+  loaderBottomStrip: {
+    position: 'absolute',
+    bottom: 0, left: 0, right: 0,
+    height: 5,
+    backgroundColor: indigoOrange,
+  },
+  loaderBrandName: {
+    color: 'white',
+    fontSize: 48,
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+  loaderBrandUnderline: {
+    width: 80,
+    height: 3,
+    backgroundColor: indigoOrange,
+    borderRadius: 2,
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  loaderSubtitle: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 14,
+    letterSpacing: 0.3,
+  },
+  loaderDotRow: {
+    flexDirection: 'row',
+    marginTop: 24,
+    gap: 10,
+  },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+
+  // Floating Home button
+  floatingHomeBtn: {
+    position: 'absolute',
+    top: 44,
+    right: 16,
+    zIndex: 1000,
+  },
+  floatingHomeBtnInner: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+});
