@@ -1,581 +1,787 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, ScrollView, KeyboardAvoidingView, Platform, Modal, Dimensions } from 'react-native';
-import { Provider as PaperProvider, Text, Button, TextInput, Card, Menu } from 'react-native-paper';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { Video } from 'expo-av';
-import DateTimePicker from '@react-native-community/datetimepicker';
+from typing import Optional
 
-const { width, height } = Dimensions.get('window');
 
-const API_BASE = 'http://localhost:8000';
-const indigoBlue = '#001b94';
-const indigoOrange = '#f14658';
+class AvatarEngine:
+    """Handles avatar video URL generation for multilingual support"""
 
-export default function App() {
-  return (
-    <SafeAreaProvider>
-      <PaperProvider>
-        <AvatarBookingApp />
-      </PaperProvider>
-    </SafeAreaProvider>
-  );
-}
-
-function AvatarBookingApp() {
-  const [language, setLanguage] = useState('en');
-  const [uid, setUid] = useState('');
-  const [chats, setChats] = useState([]);
-  const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [showAvatarFlow, setShowAvatarFlow] = useState(false);
-  const [currentStep, setCurrentStep] = useState(null);
-  const [bookingData, setBookingData] = useState({});
-  const [menuVisible, setMenuVisible] = useState(false);
-  const [fullscreenVideo, setFullscreenVideo] = useState(null);
-  const [showStepInput, setShowStepInput] = useState(false);
-  const [pendingStepData, setPendingStepData] = useState(null);
-  const chatEndRef = useRef(null);
-  const videoRef = useRef(null);
-
-  const getWelcomeMessage = (lang) => {
-    return lang === 'hi' 
-      ? 'नमस्ते! 6Eskai में आपका स्वागत है। मैं चरणबद्ध अवतार मार्गदर्शन के साथ उड़ानें बुक करने में आपकी सहायता कर सकता हूं।'
-      : 'Hello! Welcome to 6Eskai. I can help you book flights with step-by-step avatar guidance.';
-  };
-
-  useEffect(() => {
-    const newUid = 'uid_' + Math.random().toString(36).substr(2, 9);
-    setUid(newUid);
-    setChats([{
-      type: 'text',
-      text: getWelcomeMessage(language),
-      sender: 'bot',
-      timestamp: new Date().toISOString()
-    }]);
-  }, []);
-
-  const startAvatarFlow = async () => {
-    try {
-      setIsLoading(true);
-      setShowAvatarFlow(true);
-
-      const response = await fetch(`${API_BASE}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: language === 'hi' ? 'अवतार के साथ उड़ान बुक करें' : 'book flight with avatar',
-          uid: uid,
-          language: language
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      
-      if (data.type === 'avatar_flow' || data.avatar_video) {
-        setCurrentStep(data.step || data.next_step);
-        setPendingStepData(data);
-        setFullscreenVideo(data.avatar_video);
-        setShowStepInput(false);
-      }
-    } catch (error) {
-      console.error('Error:', error);
-      const errorMsg = `Error: ${error.message}. Please ensure backend is running at ${API_BASE}`;
-      
-      setChats(prev => [...prev, {
-        type: 'text',
-        text: errorMsg,
-        sender: 'bot',
-        timestamp: new Date().toISOString()
-      }]);
-      setShowAvatarFlow(false);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const processStep = async (step, userInput) => {
-    try {
-      setIsLoading(true);
-      setShowStepInput(false);
-
-      // Format user input for display
-      let userInputText = '';
-      if (typeof userInput === 'string') {
-        userInputText = userInput;
-      } else if (typeof userInput === 'object') {
-        if (userInput.origin) userInputText = `From: ${userInput.origin}`;
-        else if (userInput.destination) userInputText = `To: ${userInput.destination}`;
-        else if (userInput.date) userInputText = `Date: ${userInput.date}`;
-        else if (userInput.adults !== undefined) {
-          userInputText = `${userInput.adults} Adult(s)`;
-          if (userInput.children > 0) userInputText += `, ${userInput.children} Child(ren)`;
-          if (userInput.infants > 0) userInputText += `, ${userInput.infants} Infant(s)`;
+    def __init__(self, base_ip: str = None):
+        # Use environment variable or default to localhost
+        import os
+        if base_ip:
+            # Check if it's an ngrok URL
+            if 'ngrok' in base_ip or base_ip.startswith('http'):
+                self.base_url = f"{base_ip}/videos" if not base_ip.endswith('/videos') else base_ip
+            else:
+                self.base_url = f"http://{base_ip}:8000/videos"
+        else:
+            self.base_url = os.getenv('AVATAR_CDN_URL', 'http://localhost:8000/videos')
+        if not self.base_url.startswith('http'):
+            self.base_url = f"http://localhost:8000{self.base_url}"
+        
+        # Language folder mapping
+        self.language_folders = {
+            "en": "english",
+            "hi": "hindi"
         }
-        else if (userInput.passengers) userInputText = `${userInput.passengers.length} passenger(s) details provided`;
-        else if (userInput.email) userInputText = `Email: ${userInput.email}, Phone: ${userInput.phone}`;
-        else if (userInput.selected_flight) userInputText = `Selected: ${userInput.selected_flight}`;
-        else if (userInput.confirmed) userInputText = 'Booking confirmed';
-        else if (userInput.continue) userInputText = null;
-        else userInputText = JSON.stringify(userInput);
-      }
+        
+        # Video filename mapping (without language suffix)
+        self.video_files = {
+            "welcome": "welcome",
+            "language_selection": "language_selection",
+            "origin_selection": "origin_selection",
+            "destination_selection": "destination_selection",
+            "date_selection": "date_selection",
+            "passenger_selection": "passenger_selection",
+            "flight_search": "flight_search",
+            "flight_selection": "flight_selection",
+            "passenger_details": "passenger_details",
+            "review_booking": "review_booking",
+            "payment": "payment_handoff"
+        }
 
-      if (userInputText) {
-        setChats(prev => [...prev, {
-          type: 'text',
-          text: userInputText,
-          sender: 'user',
-          timestamp: new Date().toISOString()
-        }]);
-      }
+    def get_video_url(self, step: str, language: str = "en", folder: str = None) -> Optional[str]:
+        """
+        Get avatar video URL for a given step and language.
+        
+        Args:
+            step: The booking flow step name
+            language: Language code (en, hi)
+            folder: Optional folder override (e.g., 'avatar_checkin')
+            
+        Returns:
+            Full video URL or None if not found
+        """
+        # Check-in videos
+        if folder == "avatar_checkin":
+            lang_folder = self.language_folders.get(language, "english")
+            lang_suffix = "eng" if language == "en" else "hindi"
+            filename = f"{step}_{lang_suffix}.mp4"
+            return f"{self.base_url}/avatar_checkin/{lang_folder}/{filename}"
+        
+        # Booking videos
+        if step in self.video_files:
+            lang_folder = self.language_folders.get(language, "english")
+            lang_suffix = "en" if language == "en" else "hi"
+            filename = f"{self.video_files[step]}_{lang_suffix}.mp4"
+            return f"{self.base_url}/{lang_folder}/{filename}"
+        return None
 
-      const response = await fetch(`${API_BASE}/avatar-step`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: uid,
-          step: step,
-          user_input: typeof userInput === 'string' ? { response: userInput } : userInput,
-          language: language
-        })
-      });
+    def get_subtitle_url(self, step: str, language: str = "en") -> Optional[str]:
+        """Get subtitle URL for accessibility."""
+        return None
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+    def validate_video_exists(self, step: str) -> bool:
+        """Check if video file mapping exists for a step"""
+        return step in self.video_files
 
-      const data = await response.json();
-      setCurrentStep(data.step || data.next_step);
-      setBookingData(prev => ({ ...prev, [step]: userInput }));
-      setPendingStepData(data);
 
-      // Handle complete step
-      if (data.step === 'complete' || data.type === 'complete') {
-        setChats(prev => [...prev, {
-          type: 'text',
-          text: '✅ Booking complete! Thank you for using 6Eskai.',
-          sender: 'bot',
-          timestamp: new Date().toISOString()
-        }]);
-        setShowAvatarFlow(false);
-        setCurrentStep(null);
-        setShowStepInput(false);
-        setIsLoading(false);
-        return;
-      }
 
-      if (data.avatar_video) {
-        setFullscreenVideo(data.avatar_video);
-      } else {
-        handleVideoEnd(data);
-      }
-    } catch (error) {
-      console.error('Error:', error);
-      setChats(prev => [...prev, {
-        type: 'text',
-        text: `Error: ${error.message}`,
-        sender: 'bot',
-        timestamp: new Date().toISOString()
-      }]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
-  const handleVideoEnd = (stepData) => {
-    setFullscreenVideo(null);
-    
-    if (stepData.step !== 'complete') {
-      setChats(prev => [...prev, {
-        type: stepData.type || 'avatar_step',
-        text: stepData.message,
-        sender: 'bot',
-        step: stepData.step || stepData.next_step,
-        flights: stepData.flights,
-        timestamp: new Date().toISOString()
-      }]);
-    }
-    
-    const currentStepName = stepData.step || stepData.next_step;
-    
-    if (!requiresInput(currentStepName) && 
-        currentStepName !== 'flight_search' && 
-        currentStepName !== 'review_booking' && 
-        currentStepName !== 'payment' &&
-        currentStepName !== 'complete') {
-      setTimeout(() => {
-        processStep(currentStepName, { continue: true });
-      }, 500);
-    } else if (currentStepName === 'complete') {
-      setTimeout(() => {
-        setChats(prev => [...prev, {
-          type: 'text',
-          text: '✅ Booking complete! Thank you for using 6Eskai.',
-          sender: 'bot',
-          timestamp: new Date().toISOString()
-        }]);
-        setShowAvatarFlow(false);
-        setCurrentStep(null);
-        setShowStepInput(false);
-      }, 1000);
-    } else {
-      setShowStepInput(true);
-    }
-  };
 
-  const renderChatMessage = (chat, index) => {
-    if (chat.sender === 'user') {
-      return (
-        <View key={index} style={styles.userMessageContainer}>
-          <Card style={styles.userMessage}>
-            <Card.Content>
-              <Text style={styles.userMessageText}>{chat.text}</Text>
-            </Card.Content>
-          </Card>
-        </View>
-      );
-    }
 
-    return (
-      <View key={index} style={styles.botMessageContainer}>
-        <Card style={styles.botMessage}>
-          <Card.Content>
-            <Text style={styles.botMessageText}>{chat.text}</Text>
 
-            {chat.flights && index === chats.length - 1 && showStepInput && (
-              <View style={styles.flightsContainer}>
-                <Text style={styles.flightsTitle}>Available Flights:</Text>
-                {chat.flights.map((flight, idx) => (
-                  <Card key={idx} style={styles.flightCard} onPress={() => processStep('flight_selection', { selected_flight: flight.flight_number })}>
-                    <Card.Content>
-                      <Text style={styles.flightNumber}>{flight.flight_number}</Text>
-                      <Text style={styles.flightDetails}>{flight.departure} → {flight.arrival} ({flight.duration})</Text>
-                      <Text style={styles.flightPrice}>{flight.price}</Text>
-                    </Card.Content>
-                  </Card>
-                ))}
-              </View>
-            )}
 
-            {chat.step === 'review_booking' && index === chats.length - 1 && showStepInput && currentStep === 'review_booking' && (
-              <ReviewBooking bookingData={bookingData} onNext={(data) => processStep('review_booking', data)} language={language} />
-            )}
 
-            {chat.step && index === chats.length - 1 && showStepInput && chat.step === currentStep && (
-              <View style={styles.stepInputContainer}>
-                {renderStepInput(chat.step)}
-              </View>
-            )}
-          </Card.Content>
-        </Card>
-      </View>
-    );
-  };
 
-  const requiresInput = (step) => {
-    return ['origin_selection', 'destination_selection', 'date_selection', 'passenger_selection', 'passenger_details', 'contact_details', 'flight_selection', 'review_booking'].includes(step);
-  };
+import os
+from typing import Dict, Any
+from sarvam_service import SarvamService
 
-  const renderStepInput = (step) => {
-    if (!requiresInput(step)) return null;
-    
-    switch (step) {
-      case 'origin_selection':
-        return <OriginSelection onNext={(data) => processStep('origin_selection', data)} language={language} />;
-      case 'destination_selection':
-        return <DestinationSelection onNext={(data) => processStep('destination_selection', data)} language={language} />;
-      case 'date_selection':
-        return <DateSelection onNext={(data) => processStep('date_selection', data)} language={language} />;
-      case 'passenger_selection':
-        return <PassengerSelection onNext={(data) => processStep('passenger_selection', data)} language={language} />;
-      case 'passenger_details':
-        return <PassengerDetails onNext={(data) => processStep('passenger_details', data)} passengerCount={bookingData.passenger_selection} />;
-      case 'contact_details':
-        return <ContactDetails onNext={(data) => processStep('contact_details', data)} language={language} />;
-      default:
-        return null;
-    }
-  };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.container}
-      >
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.headerTitle}>6Eskai</Text>
-            <Text style={styles.headerSubtitle}>AI Flight Assistant</Text>
-          </View>
-          <Menu
-            visible={menuVisible}
-            onDismiss={() => setMenuVisible(false)}
-            anchor={
-              <Button onPress={() => setMenuVisible(true)} textColor="white">
-                {language === 'en' ? 'EN' : 'हि'}
-              </Button>
+class ChatbotIntegration:
+    """
+    Integration with the Sky chatbot system.
+    Handles initial chatbot responses before avatar flow is triggered.
+    """
+
+    def __init__(self, uid: str):
+        self.uid = uid
+        self.sky_api_url = os.getenv("SKY_API_URL")
+        self.conversation_count = 0
+        self.sarvam = SarvamService()
+
+    async def process_query(
+        self, 
+        query: str, 
+        language: str = "en", 
+        in_avatar_flow: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Process query through chatbot.
+        
+        Returns:
+            Dict with 'message' and optionally 'trigger_avatar' or 'trigger_checkin' flag
+        """
+        self.conversation_count += 1
+
+        # Don't allow triggering avatar if already in it
+        if in_avatar_flow:
+            return {
+                "type": "chatbot_response",
+                "message": "Please use the avatar flow to continue.",
+                "trigger_avatar": False,
+                "trigger_checkin": False
             }
-          >
-            <Menu.Item onPress={() => { setLanguage('en'); setMenuVisible(false); }} title="English" />
-            <Menu.Item onPress={() => { setLanguage('hi'); setMenuVisible(false); }} title="हिंदी" />
-          </Menu>
-        </View>
 
-        <ScrollView 
-          style={styles.chatArea}
-          ref={chatEndRef}
-          onContentSizeChange={() => chatEndRef.current?.scrollToEnd({ animated: true })}
-        >
-          {chats.map((chat, idx) => renderChatMessage(chat, idx))}
-          {isLoading && <Text style={styles.loadingText}>Bot is typing...</Text>}
-        </ScrollView>
+        # Check if query should trigger check-in flow
+        if self._should_trigger_checkin(query):
+            welcome_message = "Great! I'll guide you through web check-in with step-by-step avatar assistance." if language == "en" else "बहुत अच्छा! मैं चरणबद्ध अवतार सहायता के साथ वेब चेक-इन के माध्यम से आपका मार्गदर्शन करूंगा।"
+            return {
+                "type": "checkin_trigger",
+                "message": welcome_message,
+                "trigger_checkin": True
+            }
 
-        {!showAvatarFlow && chats.length <= 2 && (
-          <View style={styles.quickActions}>
-            <Button mode="outlined" onPress={startAvatarFlow} style={styles.quickButton}>
-              📱 {language === 'hi' ? 'अवतार' : 'Avatar'}
-            </Button>
-          </View>
-        )}
+        # Check if query should trigger avatar flow
+        if self._should_trigger_avatar(query):
+            welcome_message = "Great! I'll guide you through booking with step-by-step avatar assistance." if language == "en" else "बहुत अच्छा! मैं चरणबद्ध अवतार सहायता के साथ बुकिंग के माध्यम से आपका मार्गदर्शन करूंगा।"
+            return {
+                "type": "avatar_trigger",
+                "message": welcome_message,
+                "trigger_avatar": True
+            }
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Powered by IndiGo AI</Text>
-        </View>
+        # Default chatbot responses in English
+        responses_en = [
+            "Hello! I can help you with flight bookings, check-in, seat selection, and more. Would you like to book a flight with avatar guidance?",
+            "I'm here to assist with your travel needs. Would you like me to guide you through booking a flight with our avatar assistant?",
+            "How can I help you today? I can assist with flight bookings, flight status, check-in, and more. Want to try avatar-guided booking?"
+        ]
 
-        <Modal visible={!!fullscreenVideo} animationType="fade" onRequestClose={() => {}}>
-          <View style={styles.fullscreenContainer}>
-            <Video
-              ref={videoRef}
-              source={{ uri: fullscreenVideo }}
-              style={styles.fullscreenVideo}
-              resizeMode="contain"
-              shouldPlay
-              onPlaybackStatusUpdate={(status) => {
-                if (status.didJustFinish) {
-                  handleVideoEnd(pendingStepData);
+        response_index = min(self.conversation_count - 1, len(responses_en) - 1)
+        base_message = responses_en[response_index]
+        
+        # Translate to target language if needed
+        if language != "en":
+            translated_message = await self.sarvam.translate_text(base_message, language, "en")
+        else:
+            translated_message = base_message
+
+        return {
+            "type": "chatbot_response",
+            "message": translated_message,
+            "trigger_avatar": False,
+            "show_quick_actions": True
+        }
+
+    def _should_trigger_avatar(self, query: str) -> bool:
+        """
+        Determine if avatar flow should be triggered based on user input.
+        """
+        avatar_triggers = [
+            "book flight",
+            "flight booking",
+            "book ticket",
+            "avatar help",
+            "step by step",
+            "guided booking",
+            "avatar guidance",
+            "book a flight",
+            "flight reservation",
+            "new booking",
+            "booking",
+            "avatar",
+            "अवतार के साथ उड़ान बुक करें",  # Hindi avatar trigger
+            "book flight with avatar",      # English avatar trigger
+            "फ्लाइट बुक",
+            "बुकिंग",
+            "अवतार",
+            "टिकट बुक"
+        ]
+
+        query_lower = query.lower().strip()
+        return any(trigger in query_lower for trigger in avatar_triggers)
+    
+    def _should_trigger_checkin(self, query: str) -> bool:
+        """
+        Determine if check-in flow should be triggered based on user input.
+        """
+        checkin_triggers = [
+            "check in",
+            "check-in",
+            "checkin",
+            "web check in",
+            "web checkin",
+            "boarding pass",
+            "online check in",
+            "चेक इन",
+            "वेब चेक इन",
+            "बोर्डिंग पास",
+            "ऑनलाइन चेक इन"
+        ]
+
+        query_lower = query.lower().strip()
+        return any(trigger in query_lower for trigger in checkin_triggers)
+
+
+
+
+
+
+
+
+from typing import Dict, Any
+from avatar_engine import AvatarEngine
+
+
+class CheckinController:
+    """Controls the web check-in flow with avatar guidance"""
+
+    def __init__(self, uid: str, language: str = "en"):
+        self.uid = uid
+        self.language = language
+        self.avatar_engine = AvatarEngine()
+        self.current_step = None
+        self.checkin_data = {}
+
+        self.messages = {
+            "en": {
+                "welcome_checkin": "Hello! I'll help you with web check-in. Let's get started!",
+                "pnr_collection": "Please enter your 6-character PNR number.",
+                "lastname_collection": "Please enter the last name used during booking.",
+                "mobile_collection": "Please provide your mobile number with country code (e.g., +91).",
+                "email_collection": "Please enter your email address to receive the boarding pass.",
+                "disclaimer_explanation": "Your check-in will be done automatically 6-12 hours before flight departure with a free seat based on availability.",
+                "seat_consent": "Do you consent to automatic seat assignment?",
+                "processing_checkin": "Processing your check-in request...",
+                "checkin_success": "Check-in successful! You'll receive your boarding pass via email 6-12 hours before departure.",
+                "checkin_error": "Unable to complete check-in. Please verify your details and try again."
+            },
+            "hi": {
+                "welcome_checkin": "नमस्ते! मैं आपकी वेब चेक-इन में मदद करूंगा। चलिए शुरू करते हैं!",
+                "pnr_collection": "कृपया अपना 6-अक्षर का PNR नंबर दर्ज करें।",
+                "lastname_collection": "कृपया बुकिंग के दौरान उपयोग किया गया अंतिम नाम दर्ज करें।",
+                "mobile_collection": "कृपया देश कोड के साथ अपना मोबाइल नंबर प्रदान करें (जैसे +91)।",
+                "email_collection": "बोर्डिंग पास प्राप्त करने के लिए अपना ईमेल पता दर्ज करें।",
+                "disclaimer_explanation": "आपकी चेक-इन उड़ान प्रस्थान से 6-12 घंटे पहले उपलब्धता के आधार पर मुफ्त सीट के साथ स्वचालित रूप से की जाएगी।",
+                "seat_consent": "क्या आप स्वचालित सीट असाइनमेंट के लिए सहमत हैं?",
+                "processing_checkin": "आपके चेक-इन अनुरोध को संसाधित किया जा रहा है...",
+                "checkin_success": "चेक-इन सफल! आपको प्रस्थान से 6-12 घंटे पहले ईमेल के माध्यम से बोर्डिंग पास प्राप्त होगा।",
+                "checkin_error": "चेक-इन पूरा करने में असमर्थ। कृपया अपने विवरण सत्यापित करें और पुनः प्रयास करें।"
+            }
+        }
+
+        self.step_flow = {
+            "welcome_checkin": "pnr_collection",
+            "pnr_collection": "lastname_collection",
+            "lastname_collection": "mobile_collection",
+            "mobile_collection": "email_collection",
+            "email_collection": "disclaimer_explanation",
+            "disclaimer_explanation": "seat_consent",
+            "seat_consent": "processing_checkin",
+            "processing_checkin": "checkin_success",
+            "checkin_success": "complete",
+            "checkin_error": "complete"
+        }
+
+    async def start_checkin_flow(self, query: str, language: str) -> Dict[str, Any]:
+        """Start the avatar-guided check-in flow"""
+        self.language = language
+        self.current_step = "welcome_checkin"
+        
+        video_url = self.avatar_engine.get_video_url("welcome_checkin", language, folder="avatar_checkin")
+        message = self.messages.get(language, self.messages["en"]).get("welcome_checkin")
+
+        return {
+            "type": "avatar_checkin_flow",
+            "step": "welcome_checkin",
+            "avatar_video": video_url,
+            "message": message,
+            "next_step": "pnr_collection",
+            "uid": self.uid,
+            "show_input": True
+        }
+
+    async def process_step(
+        self, 
+        step: str, 
+        user_input: Dict[str, Any], 
+        language: str
+    ) -> Dict[str, Any]:
+        """Process a check-in step"""
+        self.language = language
+        
+        if user_input:
+            self.checkin_data[step] = user_input
+
+        # Validation logic
+        if step == "pnr_collection" and user_input:
+            pnr = user_input.get("pnr", "")
+            if len(pnr) != 6:
+                return {
+                    "type": "validation_error",
+                    "step": step,
+                    "message": "PNR must be 6 characters" if language == "en" else "PNR 6 अक्षर का होना चाहिए",
+                    "avatar_video": self.avatar_engine.get_video_url(step, language, folder="avatar_checkin")
                 }
-              }}
-              onError={(e) => {
-                console.log('Video error:', e);
-                handleVideoEnd(pendingStepData);
-              }}
-            />
-          </View>
-        </Modal>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
-  );
-}
 
-// Step Components
-function OriginSelection({ onNext, language }) {
-  const [city, setCity] = useState('');
-  return (
-    <View>
-      <TextInput mode="outlined" placeholder={language === 'hi' ? 'शहर दर्ज करें' : 'Enter city'} value={city} onChangeText={setCity} style={styles.input} />
-      <Button mode="contained" onPress={() => onNext({ origin: city })} disabled={!city.trim()} style={styles.button} buttonColor={indigoBlue}>
-        {language === 'hi' ? 'अगला' : 'Next'}
-      </Button>
-    </View>
-  );
-}
+        # Get next step
+        next_step = self.step_flow.get(step, "complete")
+        
+        # Special handling for processing step
+        if next_step == "processing_checkin":
+            # Simulate API call
+            success = await self._process_checkin()
+            next_step = "checkin_success" if success else "checkin_error"
+        
+        self.current_step = next_step
 
-function DestinationSelection({ onNext, language }) {
-  const [city, setCity] = useState('');
-  return (
-    <View>
-      <TextInput mode="outlined" placeholder={language === 'hi' ? 'शहर दर्ज करें' : 'Enter city'} value={city} onChangeText={setCity} style={styles.input} />
-      <Button mode="contained" onPress={() => onNext({ destination: city })} disabled={!city.trim()} style={styles.button} buttonColor={indigoBlue}>
-        {language === 'hi' ? 'अगला' : 'Next'}
-      </Button>
-    </View>
-  );
-}
+        message_dict = self.messages.get(language, self.messages["en"])
+        message = message_dict.get(next_step, f"Processing {next_step}")
+        video_url = self.avatar_engine.get_video_url(next_step, language, folder="avatar_checkin")
 
-function DateSelection({ onNext, language }) {
-  const [date, setDate] = useState(new Date());
-  const [show, setShow] = useState(false);
-  const [dateString, setDateString] = useState('');
-  
-  const onChange = (event, selectedDate) => {
-    setShow(Platform.OS === 'ios');
-    if (selectedDate) {
-      setDate(selectedDate);
-      const formatted = selectedDate.toISOString().split('T')[0];
-      setDateString(formatted);
+        response = {
+            "type": "avatar_checkin_step",
+            "step": next_step,
+            "next_step": self.step_flow.get(next_step, "complete"),
+            "avatar_video": video_url,
+            "message": message,
+            "checkin_data": self.checkin_data
+        }
+
+        if next_step in ["checkin_success", "checkin_error"]:
+            response["type"] = "checkin_complete"
+            response["success"] = next_step == "checkin_success"
+
+        if next_step == "complete":
+            response["type"] = "complete"
+            response["avatar_video"] = None
+            response["next_step"] = None
+
+        return response
+
+    async def _process_checkin(self) -> bool:
+        """Simulate check-in processing - integrate with actual API"""
+        # TODO: Integrate with actual check-in API
+        # For now, return success if all required fields are present
+        required_fields = ["pnr_collection", "lastname_collection", "mobile_collection", "email_collection"]
+        return all(field in self.checkin_data for field in required_fields)
+
+
+
+
+
+
+
+
+
+
+from typing import Dict, Any
+from avatar_engine import AvatarEngine
+
+
+class FlowController:
+    """
+    Controls the flight booking flow.
+    - Manages step progression
+    - Stores booking data
+    - Returns correct messages and videos for each step
+    """
+
+    def __init__(self, uid: str, language: str = "en"):
+        self.uid = uid
+        self.language = language
+        self.avatar_engine = AvatarEngine()
+        self.current_step = None
+        self.booking_data = {}
+
+        # Messages for each step in different languages
+        self.messages = {
+            "en": {
+                "welcome": "Hello! I'll help you book your flight. Let's get started!",
+                "origin_selection": "Great! Let's start by selecting your departure city. Where would you like to fly from?",
+                "destination_selection": "Perfect! Now, where would you like to fly to?",
+                "date_selection": "Excellent! When would you like to travel? Please select your preferred date.",
+                "passenger_selection": "Now let's select the number of passengers. How many people will be traveling?",
+                "passenger_details": "Now I need details for all passengers. Please provide information for each traveler.",
+                "flight_search": "Searching for flights based on your preferences...",
+                "flight_selection": "Here are the available flights. Please select your preferred option.",
+                "contact_details": "Please provide contact details for booking.",
+                "review_booking": "Please review your booking details before proceeding to payment.",
+                "payment": "Redirecting to secure payment gateway..."
+            },
+            "hi": {
+                "welcome": "नमस्ते! मैं आपकी फ्लाइट बुकिंग में मदद करूंगा। चलिए शुरुआत करते हैं!",
+                "origin_selection": "बहुत अच्छा! चलिए अपने प्रस्थान शहर को चुनकर शुरुआत करते हैं। आप कहाँ से उड़ान भरना चाहते हैं?",
+                "destination_selection": "बिल्कुल! अब आप कहाँ जाना चाहते हैं?",
+                "date_selection": "शानदार! आप कब यात्रा करना चाहते हैं? अपनी पसंदीदा तारीख चुनें।",
+                "passenger_selection": "अब आइए यात्रियों की संख्या चुनें। कितने लोग यात्रा करेंगे?",
+                "passenger_details": "अब मुझे सभी यात्रियों का विवरण चाहिए। कृपया प्रत्येक यात्री की जानकारी प्रदान करें।",
+                "flight_search": "आपकी पसंद के अनुसार उड़ानों की खोज जारी है...",
+                "flight_selection": "यहाँ उपलब्ध उड़ानें हैं। अपनी पसंदीदा उड़ान चुनें।",
+                "contact_details": "बुकिंग के लिए संपर्क विवरण प्रदान करें।",
+                "review_booking": "भुगतान के लिए आगे बढ़ने से पहले अपने बुकिंग विवरण की समीक्षा करें।",
+                "payment": "सुरक्षित भुगतान गेटवे पर पुनर्निर्देशित किया जा रहा है..."
+            }
+        }
+
+        # Define the flow sequence - which step comes after which
+        self.step_flow = {
+            "welcome": "origin_selection",
+            "origin_selection": "destination_selection",
+            "destination_selection": "date_selection",
+            "date_selection": "passenger_selection",
+            "passenger_selection": "passenger_details",
+            "passenger_details": "flight_search",
+            "flight_search": "flight_selection",
+            "flight_selection": "contact_details",
+            "contact_details": "review_booking",
+            "review_booking": "payment",
+            "payment": "complete"
+        }
+
+    async def start_avatar_flow(self, query: str, language: str) -> Dict[str, Any]:
+        """
+        Start the avatar-guided booking flow.
+        
+        Returns the welcome step with video and message.
+        """
+        self.language = language
+        self.current_step = "welcome"
+        
+        video_url = self.avatar_engine.get_video_url("welcome", language)
+        message = self.messages.get(language, self.messages["en"]).get("welcome")
+
+        return {
+            "type": "avatar_flow",
+            "step": "welcome",
+            "avatar_video": video_url,
+            "message": message,
+            "next_step": "origin_selection",
+            "uid": self.uid,
+            "show_input": True
+        }
+
+    async def process_step(
+        self, 
+        step: str, 
+        user_input: Dict[str, Any], 
+        language: str
+    ) -> Dict[str, Any]:
+        """
+        Process a booking step and return the current step data.
+        """
+        self.language = language
+        
+        # Store user input
+        if user_input:
+            self.booking_data[step] = user_input
+
+        # Get the NEXT step to show
+        next_step = self.step_flow.get(step, "complete")
+        self.current_step = next_step
+
+        # Get message and video for the NEXT step
+        message_dict = self.messages.get(language, self.messages["en"])
+        message = message_dict.get(next_step, f"Processing {next_step}")
+        video_url = self.avatar_engine.get_video_url(next_step, language)
+
+        response = {
+            "type": "avatar_step",
+            "step": next_step,
+            "next_step": self.step_flow.get(next_step, "complete"),
+            "avatar_video": video_url,
+            "message": message,
+            "booking_data": self.booking_data
+        }
+
+        # Special handling for flight search
+        if next_step == "flight_search":
+            # Auto-show flight results
+            flights = self._get_dummy_flights()
+            response["flights"] = flights
+            response["type"] = "flight_results"
+            response["message"] = f"Found {len(flights)} flights"
+            response["next_step"] = "flight_selection"
+        
+        # Special handling for review_booking - don't auto-progress
+        if next_step == "review_booking":
+            response["type"] = "review_booking"
+            response["requires_confirmation"] = True
+        
+        # Special handling for payment - final step
+        if next_step == "payment":
+            response["type"] = "payment"
+            response["message"] = "Redirecting to secure payment gateway..."
+            response["next_step"] = "complete"
+        
+        # Complete step - end of flow
+        if next_step == "complete":
+            response["type"] = "complete"
+            response["message"] = "Processing complete"
+            response["avatar_video"] = None
+            response["next_step"] = None
+
+        return response
+
+    def get_booking_summary(self) -> Dict[str, Any]:
+        """Get current booking summary"""
+        return {
+            "current_step": self.current_step,
+            "booking_data": self.booking_data,
+            "progress": self._calculate_progress()
+        }
+
+    def _calculate_progress(self) -> int:
+        """Calculate booking progress as percentage"""
+        steps = list(self.step_flow.keys())
+        if self.current_step in steps:
+            return int((steps.index(self.current_step) + 1) / len(steps) * 100)
+        return 0
+
+    def _get_dummy_flights(self) -> list:
+        """Return dummy flight data for demonstration"""
+        return [
+            {
+                "flight_number": "6E-123",
+                "departure": "06:00",
+                "arrival": "08:30",
+                "duration": "2h 30m",
+                "price": "₹4,500"
+            },
+            {
+                "flight_number": "6E-456",
+                "departure": "14:15",
+                "arrival": "16:45",
+                "duration": "2h 30m",
+                "price": "₹5,200"
+            },
+            {
+                "flight_number": "6E-789",
+                "departure": "20:30",
+                "arrival": "23:00",
+                "duration": "2h 30m",
+                "price": "₹4,800"
+            }
+        ]
+
+
+
+
+
+
+
+
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
+import uuid
+import os
+from dotenv import load_dotenv
+
+from avatar_engine import AvatarEngine
+from flow_controller import FlowController
+from checkin_controller import CheckinController
+from chatbot_integration import ChatbotIntegration
+
+# Load environment variables
+load_dotenv()
+
+app = FastAPI(title="Vernacular Avatar Flight Booking", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class ChatRequest(BaseModel):
+    query: str
+    uid: Optional[str] = None
+    language: str = "en"
+
+class StepRequest(BaseModel):
+    uid: str
+    step: str
+    user_input: Dict[str, Any]
+    language: str = "en"
+
+# Global instances
+# Use ngrok URL if available, otherwise local IP
+import os
+ngrok_url = os.getenv('NGROK_URL', '')
+if ngrok_url:
+    avatar_engine = AvatarEngine(base_ip=ngrok_url)
+    print(f"📹 Using ngrok for videos: {ngrok_url}")
+else:
+    import socket
+    def get_local_ip():
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return "localhost"
+    server_ip = get_local_ip()
+    avatar_engine = AvatarEngine(base_ip=server_ip)
+sessions = {}
+
+# Mount videos directory
+video_path = os.path.join(os.path.dirname(__file__), "..", "videos")
+if os.path.exists(video_path):
+    app.mount("/videos", StaticFiles(directory=video_path), name="videos")
+
+@app.post("/chat")
+async def chat_endpoint(request: ChatRequest):
+    """Main chat endpoint for multilingual chatbot"""
+    try:
+        uid = request.uid or str(uuid.uuid4())
+
+        if uid not in sessions:
+            sessions[uid] = {
+                "flow_controller": FlowController(uid, request.language),
+                "checkin_controller": CheckinController(uid, request.language),
+                "chatbot": ChatbotIntegration(uid),
+                "current_step": None,
+                "language": request.language,
+                "booking_data": {},
+                "checkin_data": {},
+                "in_avatar_flow": False,
+                "in_checkin_flow": False
+            }
+
+        session = sessions[uid]
+        session["language"] = request.language
+
+        chatbot_response = await session["chatbot"].process_query(
+            request.query,
+            request.language,
+            session["in_avatar_flow"]
+        )
+
+        if chatbot_response.get("trigger_avatar"):
+            session["in_avatar_flow"] = True
+            session["current_step"] = "welcome"
+            return await session["flow_controller"].start_avatar_flow(
+                request.query, 
+                request.language
+            )
+        
+        if chatbot_response.get("trigger_checkin"):
+            session["in_checkin_flow"] = True
+            session["current_step"] = "welcome_checkin"
+            return await session["checkin_controller"].start_checkin_flow(
+                request.query,
+                request.language
+            )
+
+        return chatbot_response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/avatar-step")
+async def process_avatar_step(request: StepRequest):
+    """Process avatar booking step"""
+    try:
+        if request.uid not in sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session = sessions[request.uid]
+        session["language"] = request.language
+        session["booking_data"][request.step] = request.user_input
+
+        response = await session["flow_controller"].process_step(
+            request.step,
+            request.user_input,
+            request.language
+        )
+
+        session["current_step"] = response.get("next_step")
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/checkin-step")
+async def process_checkin_step(request: StepRequest):
+    """Process avatar check-in step"""
+    try:
+        if request.uid not in sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session = sessions[request.uid]
+        session["language"] = request.language
+        session["checkin_data"][request.step] = request.user_input
+
+        response = await session["checkin_controller"].process_step(
+            request.step,
+            request.user_input,
+            request.language
+        )
+
+        session["current_step"] = response.get("next_step")
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/avatar-video/{step}")
+async def get_avatar_video(step: str, language: str = "en"):
+    """Get avatar video URL for a specific step"""
+    try:
+        video_url = avatar_engine.get_video_url(step, language)
+        return {
+            "video_url": video_url,
+            "step": step,
+            "language": language
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/session/{uid}")
+async def get_session_info(uid: str):
+    """Get current session information"""
+    if uid not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = sessions[uid]
+    return {
+        "uid": uid,
+        "current_step": session["current_step"],
+        "in_avatar_flow": session["in_avatar_flow"],
+        "booking_data": session["booking_data"],
+        "language": session["language"]
     }
-  };
-  
-  return (
-    <View>
-      <Button 
-        mode="outlined" 
-        onPress={() => setShow(true)} 
-        style={styles.input}
-        icon="calendar"
-      >
-        {dateString || (language === 'hi' ? 'तारीख चुनें' : 'Select Date')}
-      </Button>
-      {show && (
-        <DateTimePicker
-          value={date}
-          mode="date"
-          display="default"
-          onChange={onChange}
-          minimumDate={new Date()}
-        />
-      )}
-      <Button 
-        mode="contained" 
-        onPress={() => onNext({ date: dateString })} 
-        disabled={!dateString} 
-        style={styles.button} 
-        buttonColor={indigoBlue}
-      >
-        {language === 'hi' ? 'अगला' : 'Next'}
-      </Button>
-    </View>
-  );
-}
 
-function PassengerSelection({ onNext, language }) {
-  const [adults, setAdults] = useState('1');
-  const [children, setChildren] = useState('0');
-  const [infants, setInfants] = useState('0');
-  return (
-    <View>
-      <TextInput mode="outlined" label={language === 'hi' ? 'वयस्क' : 'Adults'} value={adults} onChangeText={setAdults} keyboardType="numeric" style={styles.input} />
-      <TextInput mode="outlined" label={language === 'hi' ? 'बच्चे' : 'Children'} value={children} onChangeText={setChildren} keyboardType="numeric" style={styles.input} />
-      <TextInput mode="outlined" label={language === 'hi' ? 'शिशु' : 'Infants'} value={infants} onChangeText={setInfants} keyboardType="numeric" style={styles.input} />
-      <Button mode="contained" onPress={() => onNext({ adults: parseInt(adults), children: parseInt(children), infants: parseInt(infants) })} style={styles.button} buttonColor={indigoBlue}>
-        {language === 'hi' ? 'उड़ानें खोजें' : 'Search Flights'}
-      </Button>
-    </View>
-  );
-}
+@app.delete("/session/{uid}")
+async def clear_session(uid: str):
+    """Clear session data"""
+    if uid in sessions:
+        del sessions[uid]
+        return {"message": "Session cleared"}
+    return {"message": "Session not found"}
 
-function PassengerDetails({ onNext, passengerCount }) {
-  const totalPassengers = passengerCount ? (passengerCount.adults + passengerCount.children + passengerCount.infants) : 1;
-  const [passengers, setPassengers] = useState(Array.from({ length: totalPassengers }, (_, i) => {
-    let type = 'Adult';
-    if (passengerCount) {
-      if (i >= passengerCount.adults + passengerCount.children) type = 'Infant';
-      else if (i >= passengerCount.adults) type = 'Child';
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "message": "Backend is running!"}
+
+@app.post("/test-avatar")
+async def test_avatar_trigger(request: ChatRequest):
+    """Test endpoint to verify avatar trigger logic"""
+    chatbot = ChatbotIntegration("test_uid")
+    result = await chatbot.process_query(request.query, request.language)
+    return {
+        "query": request.query,
+        "language": request.language,
+        "result": result,
+        "should_trigger": result.get("trigger_avatar", False)
     }
-    return { name: '', age: '', gender: 'male', type };
-  }));
 
-  const updatePassenger = (index, field, value) => {
-    const updated = [...passengers];
-    updated[index][field] = value;
-    setPassengers(updated);
-  };
-
-  const isValid = passengers.every(p => p.name.trim() && p.age.trim());
-
-  return (
-    <View>
-      <Text style={styles.sectionTitle}>Passenger Details</Text>
-      {passengers.map((passenger, index) => (
-        <View key={index} style={styles.passengerForm}>
-          <Text>Passenger {index + 1} ({passenger.type})</Text>
-          <TextInput mode="outlined" placeholder="Full Name" value={passenger.name} onChangeText={(val) => updatePassenger(index, 'name', val)} style={styles.input} />
-          <TextInput mode="outlined" placeholder="Age" value={passenger.age} onChangeText={(val) => updatePassenger(index, 'age', val)} keyboardType="numeric" style={styles.input} />
-        </View>
-      ))}
-      <Button mode="contained" onPress={() => onNext({ passengers })} disabled={!isValid} style={styles.button} buttonColor={indigoBlue}>Continue</Button>
-    </View>
-  );
-}
-
-function ContactDetails({ onNext, language }) {
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  return (
-    <View>
-      <Text style={styles.sectionTitle}>{language === 'hi' ? 'संपर्क जानकारी' : 'Contact Information'}</Text>
-      <TextInput mode="outlined" placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" style={styles.input} />
-      <TextInput mode="outlined" placeholder="Phone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" style={styles.input} />
-      <Button mode="contained" onPress={() => onNext({ email, phone })} disabled={!email.trim() || !phone.trim()} style={styles.button} buttonColor={indigoBlue}>
-        {language === 'hi' ? 'जारी रखें' : 'Continue'}
-      </Button>
-    </View>
-  );
-}
-
-function ReviewBooking({ bookingData, onNext, language }) {
-  return (
-    <Card style={styles.reviewCard}>
-      <Card.Content>
-        <Text style={styles.reviewTitle}>{language === 'hi' ? 'बुकिंग समीक्षा' : 'Booking Summary'}</Text>
-        {bookingData.origin_selection && (
-          <Text style={styles.reviewText}>From: {bookingData.origin_selection.origin}</Text>
-        )}
-        {bookingData.destination_selection && (
-          <Text style={styles.reviewText}>To: {bookingData.destination_selection.destination}</Text>
-        )}
-        {bookingData.date_selection && (
-          <Text style={styles.reviewText}>Date: {bookingData.date_selection.date}</Text>
-        )}
-        {bookingData.passenger_selection && (
-          <Text style={styles.reviewText}>
-            Passengers: {bookingData.passenger_selection.adults} Adult(s)
-            {bookingData.passenger_selection.children > 0 && `, ${bookingData.passenger_selection.children} Child(ren)`}
-            {bookingData.passenger_selection.infants > 0 && `, ${bookingData.passenger_selection.infants} Infant(s)`}
-          </Text>
-        )}
-        {bookingData.flight_selection && (
-          <Text style={styles.reviewText}>Flight: {bookingData.flight_selection.selected_flight}</Text>
-        )}
-        {bookingData.contact_details && (
-          <View>
-            <Text style={styles.reviewText}>Email: {bookingData.contact_details.email}</Text>
-            <Text style={styles.reviewText}>Phone: {bookingData.contact_details.phone}</Text>
-          </View>
-        )}
-        <Button mode="contained" onPress={() => onNext({ confirmed: true })} style={[styles.button, {marginTop: 16}]} buttonColor={indigoBlue}>
-          {language === 'hi' ? 'पुष्टि करें और भुगतान करें' : 'Confirm & Pay'}
-        </Button>
-      </Card.Content>
-    </Card>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f2f5' },
-  header: { backgroundColor: indigoBlue, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  headerTitle: { color: 'white', fontSize: 20, fontWeight: 'bold' },
-  headerSubtitle: { color: 'white', fontSize: 12 },
-  chatArea: { flex: 1, padding: 8, backgroundColor: '#fafafa' },
-  userMessageContainer: { alignItems: 'flex-end', marginBottom: 8 },
-  userMessage: { backgroundColor: indigoBlue, maxWidth: '80%', borderRadius: 12 },
-  userMessageText: { color: 'white', fontSize: 13 },
-  botMessageContainer: { alignItems: 'flex-start', marginBottom: 8 },
-  botMessage: { backgroundColor: '#f5f5f5', width: '100%', borderRadius: 12 },
-  botMessageText: { fontSize: 13, marginTop: 8 },
-  flightsContainer: { marginTop: 16 },
-  flightsTitle: { fontWeight: 'bold', marginBottom: 8 },
-  flightCard: { marginBottom: 8, borderWidth: 2, borderColor: indigoBlue },
-  flightNumber: { fontWeight: 'bold' },
-  flightDetails: { fontSize: 12 },
-  flightPrice: { color: indigoOrange, fontWeight: 'bold' },
-  stepInputContainer: { marginTop: 16 },
-  input: { marginBottom: 12 },
-  button: { marginTop: 8 },
-  sectionTitle: { fontWeight: 'bold', marginBottom: 12 },
-  passengerForm: { marginBottom: 16 },
-  reviewCard: { marginTop: 16, backgroundColor: '#f8f9fa', borderWidth: 1, borderColor: indigoBlue },
-  reviewTitle: { fontSize: 18, fontWeight: 'bold', color: indigoBlue, marginBottom: 12 },
-  reviewText: { fontSize: 14, marginBottom: 8 },
-  quickActions: { padding: 8, backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#eee', flexDirection: 'row', gap: 8 },
-  quickButton: { borderColor: indigoBlue },
-  footer: { padding: 8, backgroundColor: '#f5f5f5', alignItems: 'center' },
-  footerText: { fontSize: 10, color: '#999' },
-  loadingText: { color: '#999', padding: 8 },
-  fullscreenContainer: { flex: 1, backgroundColor: 'black', justifyContent: 'center', alignItems: 'center' },
-  fullscreenVideo: { width: width, height: height }
-});
+if __name__ == "__main__":
+    import uvicorn
+    print("🚀 Starting Vernacular Avatar Booking Backend...")
+    if ngrok_url:
+        print(f"📍 Server: {ngrok_url}")
+    else:
+        print(f"📍 Server: http://localhost:8000")
+    print("📖 API docs: http://localhost:8000/docs")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
