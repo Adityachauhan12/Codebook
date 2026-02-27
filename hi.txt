@@ -1,38 +1,7 @@
-{
-  "expo": {
-    "name": "IndiGo Flight Booking",
-    "slug": "indigo-flight-booking",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "jsEngine": "jsc",
-    "experiments": {
-      "newArchEnabled": false
-    },
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#001b94"
-    },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
-    "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.indigo.flightbooking",
-      "jsEngine": "jsc"
-    },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#001b94"
-      },
-      "package": "com.indigo.flightbooking",
-      "jsEngine": "jsc"
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
-  }
-}
+cd "c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app"
+rmdir /s /q node_modules
+rmdir /s /q .expo
+del package-lock.json
+npm install
+
+npx expo start --offline -c
