@@ -1,18 +1,38 @@
-The TypeError: fetch failed is just a warning — it means Expo CLI tried to check package versions online but your company network blocked it. The Metro Bundler is still running despite this error.
-​
-
-What You Need To Do Now
-Step 1 — Start with offline flag:
-
-text
-set EXPO_OFFLINE=1
-npx expo start --lan -c
-Step 2 — Check what IP Metro is running on. After starting, you'll see something like:
-
-text
-Metro waiting on exp://172.30.100.108:8081
-Step 3 — Open Expo Go on your phone, tap "Enter URL manually" and type:
-
-text
-exp://172.30.100.108:8081
-(Use whatever IP shows in your terminal, not necessarily this one)
+{
+  "expo": {
+    "name": "IndiGo Flight Booking",
+    "slug": "indigo-flight-booking",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "jsEngine": "jsc",
+    "experiments": {
+      "newArchEnabled": false
+    },
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#001b94"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.indigo.flightbooking",
+      "jsEngine": "jsc"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#001b94"
+      },
+      "package": "com.indigo.flightbooking",
+      "jsEngine": "jsc"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
