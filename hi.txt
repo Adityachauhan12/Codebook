@@ -1,84 +1,59 @@
-I can see exactly what's happening here. This is a well-known issue with Expo SDK 54 + React Native 0.76 (New Architecture / Bridgeless mode) running in Expo Go. The PlatformConstants TurboModule isn't registering correctly due to a mismatch. Here's the full diagnosis and fix:
+Microsoft Windows [Version 10.0.26100.7840]
+(c) Microsoft Corporation. All rights reserved.
 
-Root Cause
-Your react-native: 0.76.5 uses the New Architecture (Bridgeless mode = true) by default, but Expo Go on your phone may not be fully compatible with how your project initializes native modules. The PlatformConstants module is needed by react-native-paper and react-native-safe-area-context, but it crashes before the native binary can register it.
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking>cd "c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app"
 
-Additionally, your company network is blocking ngrok/tunnels entirely — that's a separate but already-solved problem. The crash happens even after the bundle loads, meaning the connection is fine but the JS runtime is failing.
-​
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>rmdir /s /q node_modules
 
-Fix 1 — Disable New Architecture (Fastest Fix)
-Add this to your app.json inside the "expo" key:
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>rmdir /s /q .expo
 
-json
-"experiments": {
-  "newArchEnabled": false
-}
-Your full app.json "expo" block should include:
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>del package-lock.json
 
-json
-"experiments": {
-  "newArchEnabled": false
-},
-"android": { ... },
-"ios": { ... }
-Then run:
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>del yarn.lock     
+Could Not Find c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app\yarn.lock
 
-text
-rmdir /s /q node_modules
-npm install
-npx expo start --offline --clear
-This disables Bridgeless mode and makes PlatformConstants register correctly in Expo Go.
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>npm install
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated @babel/plugin-proposal-nullish-coalescing-operator@7.18.6: This proposal has been merged to the ECMAScript standard and thus this plugin is no longer maintained. Please use @babel/plugin-transform-nullish-coalescing-operator instead.
+npm warn deprecated @babel/plugin-proposal-class-properties@7.18.6: This proposal has been merged to the ECMAScript standard and thus this plugin is no longer maintained. Please use @babel/plugin-transform-class-properties instead. 
+npm warn deprecated rimraf@2.6.3: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated @babel/plugin-proposal-optional-chaining@7.21.0: This proposal has been merged to the ECMAScript standard and thus this plugin is no longer maintained. Please use @babel/plugin-transform-optional-chaining instead.
+npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated react-native-vector-icons@10.3.0: react-native-vector-icons package has moved to a new model of per-icon-family packages. See the https://github.com/oblador/react-native-vector-icons/blob/master/MIGRATION.md on how to migrate
 
-Fix 2 — Reinstall expo-modules-core Explicitly
-If Fix 1 alone doesn't work, also run:
-​
+added 761 packages, and audited 762 packages in 4m        
 
-text
-npx expo install expo-modules-core
-npx expo install expo-modules-core@~2.0.0
-Then clear and restart:
+57 packages are looking for funding
+  run `npm fund` for details
 
-text
-npx expo start --offline --clear
-Fix 3 — Downgrade react-native-paper
-react-native-paper ^5.12.0 has known issues with New Architecture in some Expo SDK 54 setups. Pin it to a known-good version in package.json:
-​
+found 0 vulnerabilities
 
-json
-"react-native-paper": "5.12.3"
-Then:
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>npx expo start -c
+Starting project at c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app
+Starting Metro Bundler
+warning: Bundler cache is empty, rebuilding (this may take a minute)
+TypeError: fetch failed
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:13510:13
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at fetchWithCredentials (c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\api\rest\client.ts:98:24)
+    at cachedFetch (c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\api\rest\cache\wrapFetchWithCache.ts:26:24)
+    at getNativeModuleVersionsAsync (c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\api\getNativeModuleVersions.ts:39:20)
+    at getVersionedNativeModulesAsync (c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\bundledNativeModules.ts:33:14)
+    at getCombinedKnownVersionsAsync (c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\getVersionedPackages.ts:58:7)
+    at getVersionedDependenciesAsync (c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\validateDependenciesVersions.ts:100:33)
+    at validateDependenciesVersionsAsync (c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\doctor\dependencies\validateDependenciesVersions.ts:49:25)
+    at startAsync (c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app\node_modules\expo\node_modules\@expo\cli\src\start\startAsync.ts:110:5)
 
-text
-npm install
-npx expo start --offline --clear
-About the Network Issue
-Your company network (IndiGo) is blocking:
-
-ngrok (tunnel times out)
-​
-
-Expo's online API calls (TypeError: fetch failed)
-​
-
---offline + --lan are conflicting flags — you already discovered that. The correct command is just:
-
-text
-set EXPO_OFFLINE=1
-npx expo start --lan --clear
-Then manually type in Expo Go app → "Enter URL manually":
-
-text
-exp://172.30.100.108:8081
-This should work as long as your phone and laptop are on the same WiFi network. The EXPO_OFFLINE=1 env var suppresses the external API calls that were causing the fetch failed errors.
-​
-
-Quick Checklist
- Add "newArchEnabled": false to app.json
-
- Run rmdir /s /q node_modules && npm install
-
- Start with set EXPO_OFFLINE=1 then npx expo start --lan --clear
-
- Manually enter exp://172.30.100.108:8081 in Expo Go
-
- Phone and laptop must be on the same WiFi (not company VPN-only network)
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>
