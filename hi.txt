@@ -1,3 +1,32 @@
-rmdir /s /q node_modules
-rmdir /s /q .expo
-del package-lock.json
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>ipconfig
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet:
+
+   Media State . . . . . . . . . . . : Media disconnected
+   Connection-specific DNS Suffix  . :
+
+Wireless LAN adapter Local Area Connection* 1:
+
+   Media State . . . . . . . . . . . : Media disconnected 
+   Connection-specific DNS Suffix  . : 
+
+Wireless LAN adapter Local Area Connection* 2:
+
+   Media State . . . . . . . . . . . : Media disconnected 
+   Connection-specific DNS Suffix  . :
+
+Wireless LAN adapter Wi-Fi:
+
+   Connection-specific DNS Suffix  . :
+   IPv6 Address. . . . . . . . . . . : 2401:4900:1c54:2928:3def:c830:86fe:4afa
+   Temporary IPv6 Address. . . . . . : 2401:4900:1c54:2928:ec32:8280:cda9:8e74
+   Link-local IPv6 Address . . . . . : fe80::93ce:8b67:1d76:c0dc%2
+   IPv4 Address. . . . . . . . . . . : 192.168.1.8        
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::6e4f:89ff:feef:e121%2
+                                       192.168.1.1        
+
+c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>
