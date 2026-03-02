@@ -11,7 +11,7 @@ logger = get_logger("urti_leaves")
 client = bigquery.Client(project=os.getenv("GCP_PROJECT_ID"))
 
 def table_ref() -> str:
-    return f"{os.getenv('GCP_PROJECT_ID')}.{os.getenv('BQ_DATASET')}.{os.getenv('BQ_TABLE')}"
+    return f"{os.getenv('GCP_PROJECT_ID')}.{os.getenv('URTI_DATASET')}.{os.getenv('URTI_TABLE')}"
 
 def query_rows(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     try:
@@ -278,6 +278,7 @@ async def fetch_crew_info(client=None, iga=None, base=None, position=None):
     except Exception as e:
         logger.error(f"Error fetching crew info: {e}")
         raise
+    
 def decode_json_fields(leaves: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for leave in leaves:
         for field in ['created_by', 'status_updated_by']:
