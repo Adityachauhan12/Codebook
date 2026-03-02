@@ -1,32 +1,1489 @@
-c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>ipconfig
+import React, { useState, useEffect } from "react";
+import Layout from "../../components/Layout";
 
-Windows IP Configuration
+interface Attendance {
+    name: string;
+    date: string;
+    base: string;
+    leaveFrom: string;
+    leaveTo: string;
+    igiCode: string;
+    status: "Pending" | "Approved" | "Rejected";
+    comment: string;
+}
+
+const AdminUrtiPage: React.FC = () => {
+    const [attendances, setAttendances] = useState<Attendance[]>([
+        {
+            name: "Ravi Kumar",
+            date: "23-09-2025",
+            base: "Delhi",
+            leaveFrom: "20-09-2025",
+            leaveTo: "23-09-2025",
+            igiCode: "IGA001",
+            status: "Pending",
+            comment: "",
+        },
+        {
+            name: "Anita Sharma",
+            date: "22-09-2025",
+            base: "Mumbai",
+            leaveFrom: "21-09-2025",
+            leaveTo: "22-09-2025",
+            igiCode: "IGA002",
+            status: "Pending",
+            comment: "",
+        },
+        {
+            name: "Mohit Verma",
+            date: "21-09-2025",
+            base: "Delhi",
+            leaveFrom: "19-09-2025",
+            leaveTo: "21-09-2025",
+            igiCode: "IGA003",
+            status: "Approved",
+            comment: "",
+        },
+        {
+            name: "Priya Singh",
+            date: "20-09-2025",
+            base: "Bangalore",
+            leaveFrom: "18-09-2025",
+            leaveTo: "20-09-2025",
+            igiCode: "IGA004",
+            status: "Rejected",
+            comment: "",
+        },
+        {
+            name: "Amit Patel",
+            date: "19-09-2025",
+            base: "Mumbai",
+            leaveFrom: "17-09-2025",
+            leaveTo: "19-09-2025",
+            igiCode: "IGA005",
+            status: "Pending",
+            comment: "",
+        },
+        {
+            name: "Sneha Reddy",
+            date: "18-09-2025",
+            base: "Hyderabad",
+            leaveFrom: "16-09-2025",
+            leaveTo: "18-09-2025",
+            igiCode: "IGA006",
+            status: "Approved",
+            comment: "",
+        },
+        {
+            name: "Rahul Mehra",
+            date: "17-09-2025",
+            base: "Delhi",
+            leaveFrom: "15-09-2025",
+            leaveTo: "17-09-2025",
+            igiCode: "IGA007",
+            status: "Pending",
+            comment: "",
+        },
+        {
+            name: "Neha Joshi",
+            date: "16-09-2025",
+            base: "Bangalore",
+            leaveFrom: "14-09-2025",
+            leaveTo: "16-09-2025",
+            igiCode: "IGA008",
+            status: "Rejected",
+            comment: "",
+        },
+        {
+            name: "Vikram Chauhan",
+            date: "15-09-2025",
+            base: "Mumbai",
+            leaveFrom: "13-09-2025",
+            leaveTo: "15-09-2025",
+            igiCode: "IGA009",
+            status: "Approved",
+            comment: "",
+        },
+        {
+            name: "Kavita Desai",
+            date: "14-09-2025",
+            base: "Ahmedabad",
+            leaveFrom: "12-09-2025",
+            leaveTo: "14-09-2025",
+            igiCode: "IGA010",
+            status: "Pending",
+            comment: "",
+        },
+    ]);
+
+    const [selectedBase, setSelectedBase] = useState("All");
+    const [dateFilter, setDateFilter] = useState("All");
+    const [customFromDate, setCustomFromDate] = useState("");
+    const [customToDate, setCustomToDate] = useState("");
+    const [statusFilter, setStatusFilter] = useState("Pending");
+    const [searchKeyword, setSearchKeyword] = useState("");
+    const [appliedFilters, setAppliedFilters] = useState({
+        selectedBase: "All",
+        dateFilter: "All",
+        customFromDate: "",
+        customToDate: "",
+        statusFilter: "Pending",
+        searchKeyword: "",
+    });
+    const [filteredAttendances, setFilteredAttendances] = useState(attendances);
+    const [isLoading, setIsLoading] = useState(false);
+
+    useEffect(() => applyFiltersToData(), [appliedFilters]);
+    useEffect(
+        () =>
+            setAppliedFilters((prev) => ({
+                ...prev,
+                searchKeyword,
+            })),
+        [searchKeyword]
+    );
+
+    const handleLogout = () => {
+        localStorage.clear();
+        window.location.href = "/";
+    };
+
+    // Format date to dd/mm/yy
+    const formatDateToDDMMYY = (dateString: string): string => {
+        const [day, month, year] = dateString.split("-");
+        const shortYear = year.slice(-2);
+        return `${day}/${month}/${shortYear}`;
+    };
+
+    // Convert dd-mm-yyyy string to Date object
+    const parseDate = (dateString: string): Date => {
+        const [day, month, year] = dateString.split("-");
+        return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+    };
+
+    const handleApplyFilters = () => {
+        setIsLoading(true);
+        setAppliedFilters({
+            selectedBase,
+            dateFilter,
+            customFromDate,
+            customToDate,
+            statusFilter,
+            searchKeyword,
+        });
+        setTimeout(() => setIsLoading(false), 500);
+    };
+
+    const handleClearFilters = () => {
+        setSelectedBase("All");
+        setDateFilter("All");
+        setCustomFromDate("");
+        setCustomToDate("");
+        setStatusFilter("Pending");
+        setSearchKeyword("");
+        setAppliedFilters({
+            selectedBase: "All",
+            dateFilter: "All",
+            customFromDate: "",
+            customToDate: "",
+            statusFilter: "Pending",
+            searchKeyword: "",
+        });
+    };
+
+    const updateStatus = (index: number, newStatus: Attendance["status"]) => {
+        const updated = [...filteredAttendances];
+        updated[index].status = newStatus;
+        setAttendances((prev) =>
+            prev.map((entry) =>
+                entry.name === updated[index].name &&
+                    entry.date === updated[index].date
+                    ? { ...entry, status: newStatus }
+                    : entry
+            )
+        );
+        setFilteredAttendances(updated);
+    };
+
+    const updateComment = (index: number, newComment: string) => {
+        const updated = [...filteredAttendances];
+        updated[index].comment = newComment;
+        setAttendances((prev) =>
+            prev.map((entry) =>
+                entry.name === updated[index].name &&
+                    entry.date === updated[index].date
+                    ? { ...entry, comment: newComment }
+                    : entry
+            )
+        );
+        setFilteredAttendances(updated);
+    };
+
+    const applyFiltersToData = () => {
+        const now = new Date();
+        let from: Date | null = null;
+        let to: Date | null = null;
+
+        if (appliedFilters.dateFilter === "Last Week") {
+            from = new Date(now);
+            from.setDate(now.getDate() - 7);
+        } else if (appliedFilters.dateFilter === "Last Month") {
+            from = new Date(now);
+            from.setMonth(now.getMonth() - 1);
+        } else if (appliedFilters.dateFilter === "Last 30 Days") {
+            from = new Date(now);
+            from.setDate(now.getDate() - 30);
+        } else if (appliedFilters.dateFilter === "Custom") {
+            from = appliedFilters.customFromDate
+                ? new Date(appliedFilters.customFromDate)
+                : null;
+            to = appliedFilters.customToDate
+                ? new Date(appliedFilters.customToDate)
+                : null;
+        }
+
+        const keyword = appliedFilters.searchKeyword.trim().toLowerCase();
+
+        const filtered = attendances.filter((entry) => {
+            const entryDate = parseDate(entry.date);
+            const matchesBase =
+                appliedFilters.selectedBase === "All" ||
+                entry.base === appliedFilters.selectedBase;
+            const matchesStatus =
+                appliedFilters.statusFilter === "All" ||
+                entry.status === appliedFilters.statusFilter;
+            const matchesFrom = !from || entryDate >= from;
+            const matchesTo = !to || entryDate <= to;
+            const matchesKeyword =
+                !keyword ||
+                entry.name.toLowerCase().includes(keyword) ||
+                entry.igiCode.toLowerCase().includes(keyword);
+
+            return (
+                matchesBase &&
+                matchesStatus &&
+                matchesFrom &&
+                matchesTo &&
+                matchesKeyword
+            );
+        });
+
+        setFilteredAttendances(filtered);
+    };
+
+    // Check if comment should be locked (status is not Pending)
+    const isCommentLocked = (status: Attendance["status"]) => {
+        return status !== "Pending";
+    };
+
+    // Custom colors matching your UI
+    const oliveFrom = "rgb(139,170,21)";
+    const oliveTo = "rgb(111,134,18)";
+    const orangeFrom = "rgb(224,107,20)";
+    const orangeTo = "rgb(181,84,15)";
+
+    const getBadgeClasses = (status: Attendance["status"]) => {
+        const base =
+            "inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border transition-all duration-200";
+
+        if (status === "Approved")
+            return `${base} bg-[${oliveFrom.replace(
+                / /g,
+                ""
+            )}]/10 text-[${oliveFrom.replace(
+                / /g,
+                ""
+            )}] border-[${oliveFrom.replace(/ /g, "")}]/40`;
+
+        if (status === "Rejected")
+            return `${base} bg-[${orangeFrom.replace(
+                / /g,
+                ""
+            )}]/10 text-[${orangeFrom.replace(
+                / /g,
+                ""
+            )}] border-[${orangeFrom.replace(/ /g, "")}]/40`;
+
+        return `${base} bg-amber-100 text-amber-800 border border-amber-200`;
+    };
+
+    return (
+        <Layout userRole="Admin" onLogout={handleLogout}>
+            <div className="space-y-4">
+                {/* Header Card */}
+                <div className="card-glass shadow-indigo border border-indigo-100">
+                    <div className="p-1">
+                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-indigo-gradient rounded-xl flex items-center justify-center shadow-indigo">
+                                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                    </svg>
+                                </div>
+
+                                <div>
+                                    <h1 className="text-xl font-bold text-gray-900 mb-1">
+                                        URTI Leave Management
+                                    </h1>
+                                    <p className="text-sm text-gray-600">
+                                        Manage and review URTI leave requests
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            {/* Search Bar */}
+                            <div className="w-full lg:w-[500px]">
+                                <div
+                                    className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300`}
+                                    style={{
+                                        boxShadow: searchKeyword.trim() !== "" ? "0 0 12px 4px rgba(0, 0, 153, 0.4)" : "0 0 8px 2px rgba(0, 0, 153, 0.2)",
+                                    }}
+                                >
+                                    <div className="relative bg-white rounded-full">
+                                        <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
+                                            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                            </svg>
+                                        </div>
+                                        <input
+                                            value={searchKeyword}
+                                            onChange={(e) => setSearchKeyword(e.target.value)}
+                                            placeholder="Search by IGA code or employee name"
+                                            className="w-full pl-12 pr-12 py-3 text-sm bg-transparent rounded-full focus:outline-none"
+                                        />
+                                        {searchKeyword && (
+                                            <button
+                                                onClick={() => setSearchKeyword("")}
+                                                className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-red-500 transition-colors duration-200"
+                                            >
+                                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                </svg>
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
 
-Ethernet adapter Ethernet:
 
-   Media State . . . . . . . . . . . : Media disconnected
-   Connection-specific DNS Suffix  . :
+                {/* Filters + Stats using your glass utility */}
+                <div className="flex flex-wrap items-end gap-3 lg:gap-4 glass rounded-2xl shadow-indigo animate-fade-in-up animate-stagger-2 p-3">
+                        {/* filters */}
+                        <div className="flex flex-wrap items-end gap-3">
+                            <div className="w-36">
+                                <label className="block text-xs font-medium text-indigo-primary mb-1">
+                                    Base
+                                </label>
+                                <select
+                                    value={selectedBase}
+                                    onChange={(e) => setSelectedBase(e.target.value)}
+                                    className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+                                >
+                                    <option value="All">All Bases</option>
+                                    <option value="Delhi">Delhi</option>
+                                    <option value="Mumbai">Mumbai</option>
+                                    <option value="Bangalore">Bangalore</option>
+                                    <option value="Hyderabad">Hyderabad</option>
+                                    <option value="Ahmedabad">Ahmedabad</option>
+                                </select>
+                            </div>
+                            <div className="w-36">
+                                <label className="block text-xs font-medium text-indigo-primary mb-1">
+                                    Date
+                                </label>
+                                <select
+                                    value={dateFilter}
+                                    onChange={(e) => setDateFilter(e.target.value)}
+                                    className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+                                >
+                                    <option value="All">All Dates</option>
+                                    <option value="Last Week">Last Week</option>
+                                    <option value="Last Month">Last Month</option>
+                                    <option value="Last 30 Days">Last 30 Days</option>
+                                    <option value="Custom">Custom</option>
+                                </select>
+                            </div>
+                            <div className="w-32">
+                                <label className="block text-xs font-medium text-indigo-primary mb-1">
+                                    Status
+                                </label>
+                                <select
+                                    value={statusFilter}
+                                    onChange={(e) => setStatusFilter(e.target.value)}
+                                    className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+                                >
+                                    <option value="All">All Status</option>
+                                    <option value="Pending">Pending</option>
+                                    <option value="Approved">Approved</option>
+                                    <option value="Rejected">Rejected</option>
+                                </select>
+                            </div>
+                            <button
+                                onClick={handleApplyFilters}
+                                disabled={isLoading}
+                                className="btn-indigo disabled:opacity-50"
+                            >
+                                {isLoading ? "Applying…" : "Apply Filters"}
+                            </button>
+                            <button
+                                onClick={handleClearFilters}
+                                className="h-10 px-4 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors"
+                            >
+                                Clear All
+                            </button>
+                        </div>
 
-Wireless LAN adapter Local Area Connection* 1:
+                        {/* Stats */}
+                        <div className="flex gap-3 ml-auto">
+                            <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+                                <div className="text-xs font-bold text-amber-600">Pending</div>
+                                <div className="text-lg font-extrabold text-amber-600">
+                                    {attendances.filter((a) => a.status === "Pending").length}
+                                </div>
+                            </div>
+                            <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+                                <div className="text-xs font-bold" style={{ color: oliveFrom }}>
+                                    Approved
+                                </div>
+                                <div
+                                    className="text-lg font-extrabold"
+                                    style={{ color: oliveFrom }}
+                                >
+                                    {attendances.filter((a) => a.status === "Approved").length}
+                                </div>
+                            </div>
+                            <div className="min-w-[80px] rounded-xl border-2 border-indigo-primary/20 bg-white/90 py-1.5 px-3 text-center">
+                                <div
+                                    className="text-xs font-bold"
+                                    style={{ color: orangeFrom }}
+                                >
+                                    Rejected
+                                </div>
+                                <div
+                                    className="text-lg font-extrabold"
+                                    style={{ color: orangeFrom }}
+                                >
+                                    {attendances.filter((a) => a.status === "Rejected").length}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
-   Media State . . . . . . . . . . . : Media disconnected 
-   Connection-specific DNS Suffix  . : 
+                    {/* Custom date range */}
+                    {dateFilter === "Custom" && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 card-glass animate-slide-down">
+                            <div>
+                                <label className="block text-xs font-medium text-indigo-primary mb-1">
+                                    From
+                                </label>
+                                <input
+                                    type="date"
+                                    value={customFromDate}
+                                    onChange={(e) => setCustomFromDate(e.target.value)}
+                                    className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-indigo-primary mb-1">
+                                    To
+                                </label>
+                                <input
+                                    type="date"
+                                    value={customToDate}
+                                    onChange={(e) => setCustomToDate(e.target.value)}
+                                    className="w-full px-3 py-2 border-2 border-indigo-primary/30 rounded-lg text-sm focus:ring-indigo-primary/50 focus:border-indigo-primary"
+                                />
+                            </div>
+                        </div>
+                    )}
 
-Wireless LAN adapter Local Area Connection* 2:
+                    {/* Table using your glass utility */}
+                    <div className="glass rounded-2xl shadow-indigo-lg overflow-hidden animate-fade-in-up animate-stagger-3">
+                        <div className="overflow-x-auto scrollbar-thin">
+                            <table className="w-full">
+                                <thead>
+                                    <tr className="bg-indigo-gradient text-white">
+                                        {[
+                                            "IGA Code",
+                                            "Employee",
+                                            "Date Applied",
+                                            "Base",
+                                            "Leave Period",
+                                            "Status",
+                                            "Comment",
+                                            "Actions",
+                                        ].map((h) => (
+                                            <th key={h} className="px-6 py-4 text-left font-semibold">
+                                                {h}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-indigo-primary/10">
+                                    {filteredAttendances.map((e, idx) => (
+                                        <tr key={idx} className="hover:bg-indigo-primary/5 transition-colors animate-fade-in-up" 
+                                            style={{animationDelay: `${idx * 50}ms`}}>
+                                            <td className="px-6 py-3">
+                                                <span className="font-mono text-sm bg-indigo-primary/10 text-indigo-primary px-2 py-1 rounded-md border border-indigo-primary/20">
+                                                    {e.igiCode}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-3">{e.name}</td>
+                                            <td className="px-6 py-3 font-mono text-sm text-gray-600">
+                                                {formatDateToDDMMYY(e.date)}
+                                            </td>
+                                            <td className="px-6 py-3">
+                                                <div>
+                                                    <span className="px-3 py-1 rounded-full text-xs font-medium bg-indigo-primary/10 text-indigo-primary border border-indigo-primary/20">
+                                                        {e.base}
+                                                    </span>
+                                                    <div className="text-xs text-gray-600 mt-1">
+                                                        {e.name}
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-3 font-mono text-sm text-gray-600">
+                                                {formatDateToDDMMYY(e.leaveFrom)} to{" "}
+                                                {formatDateToDDMMYY(e.leaveTo)}
+                                            </td>
+                                            <td className="px-6 py-3">
+                                                <span className={getBadgeClasses(e.status)}>
+                                                    {e.status}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-3">
+                                                <input
+                                                    value={e.comment}
+                                                    onChange={(ev) => updateComment(idx, ev.target.value)}
+                                                    disabled={isCommentLocked(e.status)}
+                                                    className={`w-full px-3 py-2 border-2 rounded-lg text-sm transition-all ${isCommentLocked(e.status)
+                                                        ? "bg-gray-100 border-gray-200 text-gray-500 cursor-not-allowed"
+                                                        : "border-indigo-primary/20 focus:ring-indigo-primary/50 focus:border-indigo-primary bg-white"
+                                                        }`}
+                                                    placeholder={
+                                                        isCommentLocked(e.status)
+                                                            ? "Comment locked"
+                                                            : "Add comment…"
+                                                    }
+                                                />
+                                            </td>
+                                            <td className="px-6 py-3">
+                                                <div className="flex gap-2 justify-center">
+                                                    <button
+                                                        onClick={() => updateStatus(idx, "Approved")}
+                                                        disabled={e.status === "Approved"}
+                                                        style={{
+                                                            backgroundImage: `linear-gradient(to right,${oliveFrom},${oliveTo})`,
+                                                        }}
+                                                        className="px-4 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-50 hover:brightness-110 transition-all animate-scale-hover"
+                                                    >
+                                                        Approve
+                                                    </button>
+                                                    <button
+                                                        onClick={() => updateStatus(idx, "Rejected")}
+                                                        disabled={e.status === "Rejected"}
+                                                        style={{
+                                                            backgroundImage: `linear-gradient(to right,${orangeFrom},${orangeTo})`,
+                                                        }}
+                                                        className="px-4 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-50 hover:brightness-110 transition-all animate-scale-hover"
+                                                    >
+                                                        Reject
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
 
-   Media State . . . . . . . . . . . : Media disconnected 
-   Connection-specific DNS Suffix  . :
+                            {!filteredAttendances.length && (
+                                <div className="py-10 text-center text-indigo-primary/70 animate-fade-in-up">
+                                    No records found
+                                </div>
+                            )}
+                    </div>
+                </div>
+            </div>
+        </Layout>
+    );
+};
 
-Wireless LAN adapter Wi-Fi:
+export default AdminUrtiPage;
 
-   Connection-specific DNS Suffix  . :
-   IPv6 Address. . . . . . . . . . . : 2401:4900:1c54:2928:3def:c830:86fe:4afa
-   Temporary IPv6 Address. . . . . . : 2401:4900:1c54:2928:ec32:8280:cda9:8e74
-   Link-local IPv6 Address . . . . . : fe80::93ce:8b67:1d76:c0dc%2
-   IPv4 Address. . . . . . . . . . . : 192.168.1.8        
-   Subnet Mask . . . . . . . . . . . : 255.255.255.0
-   Default Gateway . . . . . . . . . : fe80::6e4f:89ff:feef:e121%2
-                                       192.168.1.1        
 
-c:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\flight booking\mobile-app>
+
+import React, { useState, useEffect } from "react";
+import Layout from "../../components/Layout";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
+
+interface Leave {
+  name: string;
+  date: string;
+  igaCode: string;
+  comment: string;
+  status: "Approved" | "Rejected" | "Pending";
+  leaveFrom: string;
+  leaveTo: string;
+  duration: number; // days
+}
+
+interface FormData {
+  selectedEmployee: string;
+  leaveFrom: Date | null;
+  leaveTo: Date | null;
+}
+
+function FlightopsUrtiPage() {
+  // All available employees
+  const allEmployees = [
+    { name: "Ravi Kumar", igaCode: "IGA001" },
+    { name: "Anita Sharma", igaCode: "IGA002" },
+    { name: "Mohit Verma", igaCode: "IGA003" },
+    { name: "Priya Singh", igaCode: "IGA004" },
+    { name: "Amit Patel", igaCode: "IGA005" },
+    { name: "Sneha Reddy", igaCode: "IGA006" },
+    { name: "Rahul Mehra", igaCode: "IGA007" },
+    { name: "Neha Joshi", igaCode: "IGA008" },
+    { name: "Vikram Chauhan", igaCode: "IGA009" },
+    { name: "Kavita Desai", igaCode: "IGA010" },
+    { name: "Arjun Sharma", igaCode: "IGA011" },
+    { name: "Deepika Rao", igaCode: "IGA012" },
+    { name: "Karan Singh", igaCode: "IGA013" },
+    { name: "Pooja Gupta", igaCode: "IGA014" },
+    { name: "Rajesh Kumar", igaCode: "IGA015" },
+    { name: "Suman Devi", igaCode: "IGA016" },
+    { name: "Manish Agarwal", igaCode: "IGA017" },
+    { name: "Ritika Bhatia", igaCode: "IGA018" },
+    { name: "Sunil Yadav", igaCode: "IGA019" },
+    { name: "Geeta Sharma", igaCode: "IGA020" },
+  ];
+
+  const calculateDays = (fromDate: Date, toDate: Date): number => {
+    const timeDiff = toDate.getTime() - fromDate.getTime();
+    return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
+  };
+
+  const [leaves, setLeaves] = useState<Leave[]>([
+    {
+      name: "Ravi Kumar",
+      date: "23/09/2025",
+      igaCode: "IGA001",
+      comment: "Leave granted for medical reasons",
+      status: "Approved",
+      leaveFrom: "20/09/2025",
+      leaveTo: "23/09/2025",
+      duration: 4,
+    },
+    {
+      name: "Anita Sharma",
+      date: "22/09/2025",
+      igaCode: "IGA002",
+      comment: "Leave denied - insufficient notice",
+      status: "Rejected",
+      leaveFrom: "21/09/2025",
+      leaveTo: "22/09/2025",
+      duration: 2,
+    },
+    {
+      name: "Mohit Verma",
+      date: "21/09/2025",
+      igaCode: "IGA003",
+      comment: "Pending review",
+      status: "Pending",
+      leaveFrom: "19/09/2025",
+      leaveTo: "21/09/2025",
+      duration: 3,
+    },
+    {
+      name: "Priya Singh",
+      date: "20/09/2025",
+      igaCode: "IGA004",
+      comment: "Leave granted for personal work",
+      status: "Approved",
+      leaveFrom: "18/09/2025",
+      leaveTo: "20/09/2025",
+      duration: 3,
+    },
+    {
+      name: "Amit Patel",
+      date: "19/09/2025",
+      igaCode: "IGA005",
+      comment: "Leave denied - peak work period",
+      status: "Rejected",
+      leaveFrom: "17/09/2025",
+      leaveTo: "19/09/2025",
+      duration: 3,
+    },
+    {
+      name: "Sneha Reddy",
+      date: "18/09/2025",
+      igaCode: "IGA006",
+      comment: "Approved for family emergency",
+      status: "Approved",
+      leaveFrom: "16/09/2025",
+      leaveTo: "18/09/2025",
+      duration: 3,
+    },
+    {
+      name: "Rahul Mehra",
+      date: "17/09/2025",
+      igaCode: "IGA007",
+      comment: "Leave granted for wedding",
+      status: "Approved",
+      leaveFrom: "15/09/2025",
+      leaveTo: "17/09/2025",
+      duration: 3,
+    },
+    {
+      name: "Neha Joshi",
+      date: "16/09/2025",
+      igaCode: "IGA008",
+      comment: "Project deadline conflict",
+      status: "Rejected",
+      leaveFrom: "14/09/2025",
+      leaveTo: "16/09/2025",
+      duration: 3,
+    },
+    {
+      name: "Vikram Chauhan",
+      date: "15/09/2025",
+      igaCode: "IGA009",
+      comment: "Under management review",
+      status: "Pending",
+      leaveFrom: "13/09/2025",
+      leaveTo: "15/09/2025",
+      duration: 3,
+    },
+    {
+      name: "Kavita Desai",
+      date: "14/09/2025",
+      igaCode: "IGA010",
+      comment: "Festival leave approved",
+      status: "Approved",
+      leaveFrom: "12/09/2025",
+      leaveTo: "14/09/2025",
+      duration: 3,
+    },
+  ]);
+
+  const [showForm, setShowForm] = useState(false);
+  const [formData, setFormData] = useState<FormData>({
+    selectedEmployee: "",
+    leaveFrom: null,
+    leaveTo: null,
+  });
+  const [errors, setErrors] = useState<Partial<Record<keyof FormData, string>>>(
+    {}
+  );
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [filteredLeaves, setFilteredLeaves] = useState<Leave[]>(leaves);
+  const [modalSearchKeyword, setModalSearchKeyword] = useState("");
+  const [filteredEmployees, setFilteredEmployees] = useState(allEmployees);
+  const [statusFilter, setStatusFilter] = useState("All");
+
+  const handleLogout = () => {
+    localStorage.clear();
+    window.location.href = "/";
+  };
+
+  // Statistics
+  const stats = {
+    total: leaves.length,
+    pending: leaves.filter((l) => l.status === "Pending").length,
+    approved: leaves.filter((l) => l.status === "Approved").length,
+    rejected: leaves.filter((l) => l.status === "Rejected").length,
+    thisMonth: leaves.filter(
+      (l) => new Date(l.date).getMonth() === new Date().getMonth()
+    ).length,
+    totalDays: leaves
+      .filter((l) => l.status === "Approved")
+      .reduce((sum, l) => sum + l.duration, 0),
+  };
+
+  // Apply search filter for main table
+  useEffect(() => {
+    const keyword = searchKeyword.trim().toLowerCase();
+
+    const filtered = leaves.filter((entry) => {
+      const matchesKeyword =
+        !keyword ||
+        entry.name.toLowerCase().includes(keyword) ||
+        entry.igaCode.toLowerCase().includes(keyword) ||
+        entry.status.toLowerCase().includes(keyword);
+
+      const matchesStatus =
+        statusFilter === "All" || entry.status === statusFilter;
+
+      return matchesKeyword && matchesStatus;
+    });
+
+    setFilteredLeaves(filtered);
+  }, [searchKeyword, leaves, statusFilter]);
+
+  // Apply search filter for modal employees
+  useEffect(() => {
+    const keyword = modalSearchKeyword.trim().toLowerCase();
+
+    const filtered = allEmployees.filter((employee) => {
+      return (
+        !keyword ||
+        employee.name.toLowerCase().includes(keyword) ||
+        employee.igaCode.toLowerCase().includes(keyword)
+      );
+    });
+
+    setFilteredEmployees(filtered);
+  }, [modalSearchKeyword]);
+
+  const formatDate = (date: Date): string => {
+    const day = date.getDate().toString().padStart(2, "0");
+    const month = (date.getMonth() + 1).toString().padStart(2, "0");
+    const year = date.getFullYear();
+    return `${day}-${month}-${year}`;
+  };
+
+  const validateForm = (): boolean => {
+    const newErrors: Partial<Record<keyof FormData, string>> = {};
+
+    if (!formData.selectedEmployee)
+      newErrors.selectedEmployee = "Please select an employee";
+
+    if (!formData.leaveFrom)
+      newErrors.leaveFrom = "Leave from date is required";
+
+    if (!formData.leaveTo) newErrors.leaveTo = "Leave to date is required";
+
+    if (
+      formData.leaveFrom &&
+      formData.leaveTo &&
+      formData.leaveFrom > formData.leaveTo
+    ) {
+      newErrors.leaveTo = "Leave to date must be after from date";
+    }
+
+    setErrors(newErrors);
+
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleAddLeave = () => {
+    if (!validateForm()) return;
+
+    const selectedEmp = allEmployees.find(
+      (emp) => emp.name === formData.selectedEmployee
+    );
+
+    if (!selectedEmp || !formData.leaveFrom || !formData.leaveTo) return;
+
+    const duration = calculateDays(formData.leaveFrom, formData.leaveTo);
+
+    const newLeave: Leave = {
+      name: selectedEmp.name,
+      date: formatDate(new Date()),
+      igaCode: selectedEmp.igaCode,
+      comment: "Pending review",
+      status: "Pending",
+      leaveFrom: formatDate(formData.leaveFrom),
+      leaveTo: formatDate(formData.leaveTo),
+      duration: duration,
+    };
+
+    setLeaves([newLeave, ...leaves]);
+    setFormData({ selectedEmployee: "", leaveFrom: null, leaveTo: null });
+    setErrors({});
+    setModalSearchKeyword("");
+    setShowForm(false);
+  };
+
+  const handleCancel = () => {
+    setFormData({ selectedEmployee: "", leaveFrom: null, leaveTo: null });
+    setErrors({});
+    setModalSearchKeyword("");
+    setShowForm(false);
+  };
+
+  const handleEmployeeSelect = (employeeName: string) => {
+    setFormData({ ...formData, selectedEmployee: employeeName });
+    setModalSearchKeyword("");
+  };
+
+  const handleClearFilters = () => {
+    setSearchKeyword("");
+    setStatusFilter("All");
+  };
+
+  const getBadgeClasses = (status: Leave["status"]) => {
+    const base =
+      "inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border transition-all duration-200";
+
+    if (status === "Approved")
+      return `${base} bg-green-100 text-green-800 border-green-200`;
+
+    if (status === "Rejected")
+      return `${base} bg-red-100 text-red-800 border-red-200`;
+
+    return `${base} bg-amber-100 text-amber-800 border-amber-200`;
+  };
+
+  return (
+    <Layout userRole="Flightops" onLogout={handleLogout}>
+      <div className="space-y-4">
+        {/* Header Card */}
+        <div className="card-glass shadow-indigo border border-indigo-100">
+          <div className="p-1">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-indigo-gradient rounded-xl flex items-center justify-center shadow-indigo">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-gray-900 mb-1">
+                    URTI Leave Management
+                  </h1>
+                  <p className="text-sm text-gray-600">
+                    Manage and track URTI leave applications for crew members
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2 items-center w-full lg:w-[500px]">
+                <div
+                  className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300 flex-1`}
+                  style={{
+                    boxShadow: searchKeyword.trim() !== "" ? "0 0 12px 4px rgba(0, 0, 153, 0.4)" : "0 0 8px 2px rgba(0, 0, 153, 0.2)",
+                  }}
+                >
+                  <div className="relative bg-white rounded-full">
+                    <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                    <input
+                      type="text"
+                      value={searchKeyword}
+                      onChange={(e) => setSearchKeyword(e.target.value)}
+                      placeholder="Search by employee name, IGA code, or status"
+                      className="w-full pl-12 pr-12 py-3 text-sm bg-transparent rounded-full focus:outline-none"
+                    />
+                    {searchKeyword && (
+                      <button
+                        onClick={() => setSearchKeyword("")}
+                        className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-red-500 transition-colors duration-200"
+                      >
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="bg-gradient-to-r from-[#000099] to-blue-800 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-300 transform hover:scale-105 whitespace-nowrap"
+                >
+                  Apply for Leave
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Statistics Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-indigo-100 p-4 text-center">
+              <div className="text-2xl font-bold text-[#000099]">
+                {stats.total}
+              </div>
+              <div className="text-sm text-gray-600 mt-1">Total Applications</div>
+            </div>
+            <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-amber-200 p-4 text-center">
+              <div className="text-2xl font-bold text-amber-600">
+                {stats.pending}
+              </div>
+              <div className="text-sm text-gray-600 mt-1">Pending</div>
+            </div>
+            <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-green-200 p-4 text-center">
+              <div className="text-2xl font-bold text-green-600">
+                {stats.approved}
+              </div>
+              <div className="text-sm text-gray-600 mt-1">Approved</div>
+            </div>
+            <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-red-200 p-4 text-center">
+              <div className="text-2xl font-bold text-red-600">
+                {stats.rejected}
+              </div>
+              <div className="text-sm text-gray-600 mt-1">Rejected</div>
+            </div>
+            <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-blue-200 p-4 text-center">
+              <div className="text-2xl font-bold text-blue-600">
+                {stats.thisMonth}
+              </div>
+              <div className="text-sm text-gray-600 mt-1">This Month</div>
+            </div>
+            <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg border border-purple-200 p-4 text-center">
+              <div className="text-2xl font-bold text-purple-600">
+                {stats.totalDays}
+              </div>
+              <div className="text-sm text-gray-600 mt-1">Leave Days Used</div>
+            </div>
+          </div>
+
+
+
+        {/* Filter Dropdown and Clear Button */}
+        <div className="flex flex-wrap gap-4 items-center">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className={`px-4 py-2 rounded-lg bg-white text-gray-900 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 min-w-32 ${
+              statusFilter === "All"
+                ? "border-2 border-blue-500"
+                : "border border-gray-300"
+            }`}
+          >
+            <option value="All">All</option>
+            <option value="Pending">Pending</option>
+            <option value="Approved">Approved</option>
+            <option value="Rejected">Rejected</option>
+          </select>
+          <button
+            onClick={handleClearFilters}
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200 transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+
+          {/* Modal Overlay */}
+          {showForm && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-[#000099]/20 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                {/* Modal Header */}
+                <div className="flex justify-between items-center p-6 border-b border-[#000099]/20">
+                  <h2 className="text-xl font-bold text-[#000099]">
+                    Apply for Leave
+                  </h2>
+                  <button
+                    onClick={handleCancel}
+                    className="text-gray-400 hover:text-gray-600 text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* Modal Body */}
+                <div className="p-6">
+                  <div className="space-y-4">
+                    {/* Employee Search with Gradient Design */}
+                    <div className="relative group">
+                      <div
+                        className={`p-[3px] rounded-full bg-gradient-to-r from-[#000099] to-indigo-600 transition-all duration-300`}
+                        style={{
+                          boxShadow: modalSearchKeyword.trim() !== "" ? "0 0 12px 4px rgba(0, 0, 153, 0.4)" : "0 0 8px 2px rgba(0, 0, 153, 0.2)",
+                        }}
+                      >
+                        <div className="relative bg-white rounded-full">
+                          <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
+                            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                          </div>
+                          <input
+                            type="text"
+                            value={modalSearchKeyword}
+                            onChange={(e) => setModalSearchKeyword(e.target.value)}
+                            placeholder="Search employee by name or IGA code"
+                            className="w-full pl-12 pr-12 py-3 text-sm bg-transparent rounded-full focus:outline-none"
+                          />
+                          {modalSearchKeyword && (
+                            <button
+                              onClick={() => setModalSearchKeyword("")}
+                              className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-red-500 transition-colors duration-200"
+                            >
+                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {modalSearchKeyword && (
+                        <div className="absolute top-full left-0 right-0 bg-white border border-gray-300 rounded-lg mt-1 max-h-48 overflow-y-auto z-10 shadow-lg">
+                          {filteredEmployees.map((employee) => (
+                            <button
+                              key={employee.igaCode}
+                              onClick={() => handleEmployeeSelect(employee.name)}
+                              className="w-full px-4 py-3 text-left hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-b-0"
+                            >
+                              <div className="font-medium text-gray-900">
+                                {employee.name}
+                              </div>
+                              <div className="text-sm text-gray-600">
+                                {employee.igaCode}
+                              </div>
+                            </button>
+                          ))}
+
+                          {filteredEmployees.length === 0 && (
+                            <div className="px-4 py-3 text-gray-500 text-center">
+                              No matching employees found
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {formData.selectedEmployee && (
+                      <div className="p-4 bg-gradient-to-r from-[#000099]/5 to-[#000099]/10 rounded-xl border border-[#000099]/20">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-[#000099] rounded-full flex items-center justify-center text-white font-bold">
+                            {formData.selectedEmployee.charAt(0)}
+                          </div>
+                          <div>
+                            <div className="font-medium text-[#000099]">
+                              Selected Employee
+                            </div>
+                            <div className="text-sm text-gray-600">
+                              {formData.selectedEmployee}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {errors.selectedEmployee && (
+                      <p className="text-red-500 text-sm mt-1">
+                        {errors.selectedEmployee}
+                      </p>
+                    )}
+
+                    {/* Enhanced Date Pickers with Blue Theme */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="block text-sm font-bold text-[#000099] mb-2">
+                           Leave From *
+                        </label>
+                        <div className="relative">
+                          <DatePicker
+                            selected={formData.leaveFrom}
+                            onChange={(date: Date | null) =>
+                              setFormData({ ...formData, leaveFrom: date })
+                            }
+                            placeholderText="Select start date"
+                            dateFormat="dd/MM/yyyy"
+                            minDate={new Date()}
+                            className={`w-full px-4 py-4 border-2 rounded-xl text-[#000099] font-medium bg-gradient-to-r from-blue-50 to-indigo-50 focus:ring-2 focus:ring-[#000099] focus:border-[#000099] transition-all duration-300 shadow-sm hover:shadow-md ${
+                              errors.leaveFrom
+                                ? "border-red-500 bg-red-50"
+                                : "border-[#000099]/40 hover:border-[#000099]"
+                            }`}
+                            calendarClassName="!bg-white !border-2 !border-[#000099]/20 !shadow-2xl !rounded-2xl"
+                            dayClassName={(date) => {
+                              const isSelected = formData.leaveFrom && 
+                                date.toDateString() === formData.leaveFrom.toDateString();
+                              const isToday = date.toDateString() === new Date().toDateString();
+                              const isPast = date < new Date();
+                              
+                              if (isPast) return "!text-gray-300 cursor-not-allowed";
+                              if (isSelected) return "!bg-[#000099] !text-white !rounded-lg !font-bold";
+                              if (isToday) return "!bg-blue-100 !text-[#000099] !font-semibold !rounded-lg";
+                              return "!text-gray-700 hover:!bg-blue-50 hover:!text-[#000099] !rounded-lg transition-all duration-200";
+                            }}
+                            weekDayClassName={() => "!text-[#000099] !font-semibold"}
+                            monthClassName={() => "!text-[#000099] !font-bold"}
+                            timeClassName={() => "!text-[#000099]"}
+                            showPopperArrow={false}
+                            fixedHeight
+                          />
+                          <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                            <svg className="w-5 h-5 text-[#000099]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                          </div>
+                        </div>
+
+                        {errors.leaveFrom && (
+                          <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                            </svg>
+                            {errors.leaveFrom}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-sm font-bold text-[#000099] mb-2">
+                           Leave To *
+                        </label>
+                        <div className="relative">
+                          <DatePicker
+                            selected={formData.leaveTo}
+                            onChange={(date: Date | null) =>
+                              setFormData({ ...formData, leaveTo: date })
+                            }
+                            placeholderText="Select end date"
+                            dateFormat="dd/MM/yyyy"
+                            minDate={formData.leaveFrom || new Date()}
+                            className={`w-full px-4 py-4 border-2 rounded-xl text-[#000099] font-medium bg-gradient-to-r from-blue-50 to-indigo-50 focus:ring-2 focus:ring-[#000099] focus:border-[#000099] transition-all duration-300 shadow-sm hover:shadow-md ${
+                              errors.leaveTo
+                                ? "border-red-500 bg-red-50"
+                                : "border-[#000099]/40 hover:border-[#000099]"
+                            }`}
+                            calendarClassName="!bg-white !border-2 !border-[#000099]/20 !shadow-2xl !rounded-2xl"
+                            dayClassName={(date) => {
+                              const isSelected = formData.leaveTo && 
+                                date.toDateString() === formData.leaveTo.toDateString();
+                              const isToday = date.toDateString() === new Date().toDateString();
+                              const isInRange = formData.leaveFrom && formData.leaveTo && 
+                                date >= formData.leaveFrom && date <= formData.leaveTo;
+                              const isPast = (formData.leaveFrom && date < formData.leaveFrom) || 
+                                date < new Date();
+                              
+                              if (isPast) return "!text-gray-300 cursor-not-allowed";
+                              if (isSelected) return "!bg-[#000099] !text-white !rounded-lg !font-bold";
+                              if (isInRange) return "!bg-blue-100 !text-[#000099] !rounded-lg";
+                              if (isToday) return "!bg-blue-100 !text-[#000099] !font-semibold !rounded-lg";
+                              return "!text-gray-700 hover:!bg-blue-50 hover:!text-[#000099] !rounded-lg transition-all duration-200";
+                            }}
+                            weekDayClassName={() => "!text-[#000099] !font-semibold"}
+                            monthClassName={() => "!text-[#000099] !font-bold"}
+                            timeClassName={() => "!text-[#000099]"}
+                            showPopperArrow={false}
+                            fixedHeight
+                          />
+                          <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                            <svg className="w-5 h-5 text-[#000099]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                          </div>
+                        </div>
+
+                        {errors.leaveTo && (
+                          <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                            </svg>
+                            {errors.leaveTo}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Duration Display */}
+                    <div className="space-y-2">
+                      <label className="block text-sm font-bold text-[#000099]">
+                         Duration
+                      </label>
+                      <div className="px-4 py-4 border-2 border-[#000099]/30 rounded-xl bg-gradient-to-r from-[#000099]/5 to-blue-50 text-[#000099] font-bold text-center">
+                        {formData.leaveFrom && formData.leaveTo ? (
+                          <div className="flex items-center justify-center gap-2">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span className="text-lg">
+                              {calculateDays(formData.leaveFrom, formData.leaveTo)} day(s)
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-500 font-normal">Select dates to calculate duration</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Modal Footer with Blue Submit Button */}
+                  <div className="flex gap-4 mt-6">
+                    <button
+                      onClick={handleAddLeave}
+                      className="flex-1 bg-gradient-to-r from-[#000099] to-blue-600 text-white px-6 py-4 rounded-xl hover:from-blue-600 hover:to-[#000099] transition-all duration-300 font-bold shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center justify-center gap-2 text-lg"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Submit Application
+                    </button>
+                    <button
+                      onClick={handleCancel}
+                      className="flex-1 bg-gradient-to-r from-gray-500 to-gray-600 text-white px-6 py-4 rounded-xl hover:from-gray-600 hover:to-gray-700 transition-all duration-300 font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center justify-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+        {/* Leave Applications Table */}
+        <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-2xl border-2 border-[#000099]/20 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-gradient-to-r from-[#000099] to-[#000066] text-white">
+                  <th className="px-6 py-4 text-left font-semibold">
+                    IGA Code
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold">
+                    Employee Name
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold">
+                    Duration
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold">
+                    Leave Period
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold">
+                    Applied Date
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold">Status</th>
+                  <th className="px-6 py-4 text-left font-semibold">Comment</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#000099]/10">
+                {filteredLeaves.map((entry, idx) => (
+                  <tr
+                    key={idx}
+                    className="hover:bg-[#000099]/5 transition-all duration-200 group"
+                  >
+                    <td className="px-6 py-4">
+                      <span className="font-mono text-sm bg-[#000099]/10 text-[#000099] px-2 py-1 rounded-md border border-[#000099]/20">
+                        {entry.igaCode}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="font-medium text-gray-900 group-hover:text-[#000099] transition-colors">
+                        {entry.name}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                      {entry.duration} day{entry.duration !== 1 ? "s" : ""}
+                    </td>
+                    <td className="px-6 py-4 text-gray-600 font-mono text-sm">
+                      {entry.leaveFrom} to {entry.leaveTo}
+                    </td>
+                    <td className="px-6 py-4 text-gray-600 font-mono text-sm">
+                      {entry.date}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={getBadgeClasses(entry.status)}>
+                        {entry.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate">
+                      {entry.comment}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {filteredLeaves.length === 0 && (
+              <div className="text-center py-12 text-[#000099]/70">
+                <div className="text-4xl mb-4"></div>
+                <h3 className="text-lg font-medium text-[#000099] mb-2">
+                  No applications found
+                </h3>
+                <p className="text-[#000099]/70">
+                  Try adjusting your search criteria or use quick filters.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Enhanced DatePicker Styles */}
+        <style>{`
+          .react-datepicker {
+            border: 2px solid #000099 !important;
+            border-radius: 16px !important;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 153, 0.25) !important;
+          }
+          .react-datepicker__header {
+            background: linear-gradient(135deg, #000099, #0066cc) !important;
+            border-bottom: 1px solid #000099 !important;
+            border-radius: 14px 14px 0 0 !important;
+            padding: 16px 0 !important;
+          }
+          .react-datepicker__current-month {
+            color: white !important;
+            font-weight: bold !important;
+            font-size: 16px !important;
+          }
+          .react-datepicker__navigation {
+            border: none !important;
+            background: rgba(255, 255, 255, 0.2) !important;
+            border-radius: 8px !important;
+            width: 32px !important;
+            height: 32px !important;
+            margin: 8px !important;
+          }
+          .react-datepicker__navigation:hover {
+            background: rgba(255, 255, 255, 0.3) !important;
+          }
+          .react-datepicker__navigation-icon::before {
+            border-color: white !important;
+            border-width: 2px 2px 0 0 !important;
+          }
+          .react-datepicker__day-name {
+            color: #000099 !important;
+            font-weight: 600 !important;
+            margin: 2px !important;
+          }
+          .react-datepicker__day {
+            margin: 2px !important;
+            border-radius: 8px !important;
+            transition: all 0.2s ease !important;
+          }
+          .react-datepicker__day:hover {
+            background-color: #dbeafe !important;
+            color: #000099 !important;
+            transform: scale(1.05) !important;
+          }
+          .react-datepicker__day--selected {
+            background: linear-gradient(135deg, #000099, #0066cc) !important;
+            color: white !important;
+            font-weight: bold !important;
+            transform: scale(1.1) !important;
+            box-shadow: 0 4px 12px rgba(0, 0, 153, 0.3) !important;
+          }
+          .react-datepicker__day--today {
+            background-color: #dbeafe !important;
+            color: #000099 !important;
+            font-weight: 600 !important;
+            border: 2px solid #000099 !important;
+          }
+          .react-datepicker__day--in-range {
+            background-color: rgba(0, 0, 153, 0.1) !important;
+            color: #000099 !important;
+          }
+          .react-datepicker__day--keyboard-selected {
+            background: rgba(0, 0, 153, 0.2) !important;
+            color: #000099 !important;
+          }
+          .react-datepicker__day--disabled {
+            color: #d1d5db !important;
+            cursor: not-allowed !important;
+            opacity: 0.5 !important;
+          }
+          .react-datepicker__triangle {
+            display: none !important;
+          }
+        `}</style>
+      </div>
+    </Layout>
+  );
+}
+
+export default FlightopsUrtiPage;
