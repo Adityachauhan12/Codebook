@@ -1,41 +1,123 @@
-URTI Update Process Overview
+Layer 1 — Email Trigger
+Trigger: Email sent to urti.agent@indigo.in
 
-When a crew member suffers from Upper Respiratory Tract Infection (URTI), the following steps are followed to update their leave status:
-1. Initial Sick Marking
-•	The crew is first marked sick by the Crew Tracking team based on base-side inputs.
-•	The crew typically has 12 Sick Leave (SL) and 6 URTI leave balances. 
+Email Parser Agent extracts:
 
-2. Base Confirmation
-•	The base team confirms: 
-o	IGA ID
-o	Crew Name
-o	Start and End Dates for URTI leave.
+IGA ID, Crew Name, From Date, To Date, No. of Days
 
-3. CLMS Verification
-•	The CLMS Portal is checked to: 
-o	Confirm URTI leave balance.
-o	Review the crew’s roster to ensure the dates provided align with sick markings or duty performed.
+Checks if attachments (Medical Cert + Fitness Cert) are present
 
-4. Roster & Leave Update
-•	Once verified: 
-o	The crew’s roster is updated with the URTI code.
-o	Sick leave previously marked is pulled back from CLMS and credited back to the crew’s SL balance.
-o	The same dates are then updated with the URTI code.
+If attachments missing → auto-reject, notify sender, stop
 
-5. Bucket-Based Leave Management
-•	Leave balances are divided across calendar buckets.
-•	If the URTI dates fall in a previous bucket, the system checks the URTI balance in that bucket.
-•	The leave is updated; accordingly, adjustment reflects in the current bucket & previous bucket as well. (deduction made in current bucket needs to be reversed).
+Layer 2 — Idempotency Gates
+Gate 1 (Auto): Query internal DB
 
-6. Special Cases
-•	If the crew was marked LWP (Leave Without Pay) due to lack of sick balance, and later URTI is approved: 
-o	The leave is not considered unpaid.
-o	The crew becomes eligible for arrears and efficiency bonus, which must be shared with the Payroll team.
+text
+IF status = PROCESSED → auto-reject, send "already processed" mail
+IF status = PENDING/FAILED → continue
+Gate 2 (Manual Override):
 
-________________________________________
-📋 Standard Documentation Required
-•	Medical Certificate from an ENT specialist confirming URTI diagnosis.
-•	Fitness Certificate from ENT on the last day of sick leave.
-•	URTI Leave Format (IGA, Name, From, To, Number of Days).
-•	Follow-up on CLMS after 7 working days to confirm update
+text
+IF subject contains "REPROCESS" → bypass Gate 1
+  → route to Human Approver before any action
+Layer 3 — Validation Agent (CLMS DB Read)
+Runs 4 checks in sequence — all reads, no writes yet:
 
+Step	What It Does
+Bucket Resolver	Detects crew's calendar cycle → identifies active bucket and past bucket range
+URTI Balance Check	Fetches URTI balance in the relevant bucket (current or past)
+Roster Check	Are the dates marked SL, LWP, or Duty in CLMS?
+Snapshot	Saves full before-state to internal DB (immutable audit record)
+Layer 4 — Decision Router
+Based on validation output, routes to one of 4 paths:
+
+text
+SL marked + URTI balance OK          → Normal Flow
+Dates fall in previous bucket         → Bucket Reversal Flow
+LWP marked on dates                   → LWP Escalation Flow (human required)
+URTI balance insufficient             → Escalate to Human Reviewer
+Normal Flow
+Pull back SL from those dates
+
+Credit SL balance back to crew
+
+Apply URTI code on same dates
+
+Bucket Reversal Flow
+Detect which past bucket the dates fall in
+
+Check URTI balance in that past bucket
+
+Reverse current-bucket deduction
+
+Apply URTI in past bucket
+
+Reflect adjustment in current bucket too
+
+LWP Escalation Flow
+Leave is not treated as unpaid
+
+Flag crew as eligible for arrears + efficiency bonus
+
+Mandatorily route to human approver before write
+
+On approval → trigger payroll team notification
+
+Layer 5 — Dry Run (All Flows)
+Before any DB write, the agent:
+
+Computes the full before vs after diff
+
+Example: SL -2 days | URTI +2 days | Bucket_Dec-Nov balance: 6→4
+
+Logs this diff to internal DB
+
+For Normal/Bucket flows → auto-proceed if diff looks valid
+
+For LWP/REPROCESS flows → human sees this diff and clicks Approve
+
+Layer 6 — Atomic Write Agent (CLMS DB Write)
+All changes executed in a single DB transaction:
+
+text
+BEGIN TRANSACTION
+  1. Reverse SL marking on dates
+  2. Credit SL balance back
+  3. Apply URTI code on dates
+  4. Adjust bucket balances
+COMMIT  ← only if all steps succeed
+ROLLBACK ← if any step fails
+Layer 7 — Post-Write Verification
+Re-reads CLMS DB immediately after write
+
+Compares actual state vs expected state from dry run
+
+Match → proceed to notifications
+
+Mismatch → immediate rollback + red alert to admin team
+
+Layer 8 — Notification Agent
+Recipient	Condition	Content
+Crew Tracking Team	Always	Confirmation + updated leave details
+Base Team	Always	Acknowledgement of update
+Payroll Team	LWP reversed only	Arrears + efficiency bonus flag
+Internal Scheduler	Always	7-day follow-up job queued
+Layer 9 — 7-Day Follow-Up Job
+Scheduled background job fires after 7 working days
+
+Re-reads CLMS to confirm URTI code still intact
+
+If discrepancy found → alert sent to Crew Tracking team automatically
+
+Agent Summary Map
+text
+Email Arrives
+    → [Parser Agent]        — Extract + doc check
+    → [Idempotency Agent]   — Duplicate + keyword gates
+    → [Validation Agent]    — CLMS read + bucket logic
+    → [Decision Router]     — Normal / Bucket / LWP / Insufficient
+    → [Dry Run Engine]      — Before-after diff, human approval if needed
+    → [Write Agent]         — Atomic CLMS transaction
+    → [Verifier Agent]      — Post-write state check + rollback if needed
+    → [Notifier Agent]      — Crew Tracking, Base, Payroll, Scheduler
+    → [Follow-up Job]       — 7-day CLMS confirmation
