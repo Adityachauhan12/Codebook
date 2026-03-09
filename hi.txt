@@ -1,195 +1,41 @@
-URTI Management System – What We Are Actually Doing
-1. What this system does (in simple terms)
-The URTI Management System is a small internal web tool to manage URTI leave requests for crew members in one place instead of doing everything manually in CLMS, Excel, emails, and calls.
-
-At a high level, the system does three things:
-
-Lets Flight Ops raise URTI leave requests for a crew member for specific dates.
-
-Lets the Admin/Crew Tracking team see all requests, filter them, and approve or reject them.
-
-Keeps a clear record of every request with dates, IGA code, status, and comments so nothing gets lost or confused.
-
-Today, this is mainly focused on making the workflow clean and trackable. In the next step, we’ll add automation using an AI agent that talks to the CLMS database.
-
-2. How the current implementation works
-2.1 Two main screens / roles
-We have built two main views:
-
-FlightOps URTI page – for creating requests
-
-On this page, the user can:
-
-Search and select an employee by name or IGA code.
-
-Select “Leave From” and “Leave To” dates using a date picker.
-
-Automatically see how many days of leave this range covers.
-
-Submit a new URTI leave request, which is saved with status “Pending” and a default comment like “Pending review”.
-
-Admin URTI page – for reviewing and deciding
-
-On this page, the admin can:
-
-See a table of all URTI requests with columns like IGA code, employee name, base, leave dates, status, and comment.
-
-Filter the list by base, date range (Last Week, Last Month, Last 30 Days, Custom), status, or keyword (name/IGA code).
-
-Change the status of a request to “Approved” or “Rejected” using buttons.
-
-Add comments while a request is pending. Once a request is approved or rejected, the comment for that row is locked so it cannot be edited later.
-
-View quick stats showing how many requests are Pending, Approved, and Rejected.
-
-So practically:
-
-FlightOps creates requests.
-
-Admin reviews and closes them.
-
-Everyone can see the same truth in one system.
-
-2.2 End‑to‑end flow of one URTI request
-Here is the typical lifecycle of a URTI request:
-
-FlightOps selects the crew member and the date range, then submits a request.
-
-The system creates a new record with:
-
-Employee name and IGA code
-
-Leave From and Leave To dates
-
-Calculated duration (number of days)
-
-Status = “Pending”
-
-Initial comment (for example, “Pending review”)
-
-On the Admin page, the request appears in the Pending list.
-
-The admin uses filters/search to find relevant requests and then:
-
-Approves or rejects the request, changing the status.
-
-Optionally adds comments explaining the decision.
-
-After the decision, the comment field is locked for that row to preserve the history.
-
-This approved/rejected information can then be used by downstream processes like updating CLMS, adjusting buckets, and informing payroll, either manually today or automatically in the future.
-
-Right now, the system gives us a clean, structured workflow and data. The next step is to connect this with CLMS and automate checks.
-
-3. Simple architecture explanation (no heavy technical jargon)
-If you have to explain “architecture” to a manager on a whiteboard, you can describe it like this:
-
-User Interface (what people see)
-There is a web application with two main screens:
-
-One for FlightOps to apply for URTI leave.
-
-One for Admin to review and decide.
-The interface is fast, supports searching, filtering, and live updates of counts, so the user experience is smooth.
-
-Data and rules (what happens behind the scenes)
-Behind the UI, we keep structured records of each leave request with fields like:
-
-Name, IGA code
-
-Base
-
-Leave from / to dates
-
-Duration (days)
-
-Status (Pending / Approved / Rejected)
-
-Comment
-
-We also enforce a few important rules:
-
-Status always follows a clear path: it starts as Pending, then becomes Approved or Rejected.
-
-Once a request is approved or rejected, its comment is locked to maintain an audit trail.
-
-The system calculates the duration automatically based on the selected dates.
-
-Filters are applied on the full dataset so admins see only the relevant requests.
-
-You don’t need to go deep into frameworks or libraries here; just keep the explanation about what the system does and what rules it enforces.
-
-4. Future scope – MCP + AI agent (explained simply)
-Now for the “future scope” section, you can keep it very practical and story-like.
-
-4.1 Problem today
-Even with this tool, someone still has to log in to CLMS and manually check:
-
-How many URTI days and Sick Leave are left for that crew member.
-
-Which calendar bucket the leave should be deducted from.
-
-If any LWP should be converted to URTI (which then affects payroll, arrears, and bonuses).
-
-This manual checking is slow and error‑prone.
-
-4.2 What we want to do next
-We want to introduce an AI agent that will automatically fetch and check data from the CLMS database and then suggest what to do with each URTI request.
-
-The idea is:
-
-When a URTI request is created or is in Pending status, the AI agent wakes up.
-
-It connects to the CLMS database through a standard integration layer called Model Context Protocol (MCP).
-
-It pulls the relevant data: URTI balance, sick leave balance, previous leaves, bucket details, etc.
-
-It applies our business rules and then suggests:
-
-“Approve – balance is available, bucket X, no payroll impact”
-
-Or “Reject – insufficient balance”
-
-Or “Approve – plus convert these LWP days to URTI, payroll needs arrears adjustment”
-
-The admin still takes the final decision, but now they see a ready‑made recommendation instead of doing all checks manually.
-
-4.3 How to describe MCP in one line
-When describing MCP, keep it very simple, for example:
-
-“MCP is a standard way for an AI agent to safely talk to our databases. Instead of us writing custom integrations again and again, MCP gives a clean, reusable way for the AI to run the right queries and bring back the data it needs.”
-
-You don’t need protocol-level details; just positioning it as “a standard bridge between AI and our CLMS database” is enough.
-
-4.4 Simple future flow to write in the document
-You can describe the future flow like this:
-
-A URTI request is created and marked as Pending.
-
-The AI agent is triggered for that request.
-
-Through MCP, the agent connects to the CLMS database and reads:
-
-URTI and Sick Leave balances
-
-Past leave history
-
-Relevant bucket information
-
-The agent evaluates the business rules and returns a recommendation (Approve / Reject + justification).
-
-The Admin sees both:
-
-The original request details
-
-The AI recommendation and explanation
-and then clicks Approve or Reject.
-
-In later phases, certain updates (like marking URTI in CLMS or generating a payroll notification) can also be automated with a “human in the loop” check.
-
-This shows clearly:
-
-Today: our tool organizes and tracks the URTI workflow.
-
-Tomorrow: MCP + AI agent will reduce manual checking and make decisions faster and more consistent, while humans still stay in control.
+URTI Update Process Overview
+
+When a crew member suffers from Upper Respiratory Tract Infection (URTI), the following steps are followed to update their leave status:
+1. Initial Sick Marking
+•	The crew is first marked sick by the Crew Tracking team based on base-side inputs.
+•	The crew typically has 12 Sick Leave (SL) and 6 URTI leave balances. 
+
+2. Base Confirmation
+•	The base team confirms: 
+o	IGA ID
+o	Crew Name
+o	Start and End Dates for URTI leave.
+
+3. CLMS Verification
+•	The CLMS Portal is checked to: 
+o	Confirm URTI leave balance.
+o	Review the crew’s roster to ensure the dates provided align with sick markings or duty performed.
+
+4. Roster & Leave Update
+•	Once verified: 
+o	The crew’s roster is updated with the URTI code.
+o	Sick leave previously marked is pulled back from CLMS and credited back to the crew’s SL balance.
+o	The same dates are then updated with the URTI code.
+
+5. Bucket-Based Leave Management
+•	Leave balances are divided across calendar buckets.
+•	If the URTI dates fall in a previous bucket, the system checks the URTI balance in that bucket.
+•	The leave is updated; accordingly, adjustment reflects in the current bucket & previous bucket as well. (deduction made in current bucket needs to be reversed).
+
+6. Special Cases
+•	If the crew was marked LWP (Leave Without Pay) due to lack of sick balance, and later URTI is approved: 
+o	The leave is not considered unpaid.
+o	The crew becomes eligible for arrears and efficiency bonus, which must be shared with the Payroll team.
+
+________________________________________
+📋 Standard Documentation Required
+•	Medical Certificate from an ENT specialist confirming URTI diagnosis.
+•	Fitness Certificate from ENT on the last day of sick leave.
+•	URTI Leave Format (IGA, Name, From, To, Number of Days).
+•	Follow-up on CLMS after 7 working days to confirm update
 
