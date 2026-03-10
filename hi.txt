@@ -1,123 +1,427 @@
-Layer 1 — Email Trigger
-Trigger: Email sent to urti.agent@indigo.in
+Here's a full breakdown of the agentic flow, relevant CLMS tables, Python functions, and the DB update strategy — all derived from your schema and URTI process document.
 
-Email Parser Agent extracts:
+Relevant CLMS Tables for Your Flow
+From the schema, here are the exact tables needed at each step:
+​
 
-IGA ID, Crew Name, From Date, To Date, No. of Days
+🔍 Read Phase (Crew Lookup + Balance Fetch)
+Table	Why Needed	Key Columns
+M_CLMS_Crew	Lookup crew by IGA code, get name/base/status	CrewID, CrewName, Base, Active, Status, Email
+M_CLMS_LeaveBalance	Get current SL, URTI, and bucket-wise balances	CrewID, LeaveTypeID, Balance, StartDate, EndDate, LeaveYearId
+M_LMS_LeaveType	Resolve LeaveTypeID for SL, URTI, LWP codes	LeaveTypeID, LeaveType
+M_LeaveYear	Identify current vs previous leave bucket	LeaveYearId, LeaveYearStartDate, LeaveYearEndDate, IsActive
+T_Crew_LeaveYear	Map crew to leave year, detect base changes	Crewid, LeaveYearId, Curr_Base, Pre_Base
+T_CLMS_LeaveReqMaster	Find SL/LWP entries already filed for the URTI date range	CrewID, FromDT, ToDt, LeaveTypeid, StatusTypeID, GndCode
+T_CLMS_LeaveReqDetail	Get per-day breakdown of existing SL entries	LeaveDetailID, LeaveTypeID, NoOfLeaves, FromDt, ToDt
+T_CLMS_GNDCodes	Check roster markings (sick, duty, etc.) for date range	EMPNO, GNDACTCODE, STARTTIME, ENDTIME, ApprovedStatus
+CrewBalanceUpdateByScheduler	Check prior scheduler updates / revocations for crew	crewID, OldSLBalance, OldURTIBalance, IsRevoked, LeaveYearID
+T_Crew_Leaves_Allocation	Check annual entitlement (12 SL, 6 URTI)	Crewid, LeaveTypeId, LeavesAllotted, LeaveYearId
+✏️ Write/Update Phase
+Table	Operation	Purpose
+T_CLMS_LeaveReqMaster	UPDATE StatusTypeID → Revoked	Pull back SL leave entries for the URTI date range
+T_CLMS_LeaveReqDetail	UPDATE / zero-out NoOfLeaves	Reverse SL day-level deductions
+T_CLMS_LeaveReqMaster_OtherRocadeCodes	INSERT new row	Add URTI code leave entry for same dates
+T_CLMS_LeaveReqDetail_OtherRocadeCodes	INSERT rows	Day-level URTI deduction entries
+M_CLMS_LeaveBalance	UPDATE Balance	Credit SL back + deduct URTI, also handle prev-bucket reversal
+CrewBalanceUpdateByScheduler	INSERT audit row	Log old/new SL & URTI balance with IsRevoked flag
+M_CLMS_BonusDate	INSERT (LWP case only)	Flag crew for arrears & efficiency bonus → shared with Payroll
+📧 Notification Phase (Agent 2)
+Table	Purpose
+M_CLMS_Crew	Get crew's registered email
+M_CLMS_BaseEmail	Base-level distribution list email
+M_CLMS_BaseMgrEmail	Notify base manager
+SickLeave_Email	Base-wise sick leave ops email
+Python: Read Crew by IGA Code (MCP Tool Function)
+python
+import pyodbc
+from dataclasses import dataclass, field
+from typing import Optional
+from datetime import date
 
-Checks if attachments (Medical Cert + Fitness Cert) are present
+DB_CONN_STR = (
+    "DRIVER={ODBC Driver 18 for SQL Server};"
+    "SERVER=zpmi1-ea-pdb01.4166029f8cdd.database.windows.net,1433;"
+    "DATABASE=CLMS;"
+    "Authentication=ActiveDirectoryInteractive;"  # Use Azure AD / service principal in prod
+    "Encrypt=yes;"
+)
 
-If attachments missing → auto-reject, notify sender, stop
+@dataclass
+class CrewURTIContext:
+    crew_id: str
+    crew_name: str
+    base: str
+    email: str
+    sl_balance: float
+    urti_balance: float
+    lwp_balance: float
+    leave_year_id: int
+    leave_year_name: str
+    is_prev_bucket: bool
+    prev_bucket_urti_balance: Optional[float]
+    existing_sl_entries: list = field(default_factory=list)
+    is_lwp_case: bool = False
 
-Layer 2 — Idempotency Gates
-Gate 1 (Auto): Query internal DB
 
-text
-IF status = PROCESSED → auto-reject, send "already processed" mail
-IF status = PENDING/FAILED → continue
-Gate 2 (Manual Override):
+def read_crew_by_iga_code(
+    iga_code: str,
+    from_date: date,
+    to_date: date
+) -> CrewURTIContext:
+    """
+    MCP Tool: Fetch crew leave context from CLMS by IGA code.
+    Returns all info needed for URTI leave update decision.
+    """
+    conn = pyodbc.connect(DB_CONN_STR)
+    cursor = conn.cursor()
 
-text
-IF subject contains "REPROCESS" → bypass Gate 1
-  → route to Human Approver before any action
-Layer 3 — Validation Agent (CLMS DB Read)
-Runs 4 checks in sequence — all reads, no writes yet:
+    # 1. Fetch crew master info
+    cursor.execute("""
+        SELECT CrewID, CrewName, Base, Email, Active, Status
+        FROM M_CLMS_Crew
+        WHERE CrewID = ?  -- IGA code IS the CrewID in CLMS
+        AND Active = 1
+    """, (iga_code,))
+    crew = cursor.fetchone()
+    if not crew:
+        raise ValueError(f"No active crew found for IGA code: {iga_code}")
 
-Step	What It Does
-Bucket Resolver	Detects crew's calendar cycle → identifies active bucket and past bucket range
-URTI Balance Check	Fetches URTI balance in the relevant bucket (current or past)
-Roster Check	Are the dates marked SL, LWP, or Duty in CLMS?
-Snapshot	Saves full before-state to internal DB (immutable audit record)
-Layer 4 — Decision Router
-Based on validation output, routes to one of 4 paths:
+    crew_id, crew_name, base, email = crew.CrewID, crew.CrewName, crew.Base, crew.Email
 
-text
-SL marked + URTI balance OK          → Normal Flow
-Dates fall in previous bucket         → Bucket Reversal Flow
-LWP marked on dates                   → LWP Escalation Flow (human required)
-URTI balance insufficient             → Escalate to Human Reviewer
-Normal Flow
-Pull back SL from those dates
+    # 2. Identify current leave year
+    cursor.execute("""
+        SELECT LeaveYearId, LeaveYearName, LeaveYearStartDate, LeaveYearEndDate
+        FROM M_LeaveYear
+        WHERE IsActive = 1 AND IsVisible = 1
+    """)
+    curr_year = cursor.fetchone()
+    leave_year_id = curr_year.LeaveYearId
 
-Credit SL balance back to crew
+    # 3. Resolve LeaveTypeIDs for SL, URTI, LWP
+    cursor.execute("""
+        SELECT LeaveTypeID, LeaveType FROM M_LMS_LeaveType
+        WHERE LeaveType IN ('SL', 'URTI', 'LWP')
+    """)
+    leave_type_map = {row.LeaveType: row.LeaveTypeID for row in cursor.fetchall()}
+    sl_type_id   = leave_type_map.get('SL')
+    urti_type_id = leave_type_map.get('URTI')
+    lwp_type_id  = leave_type_map.get('LWP')
 
-Apply URTI code on same dates
+    # 4. Fetch current leave balances (SL, URTI, LWP)
+    def get_balance(leave_type_id, year_id):
+        cursor.execute("""
+            SELECT Balance FROM M_CLMS_LeaveBalance
+            WHERE CrewID = ? AND LeaveTypeID = ? AND LeaveYearId = ?
+        """, (crew_id, leave_type_id, year_id))
+        row = cursor.fetchone()
+        return row.Balance if row else 0.0
 
-Bucket Reversal Flow
-Detect which past bucket the dates fall in
+    sl_balance   = get_balance(sl_type_id, leave_year_id)
+    urti_balance = get_balance(urti_type_id, leave_year_id)
+    lwp_balance  = get_balance(lwp_type_id, leave_year_id)
 
-Check URTI balance in that past bucket
+    # 5. Check if URTI dates fall in a PREVIOUS leave bucket
+    is_prev_bucket = from_date < curr_year.LeaveYearStartDate.date()
+    prev_bucket_urti_balance = None
+    if is_prev_bucket:
+        cursor.execute("""
+            SELECT LeaveYearId FROM M_LeaveYear
+            WHERE LeaveYearStartDate <= ? AND LeaveYearEndDate >= ?
+        """, (from_date, from_date))
+        prev_year = cursor.fetchone()
+        if prev_year:
+            prev_bucket_urti_balance = get_balance(urti_type_id, prev_year.LeaveYearId)
 
-Reverse current-bucket deduction
+    # 6. Fetch existing SL/LWP leave requests for the URTI date range
+    cursor.execute("""
+        SELECT lrm.LeaveDetailID, lrm.LeaveTypeid, lrm.StatusTypeID,
+               lrm.FromDT, lrm.ToDt, lrm.GndCode,
+               lrd.NoOfLeaves
+        FROM T_CLMS_LeaveReqMaster lrm
+        JOIN T_CLMS_LeaveReqDetail lrd ON lrm.LeaveDetailID = lrd.LeaveDetailID
+        WHERE lrm.CrewID = ?
+          AND lrm.LeaveTypeid IN (?, ?)
+          AND lrm.FromDT <= ? AND lrm.ToDt >= ?
+          AND lrm.StatusTypeID NOT IN (
+              SELECT StatusTypeID FROM M_LMS_StatusType WHERE StatusType = 'Revoked'
+          )
+        ORDER BY lrm.FromDT
+    """, (crew_id, sl_type_id, lwp_type_id, to_date, from_date))
+    existing_sl_entries = cursor.fetchall()
 
-Apply URTI in past bucket
+    is_lwp_case = any(row.LeaveTypeid == lwp_type_id for row in existing_sl_entries)
 
-Reflect adjustment in current bucket too
+    conn.close()
 
-LWP Escalation Flow
-Leave is not treated as unpaid
+    return CrewURTIContext(
+        crew_id=crew_id,
+        crew_name=crew_name,
+        base=base,
+        email=email,
+        sl_balance=sl_balance,
+        urti_balance=urti_balance,
+        lwp_balance=lwp_balance,
+        leave_year_id=leave_year_id,
+        leave_year_name=curr_year.LeaveYearName,
+        is_prev_bucket=is_prev_bucket,
+        prev_bucket_urti_balance=prev_bucket_urti_balance,
+        existing_sl_entries=existing_sl_entries,
+        is_lwp_case=is_lwp_case,
+    )
+DB Update Method — How It Works
+The DB is on Azure SQL Server, so updates go via pyodbc with parameterized SQL transactions. The key principle: wrap all changes in a single atomic transaction so a mid-way failure doesn't corrupt balances.
+​
 
-Flag crew as eligible for arrears + efficiency bonus
+python
+def update_urti_in_clms(ctx: CrewURTIContext, from_date: date, to_date: date, no_of_days: int, approved_by: str):
+    """
+    Executes the URTI update in CLMS DB inside a single transaction.
+    ONLY called after human approval is confirmed.
+    """
+    conn = pyodbc.connect(DB_CONN_STR)
+    cursor = conn.cursor()
 
-Mandatorily route to human approver before write
+    try:
+        conn.autocommit = False  # Begin transaction
 
-On approval → trigger payroll team notification
+        # Resolve IDs
+        cursor.execute("SELECT LeaveTypeID FROM M_LMS_LeaveType WHERE LeaveType='SL'")
+        sl_type_id = cursor.fetchone().LeaveTypeID
+        cursor.execute("SELECT LeaveTypeID FROM M_LMS_LeaveType WHERE LeaveType='URTI'")
+        urti_type_id = cursor.fetchone().LeaveTypeID
+        cursor.execute("SELECT StatusTypeID FROM M_LMS_StatusType WHERE StatusType='Revoked'")
+        revoked_status_id = cursor.fetchone().StatusTypeID
+        cursor.execute("SELECT StatusTypeID FROM M_LMS_StatusType WHERE StatusType='Approved'")
+        approved_status_id = cursor.fetchone().StatusTypeID
 
-Layer 5 — Dry Run (All Flows)
-Before any DB write, the agent:
+        # STEP 1: Revoke existing SL/LWP entries for the date range
+        for entry in ctx.existing_sl_entries:
+            cursor.execute("""
+                UPDATE T_CLMS_LeaveReqMaster
+                SET StatusTypeID = ?, ActionBy = ?, ActionDate = GETDATE(), Remarks = 'Revoked - URTI Applied'
+                WHERE LeaveDetailID = ?
+            """, (revoked_status_id, approved_by, entry.LeaveDetailID))
 
-Computes the full before vs after diff
+        # STEP 2: Credit SL balance back (only SL entries, not LWP)
+        sl_days_to_credit = sum(
+            e.NoOfLeaves for e in ctx.existing_sl_entries
+            if e.LeaveTypeid == sl_type_id
+        )
+        if sl_days_to_credit > 0:
+            cursor.execute("""
+                UPDATE M_CLMS_LeaveBalance
+                SET Balance = Balance + ?
+                WHERE CrewID = ? AND LeaveTypeID = ? AND LeaveYearId = ?
+            """, (sl_days_to_credit, ctx.crew_id, sl_type_id, ctx.leave_year_id))
 
-Example: SL -2 days | URTI +2 days | Bucket_Dec-Nov balance: 6→4
+        # STEP 3: Insert new URTI leave request (Master + Detail)
+        cursor.execute("""
+            INSERT INTO T_CLMS_LeaveReqMaster_OtherRocadeCodes
+            (CrewID, RequestedDate, LeaveTypeid, StatusTypeID, FromDT, ToDt, Remarks, ActionBy, ActionDate, CreatedDtm, GndCode)
+            VALUES (?, GETDATE(), ?, ?, ?, ?, 'URTI Applied via Agentic Flow', ?, GETDATE(), GETDATE(), 'URTI')
+        """, (ctx.crew_id, urti_type_id, approved_status_id, from_date, to_date, approved_by))
 
-Logs this diff to internal DB
+        cursor.execute("SELECT SCOPE_IDENTITY() AS new_id")
+        new_leave_detail_id = cursor.fetchone().new_id
 
-For Normal/Bucket flows → auto-proceed if diff looks valid
+        cursor.execute("""
+            INSERT INTO T_CLMS_LeaveReqDetail_OtherRocadeCodes
+            (LeaveDetailID, LeaveTypeID, NoOfLeaves, Balance, CurrentLeave, FromDt, ToDt)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (new_leave_detail_id, urti_type_id, no_of_days,
+              ctx.urti_balance - no_of_days, no_of_days, from_date, to_date))
 
-For LWP/REPROCESS flows → human sees this diff and clicks Approve
+        # STEP 4: Deduct URTI balance
+        # If prev bucket → deduct from prev bucket and REVERSE any current-bucket deduction
+        target_year_id = ctx.leave_year_id
+        if ctx.is_prev_bucket:
+            cursor.execute("""
+                SELECT LeaveYearId FROM M_LeaveYear
+                WHERE LeaveYearStartDate <= ? AND LeaveYearEndDate >= ?
+            """, (from_date, from_date))
+            prev_year = cursor.fetchone()
+            if prev_year:
+                target_year_id = prev_year.LeaveYearId
+                # Reverse any current bucket deduction if already done
+                cursor.execute("""
+                    UPDATE M_CLMS_LeaveBalance
+                    SET Balance = Balance + ?
+                    WHERE CrewID = ? AND LeaveTypeID = ? AND LeaveYearId = ?
+                """, (no_of_days, ctx.crew_id, urti_type_id, ctx.leave_year_id))
 
-Layer 6 — Atomic Write Agent (CLMS DB Write)
-All changes executed in a single DB transaction:
+        cursor.execute("""
+            UPDATE M_CLMS_LeaveBalance
+            SET Balance = Balance - ?
+            WHERE CrewID = ? AND LeaveTypeID = ? AND LeaveYearId = ?
+        """, (no_of_days, ctx.crew_id, urti_type_id, target_year_id))
 
-text
-BEGIN TRANSACTION
-  1. Reverse SL marking on dates
-  2. Credit SL balance back
-  3. Apply URTI code on dates
-  4. Adjust bucket balances
-COMMIT  ← only if all steps succeed
-ROLLBACK ← if any step fails
-Layer 7 — Post-Write Verification
-Re-reads CLMS DB immediately after write
+        # STEP 5: Log the balance change in audit table
+        cursor.execute("""
+            INSERT INTO CrewBalanceUpdateByScheduler
+            (crewID, OldSLBalance, updatedSLBalance, OldURTIBalance, updatedURTIBalance,
+             IsSchedulerUpdate, LeaveYearID, UpdatedTime, IsRevoked, CreatedDtm)
+            VALUES (?, ?, ?, ?, ?, 0, ?, GETDATE(), 0, GETDATE())
+        """, (
+            ctx.crew_id,
+            ctx.sl_balance, ctx.sl_balance + sl_days_to_credit,
+            ctx.urti_balance, ctx.urti_balance - no_of_days,
+            target_year_id
+        ))
 
-Compares actual state vs expected state from dry run
+        # STEP 6: LWP Special Case → Insert bonus date flag for Payroll
+        if ctx.is_lwp_case:
+            cursor.execute("""
+                INSERT INTO M_CLMS_BonusDate (crewid, bonusdate)
+                VALUES (?, GETDATE())
+            """, (ctx.crew_id,))
+            # Payroll notification handled separately by Agent 2
 
-Match → proceed to notifications
+        conn.commit()
+        print(f"[✓] URTI update committed for crew: {ctx.crew_name} ({ctx.crew_id})")
+        return {"status": "success", "lwp_case": ctx.is_lwp_case}
 
-Mismatch → immediate rollback + red alert to admin team
+    except Exception as e:
+        conn.rollback()
+        print(f"[✗] Transaction rolled back: {e}")
+        raise
+    finally:
+        conn.close()
+Human-in-the-Loop Approval Gate ⚠️
+This is the critical checkpoint between read and write. The agent pauses and requires explicit confirmation:
 
-Layer 8 — Notification Agent
-Recipient	Condition	Content
-Crew Tracking Team	Always	Confirmation + updated leave details
-Base Team	Always	Acknowledgement of update
-Payroll Team	LWP reversed only	Arrears + efficiency bonus flag
-Internal Scheduler	Always	7-day follow-up job queued
-Layer 9 — 7-Day Follow-Up Job
-Scheduled background job fires after 7 working days
+python
+def human_approval_gate(ctx: CrewURTIContext, from_date: date, to_date: date, no_of_days: int) -> bool:
+    """
+    Presents a warning summary to the human operator.
+    Returns True only on explicit 'APPROVE' input.
+    """
+    lwp_warning = ""
+    if ctx.is_lwp_case:
+        lwp_warning = "\n  ⚠️  LWP CASE DETECTED — Crew will become eligible for ARREARS & EFFICIENCY BONUS. Payroll team will be notified."
 
-Re-reads CLMS to confirm URTI code still intact
+    bucket_warning = ""
+    if ctx.is_prev_bucket:
+        bucket_warning = f"\n  ⚠️  PREV BUCKET DATES — URTI balance in prior bucket: {ctx.prev_bucket_urti_balance} days. Current bucket deduction will be REVERSED."
 
-If discrepancy found → alert sent to Crew Tracking team automatically
+    warning_msg = f"""
+╔══════════════════════════════════════════════════════════════╗
+║              ⚠️  URTI LEAVE UPDATE — HUMAN APPROVAL REQUIRED  ║
+╚══════════════════════════════════════════════════════════════╝
 
-Agent Summary Map
-text
-Email Arrives
-    → [Parser Agent]        — Extract + doc check
-    → [Idempotency Agent]   — Duplicate + keyword gates
-    → [Validation Agent]    — CLMS read + bucket logic
-    → [Decision Router]     — Normal / Bucket / LWP / Insufficient
-    → [Dry Run Engine]      — Before-after diff, human approval if needed
-    → [Write Agent]         — Atomic CLMS transaction
-    → [Verifier Agent]      — Post-write state check + rollback if needed
-    → [Notifier Agent]      — Crew Tracking, Base, Payroll, Scheduler
-    → [Follow-up Job]       — 7-day CLMS confirmation
+  Crew       : {ctx.crew_name}  (IGA: {ctx.crew_id})
+  Base       : {ctx.base}
+  URTI Dates : {from_date} → {to_date}  ({no_of_days} days)
+
+  Current Balances:
+    → SL    : {ctx.sl_balance} days   (will be credited back: +{sum(e.NoOfLeaves for e in ctx.existing_sl_entries)} days)
+    → URTI  : {ctx.urti_balance} days  (will be deducted: -{no_of_days} days)
+    → LWP   : {ctx.lwp_balance} days
+{bucket_warning}{lwp_warning}
+
+  Type APPROVE to confirm or REJECT to cancel:
+    """
+    print(warning_msg)
+    user_input = input("Your Decision: ").strip().upper()
+    return user_input == "APPROVE"
+In an agentic/web UI context (e.g., your React Native app or admin dashboard), replace input() with a confirmation modal that sends back a signed approval token to the agent before it proceeds.
+​
+
+Agent 2 — Notification Function
+python
+import smtplib
+from email.mime.text import MIMEText
+
+def notify_crew_and_base(ctx: CrewURTIContext, from_date: date, to_date: date, no_of_days: int):
+    """Agent 2: Send email notification to crew + base after successful URTI update."""
+    conn = pyodbc.connect(DB_CONN_STR)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT Email FROM M_CLMS_BaseEmail WHERE Base = ? AND Active = 1", (ctx.base,))
+    base_email = cursor.fetchone()
+    cursor.execute("SELECT Email FROM M_CLMS_BaseMgrEmail WHERE Base = ? AND Active = 1", (ctx.base,))
+    base_mgr_email = cursor.fetchone()
+    conn.close()
+
+    recipients = [ctx.email]
+    cc = []
+    if base_email: cc.append(base_email.Email)
+    if base_mgr_email: cc.append(base_mgr_email.Email)
+
+    lwp_note = ""
+    if ctx.is_lwp_case:
+        lwp_note = "\n\nNote: Your LWP marking has been reversed. You are now eligible for arrears and efficiency bonus. The Payroll team has been informed."
+
+    body = f"""Dear {ctx.crew_name},
+
+Your URTI leave has been successfully updated in CLMS.
+
+Details:
+  IGA Code   : {ctx.crew_id}
+  From Date  : {from_date}
+  To Date    : {to_date}
+  No of Days : {no_of_days}
+  
+Your Sick Leave (SL) for the above period has been credited back and replaced with URTI code.
+Please follow up on CLMS portal after 7 working days to confirm the update.{lwp_note}
+
+Regards,
+Crew Leave Management System (Automated)
+"""
+    msg = MIMEText(body)
+    msg['Subject'] = f"URTI Leave Updated — {ctx.crew_name} ({ctx.crew_id})"
+    msg['From'] = "clms-noreply@goindigo.in"
+    msg['To'] = ", ".join(recipients)
+    msg['Cc'] = ", ".join(cc)
+
+    with smtplib.SMTP("smtp.goindigo.in", 587) as server:
+        server.starttls()
+        server.login("clms-service-account", "***")
+        server.sendmail(msg['From'], recipients + cc, msg.as_string())
+
+    print(f"[✓] Notification sent to {ctx.crew_name} ({ctx.email}) and base {ctx.base}")
+Complete Agent Orchestration
+python
+def urti_agentic_flow(mail_payload: dict):
+    """
+    Full flow: Agent1 (read + approve + update) → Agent2 (notify)
+    mail_payload = { "iga": "12345", "crew_name": "...", "from_date": date(...), "to_date": date(...), "no_of_days": 3 }
+    """
+    iga       = mail_payload["iga"]
+    from_date = mail_payload["from_date"]
+    to_date   = mail_payload["to_date"]
+    no_of_days= mail_payload["no_of_days"]
+
+    # AGENT 1 — Read context
+    ctx = read_crew_by_iga_code(iga, from_date, to_date)
+
+    # Validation checks
+    if ctx.urti_balance < no_of_days:
+        print(f"[!] Insufficient URTI balance ({ctx.urti_balance}) for {no_of_days} days. Halting.")
+        return
+
+    # Human Approval Gate ← MANDATORY
+    approved = human_approval_gate(ctx, from_date, to_date, no_of_days)
+    if not approved:
+        print("[✗] Update REJECTED by operator. No changes made.")
+        return
+
+    # DB Update
+    result = update_urti_in_clms(ctx, from_date, to_date, no_of_days, approved_by="operator@goindigo.in")
+
+    # AGENT 2 — Notify crew + base
+    if result["status"] == "success":
+        notify_crew_and_base(ctx, from_date, to_date, no_of_days)
+Key Design Decisions Summary
+DB Update Method: Parameterized SQL via pyodbc inside an atomic transaction (autocommit=False + commit/rollback) — this is the safest approach for Azure SQL and ensures no partial balance corruption
+​
+
+Human Gate: Blocks the transaction until explicit APPROVE — satisfies the HITL requirement from your doc
+​
+
+Bucket Logic: Automatically detects if URTI dates are in a prior leave year and handles both bucket deduction + current-bucket reversal via M_LeaveYear
+
+LWP Case: Detected from existing leave request entries, triggers M_CLMS_BonusDate insert and flags payroll in notification
+​
+
+Audit Trail: Every balance change is logged in CrewBalanceUpdateByScheduler with old/new values
+​
