@@ -1,18 +1,285 @@
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?search=shriya&page=1&page_size=20" | jq
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?status=pending&search=shriya&page=1&page_size=20" | jq
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?search=shriya%20mukherjee&page=1&page_size=20" | jq
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?search=mukherjee&page=1&page_size=20" | jq
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?search=shriya&page=1&page_size=20" | jq '{total: .pagination.total_records, records: [.data[] | {name: .employee_name, iga: .iga_code, status: .status, dates: "\(.start_date) to \(.end_date)"}]}'
-# Page 1
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?search=shriya&page=1&page_size=5" | jq '.data[] | {name: .employee_name, iga: .iga_code}'
+import json
+import asyncio
+from fastmcp import Client
+import math
+import httpx
+from fastmcp.client.transports import StreamableHttpTransport
+import dotenv
+import os   
+dotenv.load_dotenv()
 
-# Page 2
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?search=shriya&page=2&page_size=5" | jq '.data[] | {name: .employee_name, iga: .iga_code}'
-# Lowercase
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?search=shriya&page=1&page_size=10" | jq '.pagination.total_records'
+mcp_url_dev = os.getenv("MCP_URL_DEV",)
+mcp_url_uat = os.getenv("MCP_URL_UAT",)
+print(mcp_url_dev,mcp_url_uat)
 
-# Uppercase
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?search=SHRIYA&page=1&page_size=10" | jq '.pagination.total_records'
+def create_custom_httpx_client(**kwargs):
+    """
+    Factory to create a custom httpx client with SSL verification disabled,
+    while forwarding other arguments.
+    """
+    kwargs["verify"] = False
+    # Set more aggressive timeout configuration for server-side connection issues
+    kwargs["timeout"] = httpx.Timeout(
+        connect=60.0,   # Increased connection timeout
+        read=300.0,     # 5 minutes read timeout for slow server responses
+        write=60.0,     # Write timeout
+        pool=60.0       # Pool timeout
+    )
+    return httpx.AsyncClient(**kwargs)
 
-# Mixed case
-curl -X GET "http://127.0.0.1:8002/api/listLeaves?search=ShRiYa&page=1&page_size=10" | jq '.pagination.total_records'
+# Create a transport with the custom httpx client factory
+transport = StreamableHttpTransport(
+#     url=mcp_url_dev,
+#       url=mcp_url_uat,
+    # url="https://6e-mcp-server-core.goindigo.in/mcp",
+    url="http://localhost:8080/mcp",
+    httpx_client_factory=create_custom_httpx_client,
+)
+
+# Initialize the MCP client with the custom transport
+client = Client(transport=transport)
+
+def print_payload_subset(payload):
+    print("---- Full Payload ----")
+    print(json.dumps(payload, indent=4))
+    print("---- First block of the payload ----")
+    if isinstance(payload, list):
+        if not payload:
+            print("Payload is an empty list.")
+            return
+        subset_payload = payload[:1]
+        print(json.dumps(subset_payload, indent=4))
+    elif isinstance(payload, dict):
+        if not payload:
+            print("Payload is an empty dictionary.")
+            return
+        first_item_key = next(iter(payload))
+        subset_payload = {first_item_key: payload[first_item_key]}
+        print(json.dumps(subset_payload, indent=4))
+    else:
+        print(json.dumps(payload, indent=4))
+
+
+async def call_tool():
+    async with client:
+#         tools = await client.list_tools()
+#         for tool in tools:
+#             print(f"Tool name: {tool.name}")
+#             print(f"Description: {tool.description}")
+#             print("Input schema:", tool.inputSchema)
+#             print("-" * 40)
+# #_____________________________________________________________________________________________________
+# #_____________________________________________________________________________________________________           
+        # result = await client.call_tool("flight_data_by_joc", {
+        #     "startDateTime": "2025-02-06T00:00", 
+        #     "endDateTime": "2025-02-06T23:59", 
+        #     # "flightNumber": 2163, j
+        #     "startStation": "BOM", 
+        #     # "endStation": "BOM"
+        # })  
+        # json.dump(result.data, open("JOC.json", "w"), indent=4)
+
+        # # print(result)
+        # payload1 = result.data
+        # print_payload_subset(payload1)   
+#_____________________________________________________________________________________________________
+# #_____________________________________________________________________________________________________            
+#         result= await client.call_tool("check_breathalyzer",{"dutytype": "roster", "flightStartDate": "2026-02-09", "flightNo":"6350"})
+#         payload = result.data
+#         print_payload_subset(payload)
+#         print(result)
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________            
+        # result= await client.call_tool("check_breathalyzer",{"dutytype": "standby", "flightStartDate": "2025-11-28", "dutyCode":"ASBD"})
+        # payload = result.data
+        # print_payload_subset(payload)
+        # print(result)
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________           
+        # result= await client.call_tool("crew_info_by_iga",{"iga_code": "105"})
+        # print(result)
+        # payload = result.data
+        # print_payload_subset(payload)
+# # #_____________________________________________________________________________________________________
+# #_____________________________________________________________________________________________________           
+#         result = await client.call_tool("aims_crew_data" )
+#         json.dump(result.data, open("crew_data_mcp.json", "w"), indent=4)
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________           
+        # result = await client.call_tool("crew_roster_info", {"startDateTime": "2026-02-03T00:00", "endDateTime": "2026-02-03T23:59", "fltNbr": "6350"})
+        # payload = result.data
+        # print_payload_subset(payload)
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________            
+        # result = await client.call_tool("qualification_info_by_iga", {"Base":"BOM","startDateTime": "2025-07-31T00:00", "endDateTime": "2025-07-31T23:59","Position":"CA",})
+        # payload = result.data
+        # print_payload_subset(payload)
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________            
+        # result = await client.call_tool("flight_data_by_joc", {"startStation": "BOM"}) 
+        # payload1 = result.data
+        # json.dump(result.data, open("flight_data_by_joc.json", "w"), indent=4)
+        # # print("the joc data ",json.dumps(payload1,indent=4))
+        # print("Type of result:", type(result))
+        # print("Attributes:", dir(result))
+        # print("Internal structure:", result.__dict__)  
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________            
+        # result = await client.call_tool("navitaire_manifest_leg_key", {"Origin": "DEL", 
+        #                                                                "Destination": "BOM",
+        #                                                                "CarrierCode": "6E",
+        #                                                                "BeginDate": "2025-09-25",
+        #                                                                "Identifier": "354","FlightType": "1"})
+
+        # print("---- Full Result Object ----")
+        # print(result)
+        # print("---- Full Payload (result.data) ----")
+        # print(json.dumps(result.data, indent=4)) 
+        # json.dump(result.data, open(".json", "w"), indent=4)
+# _____________________________________________________________________________________________________
+# _____________________________________________________________________________________________________
+        # result = await client.call_tool("salesforce_query_tool")
+        # json.dump(result.data, open("salesforce_query_tool.json", "w"), indent=4)
+
+
+        # print(result)
+        # payload = result.data
+        # try:
+        #     import pandas as pd
+        #     from io import StringIO
+        #     # Ensure payload is a string
+        #     if isinstance(payload, bytes):
+        #         payload = payload.decode('utf-8')
+        #     elif not isinstance(payload, str):
+        #         payload = str(payload)
+
+        #     # Clean up excessive quotes if present
+        #     cleaned = payload.replace('"', '"').replace('\\"', '"')
+
+        #     # Add header row if missing
+        #     header = "Id,UserId,Flag,Code,Date,Type,Score,Extra\n"  # Adjust column names as needed
+        #     first_line = cleaned.split("\n", 10)[0]
+        #     if not first_line.startswith("Id,"):
+        #         cleaned = header + cleaned
+
+        #     # Try to parse as CSV
+        #     if "," in cleaned and "\n" in cleaned:
+        #         print("\n--- CSV Table Preview (last 10 rows) ---")
+        #         try:
+        #             df = pd.read_csv(StringIO(cleaned))
+        #             print(df.tail(10).to_string(index=False))
+        #         except Exception as parse_err:
+        #             print("CSV parsing error:", parse_err)
+        #             print("Raw CSV data:\n", cleaned[:1000])
+        #     else:
+        #         print("NPS data ", payload)
+        # except Exception as e:
+        #     print("Error visualizing CSV:", e)
+        #     print("NPS data ", payload)
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________           
+        # query = """SELECT *
+        # FROM `prj-ifs-pre-prd`.`bqp_ifs_flight_reports_uat`.`fr_tagging` AS t
+        # WHERE L1 LIKE '%Anahita Bedi%';"""
+
+        # result = await client.call_tool("bigquery_flight_report", {"query": query})
+        # payload_json = result.structured_content["result"]
+        # payload = json.loads(payload_json)
+        # print_payload_subset(payload)
+
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________                  
+        # result= await client.call_tool("navitaire_flight_search",{"origin": "DEL", "destination": "BOM"})
+        # json.dump(result, open("fls.json", "w"))
+
+        # print(result)
+        # payload = result.data
+        # print_payload_subset(payload)
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________                  
+        # result = await client.call_tool("snowflake_survey_salesforce", {
+        #     "query": "SELECT * FROM SILVER.salesforce.V_SALESFORCE_SURVEY",
+        #     # "query": "SELECT * FROM SILVER.CDP.V_TB_BOOKINGATTRIBUTES",
+        #     "limit":10
+        # })
+        # print(result.data)
+
+#_____________________________________________________________________________________________
+#_____________________________________________________________________________________________             
+        #     result = await client.call_tool(
+        #         "flight_schedule_data",
+        #         {"input": "6350 2025-11-11 DEL"}  # add startStation at the end if needed
+        #     )
+        #     print(result)
+        #     print("---- flight_schedule_data result ----")
+        #     print("success:", result.data.get("success"))
+        #     print("match_count:", result.data.get("match_count"))
+        #     print("single flight object:")
+
+#_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________                   
+
+        # Test the new missing_flight_reports tool
+        # result = await client.call_tool("missing_flight_reports", {
+        #     "startDateTime": "2025-11-03",
+        #     "endDateTime": "2025-11-03",  
+        #     "startStation": "DEL"
+        # })
+        # print("---- Missing Flight Reports Result ----")
+        # payload = result.data
+        # print_payload_subset(payload)
+
+        #_____________________________________________________________________________________________________
+#_____________________________________________________________________________________________________                   
+
+        # result = await client.call_tool("missing_flight_report_db", {
+        #     "startDateTime": "2025-02-10T00:00",
+        #     "endDateTime": "2025-02-10T23:59"        })
+        # print("---- Missing Flight Report DB Result ----")
+        # payload = result.data
+        # print_payload_subset(payload)
+
+# _____________________________________________________________________________________________________
+
+#         # _____________________________________________________________________________________________________
+
+
+        # result = await client.call_tool("flight_delay_analysis", { "startDateTime": "2026-03-10T00:00",
+        #         "endDateTime": "2026-03-10T00:30",
+        #         "flight_count": 10})
+        # json.dump(result.data, open("flight_delay_analysis.json", "w"), indent=4)
+
+#________________________________________________________________________________________________
+
+#________________________________________________________________________________________________
+#________________________________________________________________________________________________
+
+        # result = await client.call_tool("aims_crew_category", {"id": "2281", "active": 1, "catid": "70"})
+        # payload = result.data
+        # print_payload_subset(payload)
+
+#________________________________________________________________________________________________
+
+        # --- CLMS: SHOW ALL TABLES (READ) ---
+        result = await client.call_tool("clms", {
+            "action": "sql_query",
+            "payload": {
+                "query": (
+                    "SELECT TABLE_SCHEMA, TABLE_NAME "
+                    "FROM INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_TYPE='BASE TABLE' "
+                    "ORDER BY TABLE_SCHEMA, TABLE_NAME"
+                ),
+                "limit": 100000,
+                "as_csv": False
+            }
+        })
+        payload = getattr(result, "structured_content", None) or getattr(result, "data", None)
+        print_payload_subset(payload)
+
+#________________________________________________________________________________________________
+
+async def main():
+    await call_tool()
+
+asyncio.run(main())
