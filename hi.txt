@@ -1,75 +1,141 @@
-📋 Your Use Case Summary
-Your agent:
- 
-Triggers on incoming emails about URTI leave updates for crew
-Extracts IGA number, Crew name, From Date, To Date for URTI leave
-Needs to verify URTI leave eligibility, pending leaves, and existing SL/PL conflicts
-Updates the database accordingly
- 
--------------------------------------------------
-🔍 RELEVANT TABLES FOR READING (Fetch APIs)
-1. Core Crew & Identification Tables
-Table Name	Purpose for Your Use Case	Key Columns
-M_CLMS_Crew	Master crew table -> Validate IGA number (CrewID), get crew details, check eligibility status, base assignment	CrewID, CrewName, Email, Designation, Base, DOJ, Active, Status, LeaveTypeId
-M_LeaveYear ->	Determine current leave year for balance calculations	LeaveYearId, LeaveYearStartDate, LeaveYearEndDate, IsActive
-M_LMS_LeaveType->	Get LeaveTypeID for URTI, SL, PL	LeaveTypeID, LeaveType, Description
-M_LMS_StatusType->	Status codes for leave requests (Pending, Approved, etc.)	StatusTypeID, StatusType
- 
-2. Leave Balance & Eligibility Tables
-Table Name	Purpose for Your Use Case	Key Columns
-M_CLMS_LeaveBalance	Critical - Check current URTI/SL/PL balance for the crew member	CrewID, LeaveTypeID, Balance, LeaveYearId
-T_Crew_Leaves_Allocation	Annual leave allocations - verify total entitled leaves	Crewid, LeaveTypeId, LeavesAllotted, LeaveYearId, IsActive
-CrewBalanceUpdateByScheduler	Track SL and URTI balance changes, eligibility context	crewID, OldURTIBalance, updatedURTIBalance, OldSLBalance, updatedSLBalance, EligibleMonths, LeaveYearID
- 
-3. Existing Leave Request Tables (Check Conflicts)
-Table Name	Purpose for Your Use Case	Key Columns
-T_CLMS_LeaveReqMaster	Check if SL/PL already exists for the requested dates	CrewID, LeaveTypeid, StatusTypeID, FromDT, ToDt, LeaveDetailID
-T_CLMS_LeaveReqDetail	Detailed breakdown of existing leave requests	LeaveDetailID, LeaveTypeID, NoOfLeaves, Balance, FromDt, ToDt
-T_Crew_LeaveYear	Map crew to leave year, track base changes	Crewid, LeaveYearId, Curr_Base, Suggested_SL, IsActive
- 
-4. Supporting/Reference Tables
-Table Name	Purpose for Your Use Case	Key Columns
-M_CLMS_GNDCODE	Ground codes for leave/duty activities	ID, Code
-SickLeave_Email	Base-wise email IDs for sick leave notifications	Base, EmailID
-M_CLMS_BaseEmail	Email distribution for notifications	Base, Email, CCEmail
- 
-✏️ RELEVANT TABLES FOR UPDATING (Update APIs)
-Table Name	Update Purpose	Key Columns to Update
-T_CLMS_LeaveReqMaster	INSERT new URTI leave request OR UPDATE existing conflicting SL/PL	CrewID, LeaveTypeid, StatusTypeID, FromDT, ToDt, RequestedDate, CrewComment, ActionDate
-T_CLMS_LeaveReqDetail	INSERT leave breakup details OR UPDATE if modifying existing	LeaveDetailID, LeaveTypeID, NoOfLeaves, Balance, CurrentLeave, FromDt, ToDt
-M_CLMS_LeaveBalance	UPDATE leave balance after approval/change	CrewID, LeaveTypeID, Balance, LeaveYearId
-CrewBalanceUpdateByScheduler	INSERT record to track URTI/SL balance updates	crewID, OldURTIBalance, updatedURTIBalance, UpdatedTime, LeaveYearID
-T_CLMS_GNDCodes	INSERT/UPDATE ground code transactions if needed	EMPNO, GNDACTCODE, STARTTIME, ENDTIME, ApprovedStatus
-🔄 Workflow & Table Usage Flow
-┌─────────────────────────────────────────────────────────────────┐
-│  STEP 1: VALIDATE CREW                                          │
-│  READ: M_CLMS_Crew (by IGA/CrewID) → Get crew details, base    │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  STEP 2: GET LEAVE CONTEXT                                      │
-│  READ: M_LeaveYear → Current active leave year                  │
-│  READ: M_LMS_LeaveType → Get LeaveTypeID for URTI, SL, PL      │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  STEP 3: CHECK ELIGIBILITY & BALANCE                            │
-│  READ: M_CLMS_LeaveBalance → Current URTI balance              │
-│  READ: T_Crew_Leaves_Allocation → Total URTI entitlement       │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  STEP 4: CHECK CONFLICTS                                        │
-│  READ: T_CLMS_LeaveReqMaster → Any SL/PL in date range?        │
-│  READ: T_CLMS_LeaveReqDetail → Details of conflicting leaves   │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  STEP 5: UPDATE DATABASE                                        │
-│  UPDATE: T_CLMS_LeaveReqMaster → Cancel/modify conflicting     │
-│  INSERT: T_CLMS_LeaveReqMaster → New URTI request              │
-│  INSERT: T_CLMS_LeaveReqDetail → URTI leave details            │
-│  UPDATE: M_CLMS_LeaveBalance → Adjust URTI/SL/PL balance       │
-│  INSERT: CrewBalanceUpdateByScheduler → Log balance change     │
-└─────────────────────────────────────────────────────────────────┘
 -------------------------------------------------------------------------------
+
+📌 Summary: Tables for Your APIs
+
+READ APIs (7 Primary Tables)
+
+M_CLMS_Crew - Crew validation
+
+M_LeaveYear - Leave year context
+
+M_LMS_LeaveType - Leave type IDs
+
+M_LMS_StatusType - Status codes
+
+M_CLMS_LeaveBalance - Current balances
+
+T_CLMS_LeaveReqMaster - Existing requests
+
+T_Crew_Leaves_Allocation - Entitlements
+
+UPDATE APIs (4-5 Primary Tables)
+
+T_CLMS_LeaveReqMaster - Create/modify requests
+
+T_CLMS_LeaveReqDetail - Request details
+
+M_CLMS_LeaveBalance - Update balances
+
+CrewBalanceUpdateByScheduler - Log changes
+
+T_CLMS_GNDCodes (if ground code tracking needed)
+ 
+ 
+Relevant Tables for READ/FETCH APIs for URTI Leave Agent
+
+Based on your use case and the database schema in your Excel file, here are the tables you need for building READ/FETCH APIs:
+ 
+📖 Tables for READ APIs
+ 
+1. Core Crew Identification & Validation
+
+Table Name	Purpose	Key Columns to Fetch
+
+M_CLMS_Crew	Validate IGA number, get crew details, check active status, base assignment	CrewID, CrewName, Email, Designation, Base, DOJ, Active, Status, LeaveTypeId
+ 
+2. Leave Configuration & Reference Tables
+
+Table Name	    Purpose	    Key Columns to Fetch
+
+M_LeaveYear->	Get current active leave year for balance calculations	LeaveYearId, LeaveYearStartDate, LeaveYearEndDate, IsActive
+
+M_LMS_LeaveType->	Get LeaveTypeID for URTI, SL (Sick Leave), PL (Privileged Leave)	LeaveTypeID, LeaveType, Description
+
+M_LMS_StatusType	Get status codes (Pending, Approved, Rejected, etc.)	StatusTypeID, StatusType
+ 
+3. Leave Balance & Eligibility Tables
+
+Table Name	 Purpose	Key Columns to Fetch
+
+M_CLMS_LeaveBalance	 Critical - Check current URTI/SL/PL balance for the crew	BalanceID, CrewID, LeaveTypeID, Balance, LeaveYearId
+
+T_Crew_Leaves_Allocation	Get total annual leave entitlement/allocation	Crewid, LeaveTypeId, LeavesAllotted, LeaveYearId, IsActive
+
+CrewBalanceUpdateByScheduler	Track historical SL/URTI balance changes, eligibility months	crewID, OldURTIBalance, updatedURTIBalance, OldSLBalance, updatedSLBalance, EligibleMonths, LeaveYearID
+ 
+4. Existing Leave Requests (Check Conflicts with SL/PL)
+
+Table Name	Purpose	Key Columns to Fetch
+
+T_CLMS_LeaveReqMaster	Check if SL/PL already marked for requested date range	LeaveDetailID, CrewID, LeaveTypeid, StatusTypeID, FromDT, ToDt, RequestedDate
+
+T_CLMS_LeaveReqDetail	Get detailed breakdown of existing leave requests	LeaveReqSubId, LeaveDetailID, LeaveTypeID, NoOfLeaves, Balance, FromDt, ToDt
+ 
+5. Crew-Leave Year Mapping
+
+Table Name	   Purpose	Key Columns to Fetch
+
+T_Crew_LeaveYear	Map crew to leave year, track base changes/transitions	Crewid, LeaveYearId, Curr_Base, Pre_Base, Suggested_SL, IsActive
+ 
+6. Supporting/Reference Tables
+
+Table Name	Purpose	Key Columns to Fetch
+
+M_CLMS_GNDCODE	Ground codes for leave activities (if needed for validation)	ID, Code
+
+SickLeave_Email	Base-wise email IDs for notifications	Base, EmailID
+ 
+📋 Summary: 11 Tables for READ APIs
+
+#	Table Name	API Purpose
+
+1	M_CLMS_Crew	Validate crew by IGA number
+
+2	M_LeaveYear	Get active leave year
+
+3	M_LMS_LeaveType	Get leave type IDs (URTI, SL, PL)
+
+4	M_LMS_StatusType	Get status codes
+
+5	M_CLMS_LeaveBalance	Get current leave balances
+
+6	T_Crew_Leaves_Allocation	Get leave entitlements
+
+7	CrewBalanceUpdateByScheduler	Get balance history/eligibility
+
+8	T_CLMS_LeaveReqMaster	Check existing leave requests
+
+9	T_CLMS_LeaveReqDetail	Get leave request details
+
+10	T_Crew_LeaveYear	Get crew-leave year mapping
+
+11	SickLeave_Email	Get notification emails
+
+🔗 Key Relationships for JOINs in Your APIs
+
+Based on the 'Tables Relationship' sheet:
+ 
+M_CLMS_Crew.CrewID ──────┬──► M_CLMS_LeaveBalance.CrewID
+
+                         ├──► T_CLMS_LeaveReqMaster.CrewID
+
+                         ├──► T_Crew_Leaves_Allocation.Crewid
+
+                         ├──► T_Crew_LeaveYear.Crewid
+
+                         └──► CrewBalanceUpdateByScheduler.crewID
+ 
+M_LeaveYear.LeaveYearId ─┬──► M_CLMS_LeaveBalance.LeaveYearId
+
+                         ├──► T_Crew_Leaves_Allocation.LeaveYearId
+
+                         └──► CrewBalanceUpdateByScheduler.LeaveYearID
+ 
+M_LMS_LeaveType.LeaveTypeID ──► M_CLMS_LeaveBalance.LeaveTypeID
+
+                              ► T_CLMS_LeaveReqMaster.LeaveTypeid
+
+                              ► T_CLMS_LeaveReqDetail.LeaveTypeID
+ 
+T_CLMS_LeaveReqMaster.LeaveDetailID ──► T_CLMS_LeaveReqDetail.LeaveDetailID
+ 
