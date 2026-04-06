@@ -1,141 +1,131 @@
--------------------------------------------------------------------------------
+(venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation>python main.py
 
-📌 Summary: Tables for Your APIs
+======================================================================
+  INDIGO IFS — CREW RELOCATION PIPELINE
+======================================================================
 
-READ APIs (7 Primary Tables)
+######################################################################
+  STEP 1 — EMAIL PARSING
+######################################################################
 
-M_CLMS_Crew - Crew validation
+Parsing tentative mail...
 
-M_LeaveYear - Leave year context
+============================================================
+  Batch 1061 | TENTATIVE | 2026-02-15
+  From: "Magrete Lepcha (ifly,ISC)" <Magrete.Lepcha@goIndiGo.in>
+============================================================
 
-M_LMS_LeaveType - Leave type IDs
+KEY DATES
+  Graduation            : 20-Feb-2026
+  IFS Office Duty       : 21-Feb-2026
+  Relocation → Hometown : 22-Feb-2026  [Day 1 — RLL]
+  Relocation → Base     : 24-Feb-2026      [Day 3 — RLLH]
+  Fam Flight 1          : 25-Feb-2026
+  Fam Flight 2          : 26-Feb-2026
 
-M_LMS_StatusType - Status codes
+CREW (25 members)
+  IGA       Base Hometown  Option     Accom   Name
+  ----------------------------------------------------------------------
+  96955      BOM    BHO  Hometown   YES     Shruti Nawathey
+  96985      BLR    IXB  Hometown   YES     Simran Tamang
+  96989      HYD    IXB  Hometown   YES     Siona Tamang
+  96978      BLR    IXB  Hometown   YES     Sumnima Subba
+  96962      BLR    IXB  Hometown   YES     Sunaina Katwal
+  96959      BLR    IMF  Hometown   YES     Tangyaongamla Jajo TK
+  96965      BLR    DEL  Direct     YES     Tanu
+  96946      BLR    CCU  Hometown   YES     Tasu Sharma
+  96986      BLR    DMU  Hometown   YES     Tekasungla
+  96973      MAA    PNQ  Hometown   YES     Utkarsha Vijay Patole
+  96977      BLR    DEL  Direct     YES     Jyoti
+  96941      BOM    DEL  Direct     YES     Khushboo Pandit
+  95985      BOM    CCU  Hometown   YES     Ananya , Nundun
+  96995      BOM    IXR  Hometown   YES     Shruti
+  96675      BLR    DMU  Hometown   YES     T Muthela Sangtam
+  96640      BOM    PNQ  Hometown   YES     Nayab Aabid Dalait
+  94247      HYD    DEL  Direct     YES     Aarya , Saxena
+  95799      BOM    DMU  Hometown   YES     Kithiyala Changkiri
+  95693      BOM    VNS  Hometown   YES     Kumari Niharika
+  96322      BLR    IXB  Hometown   YES     Jasheka Limboo
+  96020      BLR    CCU  Hometown   YES     Swarnima kumud minj
+  96131      BLR    GAU  Hometown   YES     Yearfan , Nazrin
+  96416      BLR    DEL  Direct     YES     Snehil Mishra  ⚠ hometown note: DEL(on 1st relocation)
+  96448      LKO    LKO  Hometown   NO      Nandini Garg  ⚠ wants_hometown note: on 1st relocation
+  95770      BLR    DMU  Hometown   YES     Elisibha Sodari
 
-M_CLMS_LeaveBalance - Current balances
+Parsing final mail...
 
-T_CLMS_LeaveReqMaster - Existing requests
+============================================================
+  Batch 1061 | FINAL | 2026-02-20
+  From: "Magrete Lepcha (ifly,ISC)" <Magrete.Lepcha@goIndiGo.in>
+============================================================
 
-T_Crew_Leaves_Allocation - Entitlements
+KEY DATES
+  Graduation            : 20-Feb-2026
+  IFS Office Duty       : 21-Feb-2026
+  Relocation → Hometown : 22-Feb-2026  [Day 1 — RLL]
+  Relocation → Base     : 24-Feb-2026      [Day 3 — RLLH]
+  Fam Flight 1          : 25-Feb-2026
+  Fam Flight 2          : 26-Feb-2026
 
-UPDATE APIs (4-5 Primary Tables)
+CREW (23 members)
+  IGA       Base Hometown  Option     Accom   Name
+  ----------------------------------------------------------------------
+  96955      BOM    BHO  Hometown   YES     Shruti Nawathey
+  96985      BLR    IXB  Hometown   YES     Simran Tamang
+  96989      HYD    IXB  Hometown   YES     Siona Tamang
+  96978      BLR    IXB  Hometown   YES     Sumnima Subba
+  96962      BLR    IXB  Hometown   YES     Sunaina Katwal
+  96965      BLR    DEL  Direct     YES     Tanu
+  96946      BLR    CCU  Hometown   YES     Tasu Sharma
+  96973      MAA    PNQ  Hometown   YES     Utkarsha Vijay Patole
+  96977      BLR    DEL  Direct     YES     Jyoti
+  96941      BOM    DEL  Direct     YES     Khushboo Pandit
+  95985      BOM    CCU  Hometown   YES     Ananya , Nundun
+  96995      BOM    IXR  Hometown   YES     Shruti
+  96675      BLR    DMU  Hometown   YES     T Muthela Sangtam
+  96640      BOM    PNQ  Hometown   YES     Nayab Aabid Dalait
+  94247      HYD    DEL  Direct     YES     Aarya , Saxena
+  95799      BOM    DMU  Hometown   YES     Kithiyala Changkiri
+  95693      BOM    VNS  Hometown   YES     Kumari Niharika
+  96322      BLR    IXB  Hometown   YES     Jasheka Limboo
+  96020      BLR    CCU  Hometown   YES     Swarnima kumud minj
+  96131      BLR    GAU  Hometown   YES     Yearfan , Nazrin
+  96416      BLR    DEL  Direct     YES     Snehil Mishra  ⚠ hometown note: DEL(on 1st relocation)
+  96448      LKO    LKO  Hometown   NO      Nandini Garg  ⚠ wants_hometown note: on 1st relocation
+  95770      BLR    DMU  Hometown   YES     Elisibha Sodari
 
-T_CLMS_LeaveReqMaster - Create/modify requests
+HOLD LIST (2 crew — DO NOT ROUTE)
+  IGA 96986 | Tekasungla | BLR | Reason: Skin
+  IGA 96959 | Tangyaongamla | BLR | Reason: Skin
 
-T_CLMS_LeaveReqDetail - Request details
+######################################################################
+  STEP 2 — DIFF: TENTATIVE vs FINAL
+######################################################################
 
-M_CLMS_LeaveBalance - Update balances
+============================================================
+  DIFF: TENTATIVE → FINAL
+============================================================
 
-CrewBalanceUpdateByScheduler - Log changes
+⚠ MOVED TO HOLD (2 crew):
+    IGA 96959 | Tangyaongamla | Reason: Skin
+    IGA 96986 | Tekasungla | Reason: Skin
+Traceback (most recent call last):
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 175, in <module>
+    asyncio.run(main())
+  File "C:\Program Files\Python312\Lib\asyncio\runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 687, in run_until_complete  
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 156, in main
+    step_diff(tentative, final)
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 100, in step_diff
+    if diff.hold or diff.removed or diff.base_changed or diff.option_changed:
+       ^^^^^^^^^
+AttributeError: 'DiffResult' object has no attribute 'hold'
 
-T_CLMS_GNDCodes (if ground code tracking needed)
- 
- 
-Relevant Tables for READ/FETCH APIs for URTI Leave Agent
-
-Based on your use case and the database schema in your Excel file, here are the tables you need for building READ/FETCH APIs:
- 
-📖 Tables for READ APIs
- 
-1. Core Crew Identification & Validation
-
-Table Name	Purpose	Key Columns to Fetch
-
-M_CLMS_Crew	Validate IGA number, get crew details, check active status, base assignment	CrewID, CrewName, Email, Designation, Base, DOJ, Active, Status, LeaveTypeId
- 
-2. Leave Configuration & Reference Tables
-
-Table Name	    Purpose	    Key Columns to Fetch
-
-M_LeaveYear->	Get current active leave year for balance calculations	LeaveYearId, LeaveYearStartDate, LeaveYearEndDate, IsActive
-
-M_LMS_LeaveType->	Get LeaveTypeID for URTI, SL (Sick Leave), PL (Privileged Leave)	LeaveTypeID, LeaveType, Description
-
-M_LMS_StatusType	Get status codes (Pending, Approved, Rejected, etc.)	StatusTypeID, StatusType
- 
-3. Leave Balance & Eligibility Tables
-
-Table Name	 Purpose	Key Columns to Fetch
-
-M_CLMS_LeaveBalance	 Critical - Check current URTI/SL/PL balance for the crew	BalanceID, CrewID, LeaveTypeID, Balance, LeaveYearId
-
-T_Crew_Leaves_Allocation	Get total annual leave entitlement/allocation	Crewid, LeaveTypeId, LeavesAllotted, LeaveYearId, IsActive
-
-CrewBalanceUpdateByScheduler	Track historical SL/URTI balance changes, eligibility months	crewID, OldURTIBalance, updatedURTIBalance, OldSLBalance, updatedSLBalance, EligibleMonths, LeaveYearID
- 
-4. Existing Leave Requests (Check Conflicts with SL/PL)
-
-Table Name	Purpose	Key Columns to Fetch
-
-T_CLMS_LeaveReqMaster	Check if SL/PL already marked for requested date range	LeaveDetailID, CrewID, LeaveTypeid, StatusTypeID, FromDT, ToDt, RequestedDate
-
-T_CLMS_LeaveReqDetail	Get detailed breakdown of existing leave requests	LeaveReqSubId, LeaveDetailID, LeaveTypeID, NoOfLeaves, Balance, FromDt, ToDt
- 
-5. Crew-Leave Year Mapping
-
-Table Name	   Purpose	Key Columns to Fetch
-
-T_Crew_LeaveYear	Map crew to leave year, track base changes/transitions	Crewid, LeaveYearId, Curr_Base, Pre_Base, Suggested_SL, IsActive
- 
-6. Supporting/Reference Tables
-
-Table Name	Purpose	Key Columns to Fetch
-
-M_CLMS_GNDCODE	Ground codes for leave activities (if needed for validation)	ID, Code
-
-SickLeave_Email	Base-wise email IDs for notifications	Base, EmailID
- 
-📋 Summary: 11 Tables for READ APIs
-
-#	Table Name	API Purpose
-
-1	M_CLMS_Crew	Validate crew by IGA number
-
-2	M_LeaveYear	Get active leave year
-
-3	M_LMS_LeaveType	Get leave type IDs (URTI, SL, PL)
-
-4	M_LMS_StatusType	Get status codes
-
-5	M_CLMS_LeaveBalance	Get current leave balances
-
-6	T_Crew_Leaves_Allocation	Get leave entitlements
-
-7	CrewBalanceUpdateByScheduler	Get balance history/eligibility
-
-8	T_CLMS_LeaveReqMaster	Check existing leave requests
-
-9	T_CLMS_LeaveReqDetail	Get leave request details
-
-10	T_Crew_LeaveYear	Get crew-leave year mapping
-
-11	SickLeave_Email	Get notification emails
-
-🔗 Key Relationships for JOINs in Your APIs
-
-Based on the 'Tables Relationship' sheet:
- 
-M_CLMS_Crew.CrewID ──────┬──► M_CLMS_LeaveBalance.CrewID
-
-                         ├──► T_CLMS_LeaveReqMaster.CrewID
-
-                         ├──► T_Crew_Leaves_Allocation.Crewid
-
-                         ├──► T_Crew_LeaveYear.Crewid
-
-                         └──► CrewBalanceUpdateByScheduler.crewID
- 
-M_LeaveYear.LeaveYearId ─┬──► M_CLMS_LeaveBalance.LeaveYearId
-
-                         ├──► T_Crew_Leaves_Allocation.LeaveYearId
-
-                         └──► CrewBalanceUpdateByScheduler.LeaveYearID
- 
-M_LMS_LeaveType.LeaveTypeID ──► M_CLMS_LeaveBalance.LeaveTypeID
-
-                              ► T_CLMS_LeaveReqMaster.LeaveTypeid
-
-                              ► T_CLMS_LeaveReqDetail.LeaveTypeID
- 
-T_CLMS_LeaveReqMaster.LeaveDetailID ──► T_CLMS_LeaveReqDetail.LeaveDetailID
- 
+(venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation>       
