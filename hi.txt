@@ -1,114 +1,80 @@
-(venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation>python main.py
-
-======================================================================
-  INDIGO IFS — CREW RELOCATION PIPELINE
-======================================================================
-
-######################################################################
-  STEP 1 — EMAIL PARSING
-######################################################################
-
-Parsing tentative mail...
-
-============================================================
-  Batch 1061 | TENTATIVE | 2026-02-15
-  From: "Magrete Lepcha (ifly,ISC)" <Magrete.Lepcha@goIndiGo.in>
-============================================================
-
-KEY DATES
-  Graduation            : 20-Feb-2026
-  IFS Office Duty       : 21-Feb-2026
-  Relocation → Hometown : 22-Feb-2026  [Day 1 — RLL]
-  Relocation → Base     : 24-Feb-2026      [Day 3 — RLLH]
-  Fam Flight 1          : 25-Feb-2026
-  Fam Flight 2          : 26-Feb-2026
-
-CREW (25 members)
-  IGA       Base Hometown  Option     Accom   Name
-  ----------------------------------------------------------------------
-  96955      BOM    BHO  Hometown   YES     Shruti Nawathey
-  96985      BLR    IXB  Hometown   YES     Simran Tamang
-  96989      HYD    IXB  Hometown   YES     Siona Tamang
-  96978      BLR    IXB  Hometown   YES     Sumnima Subba
-  96962      BLR    IXB  Hometown   YES     Sunaina Katwal
-  96959      BLR    IMF  Hometown   YES     Tangyaongamla Jajo TK
-  96965      BLR    DEL  Direct     YES     Tanu
-  96946      BLR    CCU  Hometown   YES     Tasu Sharma
-  96986      BLR    DMU  Hometown   YES     Tekasungla
-  96973      MAA    PNQ  Hometown   YES     Utkarsha Vijay Patole
-  96977      BLR    DEL  Direct     YES     Jyoti
-  96941      BOM    DEL  Direct     YES     Khushboo Pandit
-  95985      BOM    CCU  Hometown   YES     Ananya , Nundun
-  96995      BOM    IXR  Hometown   YES     Shruti
-  96675      BLR    DMU  Hometown   YES     T Muthela Sangtam
-  96640      BOM    PNQ  Hometown   YES     Nayab Aabid Dalait
-  94247      HYD    DEL  Direct     YES     Aarya , Saxena
-  95799      BOM    DMU  Hometown   YES     Kithiyala Changkiri
-  95693      BOM    VNS  Hometown   YES     Kumari Niharika
-  96322      BLR    IXB  Hometown   YES     Jasheka Limboo
-  96020      BLR    CCU  Hometown   YES     Swarnima kumud minj
-  96131      BLR    GAU  Hometown   YES     Yearfan , Nazrin
-  96416      BLR    DEL  Direct     YES     Snehil Mishra  ⚠ hometown note: DEL(on 1st relocation)
-  96448      LKO    LKO  Hometown   NO      Nandini Garg  ⚠ wants_hometown note: on 1st relocation
-  95770      BLR    DMU  Hometown   YES     Elisibha Sodari
-
-Parsing final mail...
-
-============================================================
-  Batch 1061 | FINAL | 2026-02-20
-  From: "Magrete Lepcha (ifly,ISC)" <Magrete.Lepcha@goIndiGo.in>
-============================================================
-
-KEY DATES
-  Graduation            : 20-Feb-2026
-  IFS Office Duty       : 21-Feb-2026
-  Relocation → Hometown : 22-Feb-2026  [Day 1 — RLL]
-  Relocation → Base     : 24-Feb-2026      [Day 3 — RLLH]
-  Fam Flight 1          : 25-Feb-2026
-  Fam Flight 2          : 26-Feb-2026
-
-CREW (23 members)
-  IGA       Base Hometown  Option     Accom   Name
-  ----------------------------------------------------------------------
-  96955      BOM    BHO  Hometown   YES     Shruti Nawathey
-  96985      BLR    IXB  Hometown   YES     Simran Tamang
-  96989      HYD    IXB  Hometown   YES     Siona Tamang
-  96978      BLR    IXB  Hometown   YES     Sumnima Subba
-  96962      BLR    IXB  Hometown   YES     Sunaina Katwal
-  96965      BLR    DEL  Direct     YES     Tanu
-  96946      BLR    CCU  Hometown   YES     Tasu Sharma
-  96973      MAA    PNQ  Hometown   YES     Utkarsha Vijay Patole
-  96977      BLR    DEL  Direct     YES     Jyoti
-  96941      BOM    DEL  Direct     YES     Khushboo Pandit
-  95985      BOM    CCU  Hometown   YES     Ananya , Nundun
-  96995      BOM    IXR  Hometown   YES     Shruti
-  96675      BLR    DMU  Hometown   YES     T Muthela Sangtam
-  96640      BOM    PNQ  Hometown   YES     Nayab Aabid Dalait
-  94247      HYD    DEL  Direct     YES     Aarya , Saxena
-  95799      BOM    DMU  Hometown   YES     Kithiyala Changkiri
-  95693      BOM    VNS  Hometown   YES     Kumari Niharika
-  96322      BLR    IXB  Hometown   YES     Jasheka Limboo
-  96020      BLR    CCU  Hometown   YES     Swarnima kumud minj
-  96131      BLR    GAU  Hometown   YES     Yearfan , Nazrin
-  96416      BLR    DEL  Direct     YES     Snehil Mishra  ⚠ hometown note: DEL(on 1st relocation)
-  96448      LKO    LKO  Hometown   NO      Nandini Garg  ⚠ wants_hometown note: on 1st relocation
-  95770      BLR    DMU  Hometown   YES     Elisibha Sodari
-
-HOLD LIST (2 crew — DO NOT ROUTE)
-  IGA 96986 | Tekasungla | BLR | Reason: Skin
-  IGA 96959 | Tangyaongamla | BLR | Reason: Skin
-
-######################################################################
-  STEP 2 — DIFF: TENTATIVE vs FINAL
-######################################################################
-
-============================================================
-  DIFF: TENTATIVE → FINAL
-============================================================
-
 ⚠ MOVED TO HOLD (2 crew):
     IGA 96959 | Tangyaongamla | Reason: Skin
     IGA 96986 | Tekasungla | Reason: Skin
+
+Differences found above. Continue with final list? [y/n]: y
+
+=== MCP Environment ===
+  1. Local        http://localhost:8080/mcp
+  2. Development  https://6e-mcp-server-core-dev.goindigo.in/mcp
+  3. UAT          https://6e-mcp-server-core-uat.goindigo.in/mcp
+  4. Production   (not configured)
+  5. APIM         (not configured)
+
+Select environment (1-5): 2
+  Using: https://6e-mcp-server-core-dev.goindigo.in/mcp
+
+######################################################################
+  STEP 3 — BASE MAPPING (AIMS via crew_info_by_iga)
+######################################################################
+
+Base mapping 23 crew (skipping 2 on hold)...
+
+=================================================================
+  BASE MAPPING REPORT — Batch 1061
+=================================================================
+
+  Total: 23  |  OK: 23  |  Mismatches: 0  |  Errors: 0
+
+  IGA      Email Base AIMS Base  Status        Name
+  -----------------------------------------------------------------
+  96955           BOM       BOM  OK            Shruti Nawathey
+  96985           BLR       BLR  OK            Simran Tamang
+  96989           HYD       HYD  OK            Siona Tamang
+  96978           BLR       BLR  OK            Sumnima Subba
+  96962           BLR       BLR  OK            Sunaina Katwal
+  96965           BLR       BLR  OK            Tanu
+  96946           BLR       BLR  OK            Tasu Sharma
+  96973           MAA       MAA  OK            Utkarsha Vijay Patole
+  96977           BLR       BLR  OK            Jyoti
+  96941           BOM       BOM  OK            Khushboo Pandit
+  95985           BOM       BOM  OK            Ananya , Nundun
+  96995           BOM       BOM  OK            Shruti
+  96675           BLR       BLR  OK            T Muthela Sangtam
+  96640           BOM       BOM  OK            Nayab Aabid Dalait
+  94247           HYD       HYD  OK            Aarya , Saxena
+  95799           BOM       BOM  OK            Kithiyala Changkiri
+  95693           BOM       BOM  OK            Kumari Niharika
+  96322           BLR       BLR  OK            Jasheka Limboo
+  96020           BLR       BLR  OK            Swarnima kumud minj
+  96131           BLR       BLR  OK            Yearfan , Nazrin
+  96416           BLR       BLR  OK            Snehil Mishra
+  96448           LKO       LKO  OK            Nandini Garg
+  95770           BLR       BLR  OK            Elisibha Sodari
+
+######################################################################
+  STEP 4 — FLIGHT ROUTING (JOC via flight_data_by_joc)
+######################################################################
+
+Flight routing 23 crew...
+  Day 1 (RLL)  : 2026-02-22
+  Day 2 (OFG)  : 2026-02-23
+  Day 3 (RLLH) : 2026-02-24
+
+  Fetching 13 unique station-day combinations...
+  [HYD 2026-02-24] → 224 flights fetched
+  [BHO 2026-02-24] → 16 flights fetched
+  [PNQ 2026-02-24] → 58 flights fetched
+  [IXB 2026-02-24] → 12 flights fetched
+  [BLR 2026-02-24] → 238 flights fetched
+  [LKO 2026-02-24] → 43 flights fetched
+  [BOM 2026-02-24] → 219 flights fetched
+  [CCU 2026-02-24] → 147 flights fetched
+  [DMU 2026-02-24] → 3 flights fetched
+  [VNS 2026-02-24] → 24 flights fetched
+  [GAU 2026-02-24] → 37 flights fetched
+  [IXR 2026-02-24] → 23 flights fetched
+  [DEL 2026-02-22] → 294 flights fetched
 Traceback (most recent call last):
   File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 175, in <module>
     asyncio.run(main())
@@ -121,11 +87,16 @@ Traceback (most recent call last):
   File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 687, in run_until_complete  
     return future.result()
            ^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 156, in main
-    step_diff(tentative, final)
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 100, in step_diff
-    if diff.hold or diff.removed or diff.base_changed or diff.option_changed:
-       ^^^^^^^^^
-AttributeError: 'DiffResult' object has no attribute 'hold'
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 166, in main
+    routing_report = await step_routing(final, verified_bases, url)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 132, in step_routing
+    report = await run_flight_routing(final, verified_bases, url)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\flight_router.py", line 275, in run_flight_routing
+    routing = CrewRouting(
+              ^^^^^^^^^^^^
+  File "<string>", line 8, in __init__
+TypeError: DayPlan.__init__() missing 2 required positional arguments: 'date' and 'code'
 
 (venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation>       
