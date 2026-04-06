@@ -1,80 +1,30 @@
-⚠ MOVED TO HOLD (2 crew):
-    IGA 96959 | Tangyaongamla | Reason: Skin
-    IGA 96986 | Tekasungla | Reason: Skin
+  Day 1 [2026-02-22] Code: RLL
+    Primary : 6E5187 DEL→DMU 04:15-07:00
+    Backup1 : — NOT FOUND —
+    Backup2 : — NOT FOUND —
 
-Differences found above. Continue with final list? [y/n]: y
+  Day 2 [2026-02-23] Code: OFG  (no routing)
 
-=== MCP Environment ===
-  1. Local        http://localhost:8080/mcp
-  2. Development  https://6e-mcp-server-core-dev.goindigo.in/mcp
-  3. UAT          https://6e-mcp-server-core-uat.goindigo.in/mcp
-  4. Production   (not configured)
-  5. APIM         (not configured)
+  Day 3 [2026-02-24] Code: RLLH
+    Primary: — NOT FOUND —
+    Backup1 : — NOT FOUND —
+    Backup2 : — NOT FOUND —
+    ⚠ No direct flights found — check connecting route or dummy needed
 
-Select environment (1-5): 2
-  Using: https://6e-mcp-server-core-dev.goindigo.in/mcp
+  Days 4-5 Code: N/A  (license/AEP check)
 
-######################################################################
-  STEP 3 — BASE MAPPING (AIMS via crew_info_by_iga)
-######################################################################
-
-Base mapping 23 crew (skipping 2 on hold)...
-
-=================================================================
-  BASE MAPPING REPORT — Batch 1061
-=================================================================
-
-  Total: 23  |  OK: 23  |  Mismatches: 0  |  Errors: 0
-
-  IGA      Email Base AIMS Base  Status        Name
-  -----------------------------------------------------------------
-  96955           BOM       BOM  OK            Shruti Nawathey
-  96985           BLR       BLR  OK            Simran Tamang
-  96989           HYD       HYD  OK            Siona Tamang
-  96978           BLR       BLR  OK            Sumnima Subba
-  96962           BLR       BLR  OK            Sunaina Katwal
-  96965           BLR       BLR  OK            Tanu
-  96946           BLR       BLR  OK            Tasu Sharma
-  96973           MAA       MAA  OK            Utkarsha Vijay Patole
-  96977           BLR       BLR  OK            Jyoti
-  96941           BOM       BOM  OK            Khushboo Pandit
-  95985           BOM       BOM  OK            Ananya , Nundun
-  96995           BOM       BOM  OK            Shruti
-  96675           BLR       BLR  OK            T Muthela Sangtam
-  96640           BOM       BOM  OK            Nayab Aabid Dalait
-  94247           HYD       HYD  OK            Aarya , Saxena
-  95799           BOM       BOM  OK            Kithiyala Changkiri
-  95693           BOM       BOM  OK            Kumari Niharika
-  96322           BLR       BLR  OK            Jasheka Limboo
-  96020           BLR       BLR  OK            Swarnima kumud minj
-  96131           BLR       BLR  OK            Yearfan , Nazrin
-  96416           BLR       BLR  OK            Snehil Mishra
-  96448           LKO       LKO  OK            Nandini Garg
-  95770           BLR       BLR  OK            Elisibha Sodari
+======================================================================
+  ⚠ ACTION REQUIRED — 5 crew with missing flights
+======================================================================
+  IGA 96675 | T Muthela Sangtam: Day3 no flight
+  IGA 96640 | Nayab Aabid Dalait: Day3 no flight
+  IGA 95799 | Kithiyala Changkiri: Day3 no flight
+  IGA 96448 | Nandini Garg: Day3 no flight
+  IGA 95770 | Elisibha Sodari: Day3 no flight
 
 ######################################################################
-  STEP 4 — FLIGHT ROUTING (JOC via flight_data_by_joc)
+  STEP 5 — EXPORT
 ######################################################################
-
-Flight routing 23 crew...
-  Day 1 (RLL)  : 2026-02-22
-  Day 2 (OFG)  : 2026-02-23
-  Day 3 (RLLH) : 2026-02-24
-
-  Fetching 13 unique station-day combinations...
-  [HYD 2026-02-24] → 224 flights fetched
-  [BHO 2026-02-24] → 16 flights fetched
-  [PNQ 2026-02-24] → 58 flights fetched
-  [IXB 2026-02-24] → 12 flights fetched
-  [BLR 2026-02-24] → 238 flights fetched
-  [LKO 2026-02-24] → 43 flights fetched
-  [BOM 2026-02-24] → 219 flights fetched
-  [CCU 2026-02-24] → 147 flights fetched
-  [DMU 2026-02-24] → 3 flights fetched
-  [VNS 2026-02-24] → 24 flights fetched
-  [GAU 2026-02-24] → 37 flights fetched
-  [IXR 2026-02-24] → 23 flights fetched
-  [DEL 2026-02-22] → 294 flights fetched
 Traceback (most recent call last):
   File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 175, in <module>
     asyncio.run(main())
@@ -87,16 +37,18 @@ Traceback (most recent call last):
   File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 687, in run_until_complete  
     return future.result()
            ^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 166, in main
-    routing_report = await step_routing(final, verified_bases, url)
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 132, in step_routing
-    report = await run_flight_routing(final, verified_bases, url)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\flight_router.py", line 275, in run_flight_routing
-    routing = CrewRouting(
-              ^^^^^^^^^^^^
-  File "<string>", line 8, in __init__
-TypeError: DayPlan.__init__() missing 2 required positional arguments: 'date' and 'code'
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 169, in main
+    step_export(routing_report, OUTPUT_CSV)
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 139, in step_export
+    export_csv(routing_report, output_path)
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\flight_router.py", line 456, in export_csv
+    writer.writerows(rows)
+  File "C:\Program Files\Python312\Lib\csv.py", line 167, in writerows
+    return self.writer.writerows(map(self._dict_to_list, rowdicts))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 57: character maps to <undefined>
 
 (venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation>       
