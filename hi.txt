@@ -23,13 +23,14 @@ dotenv.load_dotenv()
 # iFly departure station (Delhi) — all Day 1 flights originate here
 IFLY_STATION = "DEL"
 
+# Day 1 — prefer early morning so crew reaches hometown with max time
+DAY1_WINDOW_START = 6    # 06:00 — earliest comfortable departure
+DAY1_WINDOW_END   = 10   # 10:00
 
-# Day 1 preferred departure window — morning, more time for crew
-DAY1_WINDOW_START = 6   # 06:00
-DAY1_WINDOW_END   = 10  # 10:00
-# Day 3 preferred departure window (local time, 24h)
-DAY3_WINDOW_START = 7   # 07:00
-DAY3_WINDOW_END   = 10  # 10:00
+# Day 3 — 7-10 AM window (earlier = crew wakes at 3-4 AM, too inconvenient)
+DAY3_WINDOW_START = 7    # 07:00 — hard minimum for primary
+DAY3_WINDOW_END   = 10   # 10:00
+DAY3_MIN_DEP      = 6    # 06:00 — absolute floor, applied to backups too
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ class FlightOption:
     arrival: str      # scheduledEndTime ISO string
 
     def display(self) -> str:
-        dep = self.departure[11:16]   # HH:MM from ISO
+        dep = self.departure[11:16]
         arr = self.arrival[11:16]
         return f"6E{self.flight_number} {self.origin}->{self.destination} {dep}-{arr}"
 
@@ -68,9 +69,9 @@ class CrewRouting:
     base: str           # AIMS-verified base
     hometown: str
     option: str         # "A" = via hometown, "B" = direct to base
-    day1: Optional[DayPlan]=None
-    day2: Optional[DayPlan]=None
-    day3: Optional[DayPlan]=None
+    day1: Optional[DayPlan] = None
+    day2: Optional[DayPlan] = None
+    day3: Optional[DayPlan] = None
     day4_5_code: str = "N/A"
 
 
@@ -87,9 +88,7 @@ class RoutingReport:
         flagged = []
         for r in self.routings:
             issues = []
-            if r.option == "A" and not r.day1.primary:
-                issues.append("Day1 no flight")
-            if r.option == "B" and not r.day1.primary:
+            if not r.day1.primary:
                 issues.append("Day1 no flight")
             if not r.day3.primary and not r.day3.dummy:
                 issues.append("Day3 no flight")
@@ -112,7 +111,7 @@ def _build_client(url: str) -> Client:
 # ---------------------------------------------------------------------------
 
 def _parse_date(date_str: str) -> str:
-    """Convert '22-Feb-2026' → '2026-02-22'."""
+    """Convert '22-Feb-2026' to '2026-02-22'."""
     return datetime.strptime(date_str.strip(), "%d-%b-%Y").strftime("%Y-%m-%d")
 
 
@@ -162,10 +161,13 @@ async def _fetch_station_day(client: Client, station: str, date_iso: str) -> lis
 
 
 def _filter_flights(flights: list, destination: str,
-                    prefer_window: tuple = None) -> list[FlightOption]:
+                    prefer_window: tuple = None,
+                    min_dep_hour: float = None) -> list:
     """
-    Filter by destination, exclude cancelled (CX), sort by departure time.
-    If prefer_window=(start_h, end_h), flights within window come first.
+    Filter by destination, exclude cancelled (CX).
+    min_dep_hour: hard floor — flights before this hour are excluded entirely.
+    prefer_window=(start_h, end_h): flights in this window come first,
+      remaining sorted by departure time after that.
     Returns list of FlightOption.
     """
     dest = destination.strip().upper()
@@ -177,6 +179,8 @@ def _filter_flights(flights: list, destination: str,
             continue
         dep = f.get("scheduledStartTime", "")
         arr = f.get("scheduledEndTime", "")
+        if min_dep_hour is not None and _time_hour(dep) < min_dep_hour:
+            continue
         candidates.append(FlightOption(
             flight_number=f["flightNumber"],
             origin=f["startStation"],
@@ -198,7 +202,7 @@ def _filter_flights(flights: list, destination: str,
     return candidates
 
 
-def _pick_flights(candidates: list[FlightOption]) -> tuple:
+def _pick_flights(candidates: list) -> tuple:
     """Return (primary, backup1, backup2) from sorted candidate list."""
     primary = candidates[0] if len(candidates) > 0 else None
     backup1 = candidates[1] if len(candidates) > 1 else None
@@ -212,17 +216,16 @@ def _pick_flights(candidates: list[FlightOption]) -> tuple:
 
 async def run_flight_routing(
     batch: RelocationBatch,
-    verified_bases: dict,        # {iga: base} from base_mapper
+    verified_bases: dict,
     mcp_url: str
 ) -> RoutingReport:
     """
     Build flight routes for all active crew.
     Makes one JOC call per unique (station, date) pair — results are cached.
     """
-    # Parse key dates
     day1_iso = _parse_date(batch.dates.relocation_hometown)
     day3_iso = _parse_date(batch.dates.relocation_base)
-    day2_iso = _add_day(day1_iso, 1)  # sanity check (should equal day3 - 1)
+    day2_iso = _add_day(day1_iso, 1)
 
     hold_igas = {h.iga for h in batch.hold}
     active_crew = [c for c in batch.crew if c.iga not in hold_igas]
@@ -232,43 +235,34 @@ async def run_flight_routing(
     print(f"  Day 2 (OFG)  : {day2_iso}")
     print(f"  Day 3 (RLLH) : {day3_iso}")
 
-    # -----------------------------------------------------------------------
     # Step 1: Identify all unique (station, date) pairs needed
-    # -----------------------------------------------------------------------
-    needed: set[tuple] = set()
-    needed.add((IFLY_STATION, day1_iso))   # Day 1: all crew depart from DEL
+    needed = set()
+    needed.add((IFLY_STATION, day1_iso))
 
     for crew in active_crew:
-        base = verified_bases.get(crew.iga, crew.base_email).upper()
+        base     = verified_bases.get(crew.iga, crew.base_email).upper()
         hometown = crew.hometown_airport.upper()
-
         if crew.wants_hometown:
-            # Option A: Day 3 departs from hometown → base
             if hometown:
                 needed.add((hometown, day3_iso))
         else:
-            # Option B: Day 3 dummy — depart from base (for RLLH dummy flight)
             if base:
                 needed.add((base, day3_iso))
 
     print(f"\n  Fetching {len(needed)} unique station-day combinations...")
 
-    # -----------------------------------------------------------------------
-    # Step 2: Fetch all concurrently and cache results
-    # -----------------------------------------------------------------------
+    # Step 2: Fetch all concurrently and cache
     client = _build_client(mcp_url)
-    cache: dict[tuple, list] = {}
+    cache = {}
 
     async with client:
         tasks = {pair: _fetch_station_day(client, pair[0], pair[1]) for pair in needed}
         results = await asyncio.gather(*tasks.values())
         for pair, result in zip(tasks.keys(), results):
             cache[pair] = result
-            print(f"  [{pair[0]} {pair[1]}] → {len(result)} flights fetched")
+            print(f"  [{pair[0]} {pair[1]}] -> {len(result)} flights fetched")
 
-    # -----------------------------------------------------------------------
     # Step 3: Build routing per crew
-    # -----------------------------------------------------------------------
     routings = []
 
     for crew in active_crew:
@@ -284,16 +278,15 @@ async def run_flight_routing(
             option=option,
         )
 
-        # --- Day 1 ---
-        if option == "A":
-            # DEL → hometown
-            dest = hometown
-        else:
-            # DEL → base (direct)
-            dest = base
+        # --- Day 1: DEL -> hometown (A) or DEL -> base (B) ---
+        dest = hometown if option == "A" else base
 
         day1_flights = cache.get((IFLY_STATION, day1_iso), [])
-        day1_candidates = _filter_flights(day1_flights, dest)
+        day1_candidates = _filter_flights(
+            day1_flights, dest,
+            prefer_window=(DAY1_WINDOW_START, DAY1_WINDOW_END),
+            min_dep_hour=DAY1_WINDOW_START,
+        )
         p, b1, b2 = _pick_flights(day1_candidates)
 
         notes1 = []
@@ -303,57 +296,40 @@ async def run_flight_routing(
             notes1.append(f"No 6-10 AM flight - earliest available: {p.departure[11:16]}")
 
         routing.day1 = DayPlan(
-            date=day1_iso,
-            code="RLL",
-            primary=p,
-            backup1=b1,
-            backup2=b2,
+            date=day1_iso, code="RLL",
+            primary=p, backup1=b1, backup2=b2,
             notes=notes1,
         )
 
-        
-        routing.day1 = DayPlan(
-            date=day1_iso,
-            code="RLL",
-            primary=p,
-            backup1=b1,
-            backup2=b2,
-            notes=(["No direct flights found — manual routing needed"] if not p else []),
-        )
-
-        # --- Day 2 ---
+        # --- Day 2: off, no routing ---
         routing.day2 = DayPlan(date=day2_iso, code="OFG")
 
         # --- Day 3 ---
         if option == "A":
-            # hometown → base (preferred 07:00-10:00)
+            # hometown -> base, preferred 7-10 AM, hard floor 6 AM
             day3_flights = cache.get((hometown, day3_iso), [])
             day3_candidates = _filter_flights(
                 day3_flights, base,
-                prefer_window=(DAY3_WINDOW_START, DAY3_WINDOW_END)
+                prefer_window=(DAY3_WINDOW_START, DAY3_WINDOW_END),
+                min_dep_hour=DAY3_MIN_DEP,
             )
             p3, b1_3, b2_3 = _pick_flights(day3_candidates)
 
             notes3 = []
             if p3 and not (DAY3_WINDOW_START <= _time_hour(p3.departure) <= DAY3_WINDOW_END):
-                notes3.append(f"No 7-10 AM flight — earliest available: {p3.departure[11:16]}")
+                notes3.append(f"No 7-10 AM flight - earliest available: {p3.departure[11:16]}")
             if not p3:
-                notes3.append("No direct flights found — check connecting route or dummy needed")
+                notes3.append("No direct flights found - check connecting route or dummy needed")
 
             routing.day3 = DayPlan(
-                date=day3_iso,
-                code="RLLH",
-                primary=p3,
-                backup1=b1_3,
-                backup2=b2_3,
+                date=day3_iso, code="RLLH",
+                primary=p3, backup1=b1_3, backup2=b2_3,
                 notes=notes3,
             )
 
         else:
-            # Option B: crew already at base — dummy flight needed for RLLH + hotel
-            # Look for any flight departing from base (for PNR chain completeness)
+            # Option B: crew already at base — dummy flight for RLLH + hotel
             day3_flights = cache.get((base, day3_iso), [])
-            # Any outbound flight from base (just need a PNR, not a real destination)
             dummy_candidates = [
                 FlightOption(
                     flight_number=f["flightNumber"],
@@ -369,11 +345,9 @@ async def run_flight_routing(
             dummy = dummy_candidates[0] if dummy_candidates else None
 
             routing.day3 = DayPlan(
-                date=day3_iso,
-                code="RLLH",
-                primary=dummy,
-                dummy=True,
-                notes=["DUMMY FLIGHT — crew already at base; attach for RLLH/hotel allotment"],
+                date=day3_iso, code="RLLH",
+                primary=dummy, dummy=True,
+                notes=["DUMMY FLIGHT - crew already at base; attach for RLLH/hotel allotment"],
             )
 
         routings.append(routing)
@@ -410,30 +384,26 @@ def _route(f: Optional[FlightOption]) -> str:
     return f"{f.origin}->{f.destination}" if f else ""
 
 
-
 def print_routing_report(report: RoutingReport):
     print(f"\n{'='*70}")
-    print(f"  FLIGHT ROUTING REPORT — {report.batch_name}")
+    print(f"  FLIGHT ROUTING REPORT - {report.batch_name}")
     print(f"{'='*70}")
 
     for r in report.routings:
-        print(f"\n  {'─'*66}")
+        print(f"\n  {'-'*66}")
         print(f"  IGA {r.iga} | {r.name}")
         print(f"  Base: {r.base} | Hometown: {r.hometown} | Option {'A (via hometown)' if r.option=='A' else 'B (direct to base)'}")
 
-        # Day 1
         d1 = r.day1
         print(f"\n  Day 1 [{d1.date}] Code: {d1.code}")
         print(f"    Primary : {_fmt(d1.primary)}")
         print(f"    Backup1 : {_fmt(d1.backup1)}")
         print(f"    Backup2 : {_fmt(d1.backup2)}")
         for n in d1.notes:
-            print(f"    ⚠ {n}")
+            print(f"    ! {n}")
 
-        # Day 2
         print(f"\n  Day 2 [{r.day2.date}] Code: {r.day2.code}  (no routing)")
 
-        # Day 3
         d3 = r.day3
         label = "DUMMY" if d3.dummy else "Primary"
         print(f"\n  Day 3 [{d3.date}] Code: {d3.code}")
@@ -442,16 +412,14 @@ def print_routing_report(report: RoutingReport):
             print(f"    Backup1 : {_fmt(d3.backup1)}")
             print(f"    Backup2 : {_fmt(d3.backup2)}")
         for n in d3.notes:
-            print(f"    ⚠ {n}")
+            print(f"    ! {n}")
 
-        # Days 4-5
         print(f"\n  Days 4-5 Code: {r.day4_5_code}  (license/AEP check)")
 
-    # Alert summary
     no_flights = report.no_flights
     if no_flights:
         print(f"\n{'='*70}")
-        print(f"  ⚠ ACTION REQUIRED — {len(no_flights)} crew with missing flights")
+        print(f"  ACTION REQUIRED - {len(no_flights)} crew with missing flights")
         print(f"{'='*70}")
         for r, issues in no_flights:
             print(f"  IGA {r.iga} | {r.name}: {', '.join(issues)}")
@@ -464,7 +432,6 @@ def export_csv(report: RoutingReport, filepath: str):
     import csv
 
     def _clean(s: str) -> str:
-        """Remove any non-ASCII characters to keep CSV clean on Windows."""
         return s.encode("ascii", "ignore").decode("ascii")
 
     rows = []
@@ -473,14 +440,11 @@ def export_csv(report: RoutingReport, filepath: str):
         is_dummy = d3.dummy
 
         rows.append({
-            # --- Crew info ---
             "IGA":                  r.iga,
             "Name":                 r.name,
             "Base (AIMS)":          r.base,
             "Hometown Airport":     r.hometown,
             "Routing Option":       "A - Via Hometown" if r.option == "A" else "B - Direct to Base",
-
-            # --- Day 1 ---
             "Day1 Date":            d1.date,
             "Day1 AIMS Code":       d1.code,
             "Day1 Primary Flight":  _flight_no(d1.primary),
@@ -493,12 +457,8 @@ def export_csv(report: RoutingReport, filepath: str):
             "Day1 Backup2 Flight":  _flight_no(d1.backup2),
             "Day1 Backup2 Route":   _route(d1.backup2),
             "Day1 Backup2 Dep":     _dep_time(d1.backup2),
-
-            # --- Day 2 ---
             "Day2 Date":            d2.date,
             "Day2 AIMS Code":       d2.code,
-
-            # --- Day 3 ---
             "Day3 Date":            d3.date,
             "Day3 AIMS Code":       d3.code,
             "Day3 Dummy Flight":    "YES" if is_dummy else "NO",
@@ -512,11 +472,7 @@ def export_csv(report: RoutingReport, filepath: str):
             "Day3 Backup2 Flight":  "" if is_dummy else _flight_no(d3.backup2),
             "Day3 Backup2 Route":   "" if is_dummy else _route(d3.backup2),
             "Day3 Backup2 Dep":     "" if is_dummy else _dep_time(d3.backup2),
-
-            # --- Days 4-5 ---
             "Day4-5 AIMS Code":     r.day4_5_code,
-
-            # --- Flags ---
             "Notes":                _clean(" | ".join(d1.notes + d3.notes)),
         })
 
@@ -533,7 +489,8 @@ def export_csv(report: RoutingReport, filepath: str):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    FINAL_MSG = r"C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\Final relocation -Batch 1061.msg"
+    FINAL_MSG  = r"C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\Final relocation -Batch 1061.msg"
+    OUTPUT_CSV = r"C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\routing_output.csv"
 
     print("Parsing final mail...")
     batch = parse_msg(FINAL_MSG)
@@ -548,4 +505,4 @@ if __name__ == "__main__":
     routing_report = asyncio.run(run_flight_routing(batch, verified, url))
     print_routing_report(routing_report)
 
-    export_csv(routing_report, r"C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\routing_output.csv")
+    export_csv(routing_report, OUTPUT_CSV)
