@@ -1,54 +1,551 @@
-  Day 1 [2026-02-22] Code: RLL
-    Primary : 6E5187 DEL→DMU 04:15-07:00
-    Backup1 : — NOT FOUND —
-    Backup2 : — NOT FOUND —
+"""
+flight_router.py
+Generates flight routes for each crew member using flight_data_by_joc.
+Applies AIMS codes (RLL / OFG / RLLH) and selects primary + 2 backup flights.
+"""
 
-  Day 2 [2026-02-23] Code: OFG  (no routing)
+import asyncio
+import httpx
+import dotenv
+import os
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Optional
 
-  Day 3 [2026-02-24] Code: RLLH
-    Primary: — NOT FOUND —
-    Backup1 : — NOT FOUND —
-    Backup2 : — NOT FOUND —
-    ⚠ No direct flights found — check connecting route or dummy needed
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 
-  Days 4-5 Code: N/A  (license/AEP check)
+from email_parser import RelocationBatch, parse_msg, print_batch
+from base_mapper import run_base_mapping, get_verified_bases, select_url, _make_httpx_client
 
-======================================================================
-  ⚠ ACTION REQUIRED — 5 crew with missing flights
-======================================================================
-  IGA 96675 | T Muthela Sangtam: Day3 no flight
-  IGA 96640 | Nayab Aabid Dalait: Day3 no flight
-  IGA 95799 | Kithiyala Changkiri: Day3 no flight
-  IGA 96448 | Nandini Garg: Day3 no flight
-  IGA 95770 | Elisibha Sodari: Day3 no flight
+dotenv.load_dotenv()
 
-######################################################################
-  STEP 5 — EXPORT
-######################################################################
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 175, in <module>
-    asyncio.run(main())
-  File "C:\Program Files\Python312\Lib\asyncio\runners.py", line 194, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 687, in run_until_complete  
-    return future.result()
-           ^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 169, in main
-    step_export(routing_report, OUTPUT_CSV)
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\main.py", line 139, in step_export
-    export_csv(routing_report, output_path)
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\flight_router.py", line 456, in export_csv
-    writer.writerows(rows)
-  File "C:\Program Files\Python312\Lib\csv.py", line 167, in writerows
-    return self.writer.writerows(map(self._dict_to_list, rowdicts))
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\encodings\cp1252.py", line 19, in encode
-    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 57: character maps to <undefined>
+# iFly departure station (Delhi) — all Day 1 flights originate here
+IFLY_STATION = "DEL"
 
-(venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation>       
+
+# Day 1 preferred departure window — morning, more time for crew
+DAY1_WINDOW_START = 6   # 06:00
+DAY1_WINDOW_END   = 10  # 10:00
+# Day 3 preferred departure window (local time, 24h)
+DAY3_WINDOW_START = 7   # 07:00
+DAY3_WINDOW_END   = 10  # 10:00
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FlightOption:
+    flight_number: int
+    origin: str
+    destination: str
+    departure: str    # scheduledStartTime ISO string
+    arrival: str      # scheduledEndTime ISO string
+
+    def display(self) -> str:
+        dep = self.departure[11:16]   # HH:MM from ISO
+        arr = self.arrival[11:16]
+        return f"6E{self.flight_number} {self.origin}->{self.destination} {dep}-{arr}"
+
+
+@dataclass
+class DayPlan:
+    date: str
+    code: str                              # RLL / OFG / RLLH / N/A
+    primary: Optional[FlightOption] = None
+    backup1: Optional[FlightOption] = None
+    backup2: Optional[FlightOption] = None
+    dummy: bool = False                    # True = dummy flight required
+    notes: list = field(default_factory=list)
+
+
+@dataclass
+class CrewRouting:
+    iga: str
+    name: str
+    base: str           # AIMS-verified base
+    hometown: str
+    option: str         # "A" = via hometown, "B" = direct to base
+    day1: Optional[DayPlan]=None
+    day2: Optional[DayPlan]=None
+    day3: Optional[DayPlan]=None
+    day4_5_code: str = "N/A"
+
+
+@dataclass
+class RoutingReport:
+    batch_name: str
+    day1_date: str
+    day3_date: str
+    routings: list = field(default_factory=list)   # list[CrewRouting]
+
+    @property
+    def no_flights(self):
+        """Crew where primary flight could not be found on any leg."""
+        flagged = []
+        for r in self.routings:
+            issues = []
+            if r.option == "A" and not r.day1.primary:
+                issues.append("Day1 no flight")
+            if r.option == "B" and not r.day1.primary:
+                issues.append("Day1 no flight")
+            if not r.day3.primary and not r.day3.dummy:
+                issues.append("Day3 no flight")
+            if issues:
+                flagged.append((r, issues))
+        return flagged
+
+
+# ---------------------------------------------------------------------------
+# MCP client
+# ---------------------------------------------------------------------------
+
+def _build_client(url: str) -> Client:
+    transport = StreamableHttpTransport(url=url, httpx_client_factory=_make_httpx_client)
+    return Client(transport=transport)
+
+
+# ---------------------------------------------------------------------------
+# Date helpers
+# ---------------------------------------------------------------------------
+
+def _parse_date(date_str: str) -> str:
+    """Convert '22-Feb-2026' → '2026-02-22'."""
+    return datetime.strptime(date_str.strip(), "%d-%b-%Y").strftime("%Y-%m-%d")
+
+
+def _day_range(date_iso: str):
+    """Return (startDateTime, endDateTime) strings for a full day."""
+    return f"{date_iso}T00:00", f"{date_iso}T23:59"
+
+
+def _add_day(date_iso: str, n: int = 1) -> str:
+    """Add n days to an ISO date string."""
+    d = datetime.strptime(date_iso, "%Y-%m-%d") + timedelta(days=n)
+    return d.strftime("%Y-%m-%d")
+
+
+def _time_hour(iso_dt: str) -> float:
+    """Extract hour as float from ISO datetime string."""
+    try:
+        t = datetime.fromisoformat(iso_dt)
+        return t.hour + t.minute / 60
+    except Exception:
+        return 99.0
+
+
+# ---------------------------------------------------------------------------
+# Flight fetching & filtering
+# ---------------------------------------------------------------------------
+
+async def _fetch_station_day(client: Client, station: str, date_iso: str) -> list:
+    """
+    Fetch all flights departing from station on date_iso.
+    Returns raw list of flight dicts from JOC, or [] on failure.
+    """
+    start_dt, end_dt = _day_range(date_iso)
+    try:
+        result = await client.call_tool("flight_data_by_joc", {
+            "startDateTime": start_dt,
+            "endDateTime":   end_dt,
+            "startStation":  station,
+        })
+        payload = result.data
+        if payload.get("dataAvailable") and isinstance(payload.get("data"), list):
+            return payload["data"]
+        return []
+    except Exception as e:
+        print(f"  [JOC ERROR] {station} on {date_iso}: {e}")
+        return []
+
+
+def _filter_flights(flights: list, destination: str,
+                    prefer_window: tuple = None) -> list[FlightOption]:
+    """
+    Filter by destination, exclude cancelled (CX), sort by departure time.
+    If prefer_window=(start_h, end_h), flights within window come first.
+    Returns list of FlightOption.
+    """
+    dest = destination.strip().upper()
+    candidates = []
+    for f in flights:
+        if f.get("endStation", "").upper() != dest:
+            continue
+        if f.get("flightStatus", "") == "CX":
+            continue
+        dep = f.get("scheduledStartTime", "")
+        arr = f.get("scheduledEndTime", "")
+        candidates.append(FlightOption(
+            flight_number=f["flightNumber"],
+            origin=f["startStation"],
+            destination=f["endStation"],
+            departure=dep,
+            arrival=arr,
+        ))
+
+    if prefer_window:
+        ws, we = prefer_window
+        in_window  = [c for c in candidates if ws <= _time_hour(c.departure) <= we]
+        out_window = [c for c in candidates if not (ws <= _time_hour(c.departure) <= we)]
+        in_window.sort(key=lambda c: c.departure)
+        out_window.sort(key=lambda c: c.departure)
+        candidates = in_window + out_window
+    else:
+        candidates.sort(key=lambda c: c.departure)
+
+    return candidates
+
+
+def _pick_flights(candidates: list[FlightOption]) -> tuple:
+    """Return (primary, backup1, backup2) from sorted candidate list."""
+    primary = candidates[0] if len(candidates) > 0 else None
+    backup1 = candidates[1] if len(candidates) > 1 else None
+    backup2 = candidates[2] if len(candidates) > 2 else None
+    return primary, backup1, backup2
+
+
+# ---------------------------------------------------------------------------
+# Core routing logic
+# ---------------------------------------------------------------------------
+
+async def run_flight_routing(
+    batch: RelocationBatch,
+    verified_bases: dict,        # {iga: base} from base_mapper
+    mcp_url: str
+) -> RoutingReport:
+    """
+    Build flight routes for all active crew.
+    Makes one JOC call per unique (station, date) pair — results are cached.
+    """
+    # Parse key dates
+    day1_iso = _parse_date(batch.dates.relocation_hometown)
+    day3_iso = _parse_date(batch.dates.relocation_base)
+    day2_iso = _add_day(day1_iso, 1)  # sanity check (should equal day3 - 1)
+
+    hold_igas = {h.iga for h in batch.hold}
+    active_crew = [c for c in batch.crew if c.iga not in hold_igas]
+
+    print(f"\nFlight routing {len(active_crew)} crew...")
+    print(f"  Day 1 (RLL)  : {day1_iso}")
+    print(f"  Day 2 (OFG)  : {day2_iso}")
+    print(f"  Day 3 (RLLH) : {day3_iso}")
+
+    # -----------------------------------------------------------------------
+    # Step 1: Identify all unique (station, date) pairs needed
+    # -----------------------------------------------------------------------
+    needed: set[tuple] = set()
+    needed.add((IFLY_STATION, day1_iso))   # Day 1: all crew depart from DEL
+
+    for crew in active_crew:
+        base = verified_bases.get(crew.iga, crew.base_email).upper()
+        hometown = crew.hometown_airport.upper()
+
+        if crew.wants_hometown:
+            # Option A: Day 3 departs from hometown → base
+            if hometown:
+                needed.add((hometown, day3_iso))
+        else:
+            # Option B: Day 3 dummy — depart from base (for RLLH dummy flight)
+            if base:
+                needed.add((base, day3_iso))
+
+    print(f"\n  Fetching {len(needed)} unique station-day combinations...")
+
+    # -----------------------------------------------------------------------
+    # Step 2: Fetch all concurrently and cache results
+    # -----------------------------------------------------------------------
+    client = _build_client(mcp_url)
+    cache: dict[tuple, list] = {}
+
+    async with client:
+        tasks = {pair: _fetch_station_day(client, pair[0], pair[1]) for pair in needed}
+        results = await asyncio.gather(*tasks.values())
+        for pair, result in zip(tasks.keys(), results):
+            cache[pair] = result
+            print(f"  [{pair[0]} {pair[1]}] → {len(result)} flights fetched")
+
+    # -----------------------------------------------------------------------
+    # Step 3: Build routing per crew
+    # -----------------------------------------------------------------------
+    routings = []
+
+    for crew in active_crew:
+        base     = verified_bases.get(crew.iga, crew.base_email).upper()
+        hometown = crew.hometown_airport.upper()
+        option   = "A" if crew.wants_hometown else "B"
+
+        routing = CrewRouting(
+            iga=crew.iga,
+            name=crew.name,
+            base=base,
+            hometown=hometown,
+            option=option,
+        )
+
+        # --- Day 1 ---
+        if option == "A":
+            # DEL → hometown
+            dest = hometown
+        else:
+            # DEL → base (direct)
+            dest = base
+
+        day1_flights = cache.get((IFLY_STATION, day1_iso), [])
+        day1_candidates = _filter_flights(day1_flights, dest)
+        p, b1, b2 = _pick_flights(day1_candidates)
+
+        notes1 = []
+        if not p:
+            notes1.append("No direct flights found - manual routing needed")
+        elif not (DAY1_WINDOW_START <= _time_hour(p.departure) <= DAY1_WINDOW_END):
+            notes1.append(f"No 6-10 AM flight - earliest available: {p.departure[11:16]}")
+
+        routing.day1 = DayPlan(
+            date=day1_iso,
+            code="RLL",
+            primary=p,
+            backup1=b1,
+            backup2=b2,
+            notes=notes1,
+        )
+
+        
+        routing.day1 = DayPlan(
+            date=day1_iso,
+            code="RLL",
+            primary=p,
+            backup1=b1,
+            backup2=b2,
+            notes=(["No direct flights found — manual routing needed"] if not p else []),
+        )
+
+        # --- Day 2 ---
+        routing.day2 = DayPlan(date=day2_iso, code="OFG")
+
+        # --- Day 3 ---
+        if option == "A":
+            # hometown → base (preferred 07:00-10:00)
+            day3_flights = cache.get((hometown, day3_iso), [])
+            day3_candidates = _filter_flights(
+                day3_flights, base,
+                prefer_window=(DAY3_WINDOW_START, DAY3_WINDOW_END)
+            )
+            p3, b1_3, b2_3 = _pick_flights(day3_candidates)
+
+            notes3 = []
+            if p3 and not (DAY3_WINDOW_START <= _time_hour(p3.departure) <= DAY3_WINDOW_END):
+                notes3.append(f"No 7-10 AM flight — earliest available: {p3.departure[11:16]}")
+            if not p3:
+                notes3.append("No direct flights found — check connecting route or dummy needed")
+
+            routing.day3 = DayPlan(
+                date=day3_iso,
+                code="RLLH",
+                primary=p3,
+                backup1=b1_3,
+                backup2=b2_3,
+                notes=notes3,
+            )
+
+        else:
+            # Option B: crew already at base — dummy flight needed for RLLH + hotel
+            # Look for any flight departing from base (for PNR chain completeness)
+            day3_flights = cache.get((base, day3_iso), [])
+            # Any outbound flight from base (just need a PNR, not a real destination)
+            dummy_candidates = [
+                FlightOption(
+                    flight_number=f["flightNumber"],
+                    origin=f["startStation"],
+                    destination=f["endStation"],
+                    departure=f.get("scheduledStartTime", ""),
+                    arrival=f.get("scheduledEndTime", ""),
+                )
+                for f in day3_flights
+                if f.get("flightStatus", "") != "CX"
+            ]
+            dummy_candidates.sort(key=lambda c: c.departure)
+            dummy = dummy_candidates[0] if dummy_candidates else None
+
+            routing.day3 = DayPlan(
+                date=day3_iso,
+                code="RLLH",
+                primary=dummy,
+                dummy=True,
+                notes=["DUMMY FLIGHT — crew already at base; attach for RLLH/hotel allotment"],
+            )
+
+        routings.append(routing)
+
+    return RoutingReport(
+        batch_name=batch.batch_name,
+        day1_date=day1_iso,
+        day3_date=day3_iso,
+        routings=routings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Display
+# ---------------------------------------------------------------------------
+
+def _fmt(f: Optional[FlightOption]) -> str:
+    return f.display() if f else "NOT FOUND"
+
+
+def _flight_no(f: Optional[FlightOption]) -> str:
+    return f"6E{f.flight_number}" if f else ""
+
+
+def _dep_time(f: Optional[FlightOption]) -> str:
+    return f.departure[11:16] if f else ""
+
+
+def _arr_time(f: Optional[FlightOption]) -> str:
+    return f.arrival[11:16] if f else ""
+
+
+def _route(f: Optional[FlightOption]) -> str:
+    return f"{f.origin}->{f.destination}" if f else ""
+
+
+
+def print_routing_report(report: RoutingReport):
+    print(f"\n{'='*70}")
+    print(f"  FLIGHT ROUTING REPORT — {report.batch_name}")
+    print(f"{'='*70}")
+
+    for r in report.routings:
+        print(f"\n  {'─'*66}")
+        print(f"  IGA {r.iga} | {r.name}")
+        print(f"  Base: {r.base} | Hometown: {r.hometown} | Option {'A (via hometown)' if r.option=='A' else 'B (direct to base)'}")
+
+        # Day 1
+        d1 = r.day1
+        print(f"\n  Day 1 [{d1.date}] Code: {d1.code}")
+        print(f"    Primary : {_fmt(d1.primary)}")
+        print(f"    Backup1 : {_fmt(d1.backup1)}")
+        print(f"    Backup2 : {_fmt(d1.backup2)}")
+        for n in d1.notes:
+            print(f"    ⚠ {n}")
+
+        # Day 2
+        print(f"\n  Day 2 [{r.day2.date}] Code: {r.day2.code}  (no routing)")
+
+        # Day 3
+        d3 = r.day3
+        label = "DUMMY" if d3.dummy else "Primary"
+        print(f"\n  Day 3 [{d3.date}] Code: {d3.code}")
+        print(f"    {label:7}: {_fmt(d3.primary)}")
+        if not d3.dummy:
+            print(f"    Backup1 : {_fmt(d3.backup1)}")
+            print(f"    Backup2 : {_fmt(d3.backup2)}")
+        for n in d3.notes:
+            print(f"    ⚠ {n}")
+
+        # Days 4-5
+        print(f"\n  Days 4-5 Code: {r.day4_5_code}  (license/AEP check)")
+
+    # Alert summary
+    no_flights = report.no_flights
+    if no_flights:
+        print(f"\n{'='*70}")
+        print(f"  ⚠ ACTION REQUIRED — {len(no_flights)} crew with missing flights")
+        print(f"{'='*70}")
+        for r, issues in no_flights:
+            print(f"  IGA {r.iga} | {r.name}: {', '.join(issues)}")
+    else:
+        print(f"\n  All crew have flights assigned.")
+
+
+def export_csv(report: RoutingReport, filepath: str):
+    """Export routing summary as CSV for AIMS entry."""
+    import csv
+
+    def _clean(s: str) -> str:
+        """Remove any non-ASCII characters to keep CSV clean on Windows."""
+        return s.encode("ascii", "ignore").decode("ascii")
+
+    rows = []
+    for r in report.routings:
+        d1, d2, d3 = r.day1, r.day2, r.day3
+        is_dummy = d3.dummy
+
+        rows.append({
+            # --- Crew info ---
+            "IGA":                  r.iga,
+            "Name":                 r.name,
+            "Base (AIMS)":          r.base,
+            "Hometown Airport":     r.hometown,
+            "Routing Option":       "A - Via Hometown" if r.option == "A" else "B - Direct to Base",
+
+            # --- Day 1 ---
+            "Day1 Date":            d1.date,
+            "Day1 AIMS Code":       d1.code,
+            "Day1 Primary Flight":  _flight_no(d1.primary),
+            "Day1 Primary Route":   _route(d1.primary),
+            "Day1 Primary Dep":     _dep_time(d1.primary),
+            "Day1 Primary Arr":     _arr_time(d1.primary),
+            "Day1 Backup1 Flight":  _flight_no(d1.backup1),
+            "Day1 Backup1 Route":   _route(d1.backup1),
+            "Day1 Backup1 Dep":     _dep_time(d1.backup1),
+            "Day1 Backup2 Flight":  _flight_no(d1.backup2),
+            "Day1 Backup2 Route":   _route(d1.backup2),
+            "Day1 Backup2 Dep":     _dep_time(d1.backup2),
+
+            # --- Day 2 ---
+            "Day2 Date":            d2.date,
+            "Day2 AIMS Code":       d2.code,
+
+            # --- Day 3 ---
+            "Day3 Date":            d3.date,
+            "Day3 AIMS Code":       d3.code,
+            "Day3 Dummy Flight":    "YES" if is_dummy else "NO",
+            "Day3 Primary Flight":  _flight_no(d3.primary),
+            "Day3 Primary Route":   _route(d3.primary),
+            "Day3 Primary Dep":     _dep_time(d3.primary),
+            "Day3 Primary Arr":     _arr_time(d3.primary),
+            "Day3 Backup1 Flight":  "" if is_dummy else _flight_no(d3.backup1),
+            "Day3 Backup1 Route":   "" if is_dummy else _route(d3.backup1),
+            "Day3 Backup1 Dep":     "" if is_dummy else _dep_time(d3.backup1),
+            "Day3 Backup2 Flight":  "" if is_dummy else _flight_no(d3.backup2),
+            "Day3 Backup2 Route":   "" if is_dummy else _route(d3.backup2),
+            "Day3 Backup2 Dep":     "" if is_dummy else _dep_time(d3.backup2),
+
+            # --- Days 4-5 ---
+            "Day4-5 AIMS Code":     r.day4_5_code,
+
+            # --- Flags ---
+            "Notes":                _clean(" | ".join(d1.notes + d3.notes)),
+        })
+
+    with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"\n  CSV exported -> {filepath}")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    FINAL_MSG = r"C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\Final relocation -Batch 1061.msg"
+
+    print("Parsing final mail...")
+    batch = parse_msg(FINAL_MSG)
+
+    url = select_url()
+
+    print("\nRunning base mapping...")
+    base_report = asyncio.run(run_base_mapping(batch, url))
+    verified = get_verified_bases(base_report)
+
+    print("\nRunning flight routing...")
+    routing_report = asyncio.run(run_flight_routing(batch, verified, url))
+    print_routing_report(routing_report)
+
+    export_csv(routing_report, r"C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\routing_output.csv")
