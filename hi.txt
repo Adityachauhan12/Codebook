@@ -1,508 +1,659 @@
-"""
-flight_router.py
-Generates flight routes for each crew member using flight_data_by_joc.
-Applies AIMS codes (RLL / OFG / RLLH) and selects primary + 2 backup flights.
-"""
+I have no idea about power bi so now i have to make agentic ai for power bi for data analysis like a chatbot for power bi dashboard now i cant share the data as it is confidential but tell me how to go about it .. it is a company project and i have copilot studio and vs code now tell me how to do it in simple steps in detals either to make model or through agent workflow in copilot studio or to make rag and then prompts in my vs or studio
 
-import asyncio
-import httpx
-import dotenv
-import os
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Optional
+07:47
+This is a great project! Let me break this down into clear paths you can take, and help you pick the right one.
 
-from fastmcp import Client
-from fastmcp.client.transports import StreamableHttpTransport
+Before diving into the details, let me understand your situation a bit better so I can tailor the advice:
 
-from email_parser import RelocationBatch, parse_msg, print_batch
-from base_mapper import run_base_mapping, get_verified_bases, select_url, _make_httpx_client
+Q: What's your primary goal with the chatbot?
+A: Both — Q&A + automated insights
 
-dotenv.load_dotenv()
+Q: What's your comfort level with coding?
+A: Advanced — can build APIs and deploy services
 
-# iFly departure station (Delhi) — all Day 1 flights originate here
-IFLY_STATION = "DEL"
+Q: Where does your data live?
+A:pbix files and excel i think
 
-# Day 1 — prefer early morning so crew reaches hometown with max time
-DAY1_WINDOW_START = 6    # 06:00 — earliest comfortable departure
-DAY1_WINDOW_END   = 10   # 10:00
+07:48
+Since you're advanced with coding and want both Q&A + automated insights, you have real flexibility here. Let me lay out the two main paths clearly, then give you a detailed game plan.
 
-# Day 3 — 7-10 AM window (earlier = crew wakes at 3-4 AM, too inconvenient)
-DAY3_WINDOW_START = 7    # 07:00 — hard minimum for primary
-DAY3_WINDOW_END   = 10   # 10:00
-DAY3_MIN_DEP      = 6    # 06:00 — absolute floor, applied to backups too
+The Two Paths
+Path A: Copilot Studio (Faster, Low-Code, Microsoft-native) Best if your company is already invested in the Microsoft ecosystem and wants something deployed quickly with governance built in.
 
+Path B: Custom RAG Agent in VS Code (More powerful, fully customizable) Best if you want full control, advanced reasoning, and the ability to do things Copilot Studio can't (like complex multi-step analysis, custom visualizations, etc.)
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
+My recommendation for your case: Start with Path B (custom RAG agent) since you're advanced, want both Q&A and insights, and your data is in .pbix and Excel files. You can always wrap it into Copilot Studio later as a plugin if your company needs that integration.
 
-@dataclass
-class FlightOption:
-    flight_number: int
-    origin: str
-    destination: str
-    departure: str    # scheduledStartTime ISO string
-    arrival: str      # scheduledEndTime ISO string
+Path B — Build a Custom Agentic AI for Power BI (Detailed Steps)
+PHASE 1: Understand Your Data Layer
+Your .pbix files are basically compressed archives containing a data model, DAX measures, and visuals. You need to extract the useful parts.
 
-    def display(self) -> str:
-        dep = self.departure[11:16]
-        arr = self.arrival[11:16]
-        return f"6E{self.flight_number} {self.origin}->{self.destination} {dep}-{arr}"
+Step 1 — Extract data from .pbix files
 
+A .pbix file is a zipped archive. Inside it, the data model lives as a tabular model. You have two options:
 
-@dataclass
-class DayPlan:
-    date: str
-    code: str                              # RLL / OFG / RLLH / N/A
-    primary: Optional[FlightOption] = None
-    backup1: Optional[FlightOption] = None
-    backup2: Optional[FlightOption] = None
-    dummy: bool = False                    # True = dummy flight required
-    notes: list = field(default_factory=list)
+Option A (Recommended): Don't read .pbix directly. Instead, publish your reports to Power BI Service, then use the Power BI REST API to query the semantic model. This is the cleanest approach.
+Option B: Export the underlying data tables to CSV/Excel from Power BI Desktop, and use those as your knowledge base.
+Step 2 — Set up Power BI REST API access
 
+1. Go to Azure Portal → App Registrations → New Registration
+2. Name it "PowerBI-Agent"
+3. Under API Permissions, add:
+   - Power BI Service → Dataset.Read.All
+   - Power BI Service → Report.Read.All
+4. Create a client secret
+5. Note down: Client ID, Tenant ID, Client Secret
+Now you can programmatically query your Power BI datasets using DAX queries through the API endpoint: POST https://api.powerbi.com/v1.0/myorg/datasets/{datasetId}/executeQueries
 
-@dataclass
-class CrewRouting:
-    iga: str
-    name: str
-    base: str           # AIMS-verified base
-    hometown: str
-    option: str         # "A" = via hometown, "B" = direct to base
-    day1: Optional[DayPlan] = None
-    day2: Optional[DayPlan] = None
-    day3: Optional[DayPlan] = None
-    day4_5_code: str = "N/A"
+This is the core superpower — your agent can send DAX queries to Power BI and get live data back.
 
+PHASE 2: Build the RAG + Agent Architecture
+Here's the architecture you'll build:
 
-@dataclass
-class RoutingReport:
-    batch_name: str
-    day1_date: str
-    day3_date: str
-    routings: list = field(default_factory=list)   # list[CrewRouting]
+User Question
+     ↓
+  LLM Agent (orchestrator)
+     ↓
+  ┌──────────────────────────────────┐
+  │  Tool 1: DAX Query Generator     │ → Sends DAX to Power BI API → gets data
+  │  Tool 2: Schema/Metadata RAG     │ → Looks up table/column definitions
+  │  Tool 3: Excel Reader            │ → Reads supplementary Excel files
+  │  Tool 4: Insight Generator       │ → Analyzes results, finds patterns
+  └──────────────────────────────────┘
+     ↓
+  Natural language answer + charts
+Step 3 — Create your project in VS Code
 
-    @property
-    def no_flights(self):
-        """Crew where primary flight could not be found on any leg."""
-        flagged = []
-        for r in self.routings:
-            issues = []
-            if not r.day1.primary:
-                issues.append("Day1 no flight")
-            if not r.day3.primary and not r.day3.dummy:
-                issues.append("Day3 no flight")
-            if issues:
-                flagged.append((r, issues))
-        return flagged
+bash
+mkdir powerbi-agent
+cd powerbi-agent
+python -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
 
+pip install openai langchain langchain-openai pandas openpyxl
+pip install azure-identity requests fastapi uvicorn chromadb
+Step 4 — Build the metadata knowledge base (the RAG part)
 
-# ---------------------------------------------------------------------------
-# MCP client
-# ---------------------------------------------------------------------------
+This is critical. Your LLM doesn't know your data schema. You need to feed it:
 
-def _build_client(url: str) -> Client:
-    transport = StreamableHttpTransport(url=url, httpx_client_factory=_make_httpx_client)
-    return Client(transport=transport)
+python
+# metadata.py — Create a document describing your Power BI model
 
-
-# ---------------------------------------------------------------------------
-# Date helpers
-# ---------------------------------------------------------------------------
-
-def _parse_date(date_str: str) -> str:
-    """Convert '22-Feb-2026' to '2026-02-22'."""
-    return datetime.strptime(date_str.strip(), "%d-%b-%Y").strftime("%Y-%m-%d")
-
-
-def _day_range(date_iso: str):
-    """Return (startDateTime, endDateTime) strings for a full day."""
-    return f"{date_iso}T00:00", f"{date_iso}T23:59"
-
-
-def _add_day(date_iso: str, n: int = 1) -> str:
-    """Add n days to an ISO date string."""
-    d = datetime.strptime(date_iso, "%Y-%m-%d") + timedelta(days=n)
-    return d.strftime("%Y-%m-%d")
-
-
-def _time_hour(iso_dt: str) -> float:
-    """Extract hour as float from ISO datetime string."""
-    try:
-        t = datetime.fromisoformat(iso_dt)
-        return t.hour + t.minute / 60
-    except Exception:
-        return 99.0
-
-
-# ---------------------------------------------------------------------------
-# Flight fetching & filtering
-# ---------------------------------------------------------------------------
-
-async def _fetch_station_day(client: Client, station: str, date_iso: str) -> list:
-    """
-    Fetch all flights departing from station on date_iso.
-    Returns raw list of flight dicts from JOC, or [] on failure.
-    """
-    start_dt, end_dt = _day_range(date_iso)
-    try:
-        result = await client.call_tool("flight_data_by_joc", {
-            "startDateTime": start_dt,
-            "endDateTime":   end_dt,
-            "startStation":  station,
-        })
-        payload = result.data
-        if payload.get("dataAvailable") and isinstance(payload.get("data"), list):
-            return payload["data"]
-        return []
-    except Exception as e:
-        print(f"  [JOC ERROR] {station} on {date_iso}: {e}")
-        return []
-
-
-def _filter_flights(flights: list, destination: str,
-                    prefer_window: tuple = None,
-                    min_dep_hour: float = None) -> list:
-    """
-    Filter by destination, exclude cancelled (CX).
-    min_dep_hour: hard floor — flights before this hour are excluded entirely.
-    prefer_window=(start_h, end_h): flights in this window come first,
-      remaining sorted by departure time after that.
-    Returns list of FlightOption.
-    """
-    dest = destination.strip().upper()
-    candidates = []
-    for f in flights:
-        if f.get("endStation", "").upper() != dest:
-            continue
-        if f.get("flightStatus", "") == "CX":
-            continue
-        dep = f.get("scheduledStartTime", "")
-        arr = f.get("scheduledEndTime", "")
-        if min_dep_hour is not None and _time_hour(dep) < min_dep_hour:
-            continue
-        candidates.append(FlightOption(
-            flight_number=f["flightNumber"],
-            origin=f["startStation"],
-            destination=f["endStation"],
-            departure=dep,
-            arrival=arr,
-        ))
-
-    if prefer_window:
-        ws, we = prefer_window
-        in_window  = [c for c in candidates if ws <= _time_hour(c.departure) <= we]
-        out_window = [c for c in candidates if not (ws <= _time_hour(c.departure) <= we)]
-        in_window.sort(key=lambda c: c.departure)
-        out_window.sort(key=lambda c: c.departure)
-        candidates = in_window + out_window
-    else:
-        candidates.sort(key=lambda c: c.departure)
-
-    return candidates
-
-
-def _pick_flights(candidates: list) -> tuple:
-    """Return (primary, backup1, backup2) from sorted candidate list."""
-    primary = candidates[0] if len(candidates) > 0 else None
-    backup1 = candidates[1] if len(candidates) > 1 else None
-    backup2 = candidates[2] if len(candidates) > 2 else None
-    return primary, backup1, backup2
-
-
-# ---------------------------------------------------------------------------
-# Core routing logic
-# ---------------------------------------------------------------------------
-
-async def run_flight_routing(
-    batch: RelocationBatch,
-    verified_bases: dict,
-    mcp_url: str
-) -> RoutingReport:
-    """
-    Build flight routes for all active crew.
-    Makes one JOC call per unique (station, date) pair — results are cached.
-    """
-    day1_iso = _parse_date(batch.dates.relocation_hometown)
-    day3_iso = _parse_date(batch.dates.relocation_base)
-    day2_iso = _add_day(day1_iso, 1)
-
-    hold_igas = {h.iga for h in batch.hold}
-    active_crew = [c for c in batch.crew if c.iga not in hold_igas]
-
-    print(f"\nFlight routing {len(active_crew)} crew...")
-    print(f"  Day 1 (RLL)  : {day1_iso}")
-    print(f"  Day 2 (OFG)  : {day2_iso}")
-    print(f"  Day 3 (RLLH) : {day3_iso}")
-
-    # Step 1: Identify all unique (station, date) pairs needed
-    needed = set()
-    needed.add((IFLY_STATION, day1_iso))
-
-    for crew in active_crew:
-        base     = verified_bases.get(crew.iga, crew.base_email).upper()
-        hometown = crew.hometown_airport.upper()
-        if crew.wants_hometown:
-            if hometown:
-                needed.add((hometown, day3_iso))
-        else:
-            if base:
-                needed.add((base, day3_iso))
-
-    print(f"\n  Fetching {len(needed)} unique station-day combinations...")
-
-    # Step 2: Fetch all concurrently and cache
-    client = _build_client(mcp_url)
-    cache = {}
-
-    async with client:
-        tasks = {pair: _fetch_station_day(client, pair[0], pair[1]) for pair in needed}
-        results = await asyncio.gather(*tasks.values())
-        for pair, result in zip(tasks.keys(), results):
-            cache[pair] = result
-            print(f"  [{pair[0]} {pair[1]}] -> {len(result)} flights fetched")
-
-    # Step 3: Build routing per crew
-    routings = []
-
-    for crew in active_crew:
-        base     = verified_bases.get(crew.iga, crew.base_email).upper()
-        hometown = crew.hometown_airport.upper()
-        option   = "A" if crew.wants_hometown else "B"
-
-        routing = CrewRouting(
-            iga=crew.iga,
-            name=crew.name,
-            base=base,
-            hometown=hometown,
-            option=option,
-        )
-
-        # --- Day 1: DEL -> hometown (A) or DEL -> base (B) ---
-        dest = hometown if option == "A" else base
-
-        day1_flights = cache.get((IFLY_STATION, day1_iso), [])
-        day1_candidates = _filter_flights(
-            day1_flights, dest,
-            prefer_window=(DAY1_WINDOW_START, DAY1_WINDOW_END),
-            min_dep_hour=DAY1_WINDOW_START,
-        )
-        p, b1, b2 = _pick_flights(day1_candidates)
-
-        notes1 = []
-        if not p:
-            notes1.append("No direct flights found - manual routing needed")
-        elif not (DAY1_WINDOW_START <= _time_hour(p.departure) <= DAY1_WINDOW_END):
-            notes1.append(f"No 6-10 AM flight - earliest available: {p.departure[11:16]}")
-
-        routing.day1 = DayPlan(
-            date=day1_iso, code="RLL",
-            primary=p, backup1=b1, backup2=b2,
-            notes=notes1,
-        )
-
-        # --- Day 2: off, no routing ---
-        routing.day2 = DayPlan(date=day2_iso, code="OFG")
-
-        # --- Day 3 ---
-        if option == "A":
-            # hometown -> base, preferred 7-10 AM, hard floor 6 AM
-            day3_flights = cache.get((hometown, day3_iso), [])
-            day3_candidates = _filter_flights(
-                day3_flights, base,
-                prefer_window=(DAY3_WINDOW_START, DAY3_WINDOW_END),
-                min_dep_hour=DAY3_MIN_DEP,
-            )
-            p3, b1_3, b2_3 = _pick_flights(day3_candidates)
-
-            notes3 = []
-            if p3 and not (DAY3_WINDOW_START <= _time_hour(p3.departure) <= DAY3_WINDOW_END):
-                notes3.append(f"No 7-10 AM flight - earliest available: {p3.departure[11:16]}")
-            if not p3:
-                notes3.append("No direct flights found - check connecting route or dummy needed")
-
-            routing.day3 = DayPlan(
-                date=day3_iso, code="RLLH",
-                primary=p3, backup1=b1_3, backup2=b2_3,
-                notes=notes3,
-            )
-
-        else:
-            # Option B: crew already at base — dummy flight for RLLH + hotel
-            day3_flights = cache.get((base, day3_iso), [])
-            dummy_candidates = [
-                FlightOption(
-                    flight_number=f["flightNumber"],
-                    origin=f["startStation"],
-                    destination=f["endStation"],
-                    departure=f.get("scheduledStartTime", ""),
-                    arrival=f.get("scheduledEndTime", ""),
-                )
-                for f in day3_flights
-                if f.get("flightStatus", "") != "CX"
+metadata = {
+    "tables": [
+        {
+            "name": "Sales",
+            "description": "Contains all sales transactions",
+            "columns": [
+                {"name": "OrderDate", "type": "date", "description": "When the order was placed"},
+                {"name": "Revenue", "type": "decimal", "description": "Total revenue in INR"},
+                {"name": "Region", "type": "string", "description": "Sales region: North/South/East/West"},
+                # ... add all your columns
+            ],
+            "relationships": ["Links to Products table via ProductID"],
+            "common_measures": [
+                "Total Revenue = SUM(Sales[Revenue])",
+                "YoY Growth = DIVIDE([This Year Revenue] - [Last Year Revenue], [Last Year Revenue])"
             ]
-            dummy_candidates.sort(key=lambda c: c.departure)
-            dummy = dummy_candidates[0] if dummy_candidates else None
+        }
+    ]
+}
+Store this in a ChromaDB vector database so the agent can look up relevant tables/columns based on the user's question:
 
-            routing.day3 = DayPlan(
-                date=day3_iso, code="RLLH",
-                primary=dummy, dummy=True,
-                notes=["DUMMY FLIGHT - crew already at base; attach for RLLH/hotel allotment"],
-            )
+python
+# rag_setup.py
+import chromadb
+import json
 
-        routings.append(routing)
+client = chromadb.PersistentClient(path="./chroma_db")
+collection = client.get_or_create_collection("powerbi_schema")
 
-    return RoutingReport(
-        batch_name=batch.batch_name,
-        day1_date=day1_iso,
-        day3_date=day3_iso,
-        routings=routings,
+# Add each table's metadata as a document
+for table in metadata["tables"]:
+    doc_text = f"Table: {table['name']}\n"
+    doc_text += f"Description: {table['description']}\n"
+    doc_text += "Columns:\n"
+    for col in table["columns"]:
+        doc_text += f"  - {col['name']} ({col['type']}): {col['description']}\n"
+    doc_text += "Measures:\n"
+    for m in table["common_measures"]:
+        doc_text += f"  - {m}\n"
+
+    collection.add(
+        documents=[doc_text],
+        ids=[table["name"]]
     )
+Step 5 — Build the DAX query tool
 
+python
+# powerbi_client.py
+import requests
+from azure.identity import ClientSecretCredential
 
-# ---------------------------------------------------------------------------
-# Display
-# ---------------------------------------------------------------------------
+class PowerBIClient:
+    def __init__(self, tenant_id, client_id, client_secret):
+        self.credential = ClientSecretCredential(tenant_id, client_id, client_secret)
+        self.base_url = "https://api.powerbi.com/v1.0/myorg"
 
-def _fmt(f: Optional[FlightOption]) -> str:
-    return f.display() if f else "NOT FOUND"
+    def get_token(self):
+        token = self.credential.get_token("https://analysis.windows.net/powerbi/api/.default")
+        return token.token
 
+    def execute_dax(self, dataset_id, dax_query):
+        """Send a DAX query to Power BI and get results"""
+        url = f"{self.base_url}/datasets/{dataset_id}/executeQueries"
+        headers = {
+            "Authorization": f"Bearer {self.get_token()}",
+            "Content-Type": "application/json"
+        }
+        body = {
+            "queries": [{"query": dax_query}],
+            "serializerSettings": {"includeNulls": True}
+        }
+        response = requests.post(url, headers=headers, json=body)
+        return response.json()
+Step 6 — Build the Agent (the brain)
 
-def _flight_no(f: Optional[FlightOption]) -> str:
-    return f"6E{f.flight_number}" if f else ""
+python
+# agent.py
+from openai import AzureOpenAI  # or use Anthropic's API
+import json
 
+SYSTEM_PROMPT = """You are a Power BI data analyst agent.
 
-def _dep_time(f: Optional[FlightOption]) -> str:
-    return f.departure[11:16] if f else ""
+When a user asks a question:
+1. First, look up the relevant schema using the schema_lookup tool
+2. Generate a DAX query to answer the question
+3. Execute the DAX query using the execute_dax tool
+4. Analyze the results and provide insights
+5. If the user asks for automated insights, proactively look for:
+   - Trends (increasing/decreasing over time)
+   - Anomalies (unusual values)
+   - Top/bottom performers
+   - Comparisons across dimensions
 
+RULES:
+- Always validate your DAX syntax before executing
+- If a query fails, try to fix it and retry once
+- Present numbers in a readable format (lakhs/crores for INR)
+- Be specific — cite actual numbers from the data
+"""
 
-def _arr_time(f: Optional[FlightOption]) -> str:
-    return f.arrival[11:16] if f else ""
+# Define your tools for function calling
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "schema_lookup",
+            "description": "Look up Power BI table/column metadata relevant to the user's question",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for in the schema"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_dax",
+            "description": "Execute a DAX query against the Power BI dataset",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dax_query": {"type": "string", "description": "The DAX query to execute"}
+                },
+                "required": ["dax_query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_excel",
+            "description": "Read data from an Excel file for supplementary analysis",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "sheet_name": {"type": "string"}
+                },
+                "required": ["file_path"]
+            }
+        }
+    }
+]
+Step 7 — Wire it all together with an agentic loop
 
+python
+# main.py
+def run_agent(user_question):
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_question}
+    ]
 
-def _route(f: Optional[FlightOption]) -> str:
-    return f"{f.origin}->{f.destination}" if f else ""
+    while True:
+        response = llm_client.chat.completions.create(
+            model="gpt-4o",  # or claude via Anthropic API
+            messages=messages,
+            tools=tools,
+            tool_choice="auto"
+        )
 
+        msg = response.choices[0].message
 
-def print_routing_report(report: RoutingReport):
-    print(f"\n{'='*70}")
-    print(f"  FLIGHT ROUTING REPORT - {report.batch_name}")
-    print(f"{'='*70}")
+        # If the model wants to call a tool
+        if msg.tool_calls:
+            messages.append(msg)
+            for tool_call in msg.tool_calls:
+                name = tool_call.function.name
+                args = json.loads(tool_call.function.arguments)
 
-    for r in report.routings:
-        print(f"\n  {'-'*66}")
-        print(f"  IGA {r.iga} | {r.name}")
-        print(f"  Base: {r.base} | Hometown: {r.hometown} | Option {'A (via hometown)' if r.option=='A' else 'B (direct to base)'}")
+                if name == "schema_lookup":
+                    result = chroma_collection.query(query_texts=[args["query"]], n_results=3)
+                    tool_result = str(result["documents"])
+                elif name == "execute_dax":
+                    tool_result = str(pbi_client.execute_dax(DATASET_ID, args["dax_query"]))
+                elif name == "read_excel":
+                    df = pd.read_excel(args["file_path"], sheet_name=args.get("sheet_name"))
+                    tool_result = df.head(50).to_string()
 
-        d1 = r.day1
-        print(f"\n  Day 1 [{d1.date}] Code: {d1.code}")
-        print(f"    Primary : {_fmt(d1.primary)}")
-        print(f"    Backup1 : {_fmt(d1.backup1)}")
-        print(f"    Backup2 : {_fmt(d1.backup2)}")
-        for n in d1.notes:
-            print(f"    ! {n}")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result
+                })
+        else:
+            # Final answer
+            return msg.content
+PHASE 3: Add the Chat Interface
+Step 8 — Build a simple FastAPI backend + frontend
 
-        print(f"\n  Day 2 [{r.day2.date}] Code: {r.day2.code}  (no routing)")
+python
+# app.py
+from fastapi import FastAPI
+from pydantic import BaseModel
 
-        d3 = r.day3
-        label = "DUMMY" if d3.dummy else "Primary"
-        print(f"\n  Day 3 [{d3.date}] Code: {d3.code}")
-        print(f"    {label:7}: {_fmt(d3.primary)}")
-        if not d3.dummy:
-            print(f"    Backup1 : {_fmt(d3.backup1)}")
-            print(f"    Backup2 : {_fmt(d3.backup2)}")
-        for n in d3.notes:
-            print(f"    ! {n}")
+app = FastAPI()
 
-        print(f"\n  Days 4-5 Code: {r.day4_5_code}  (license/AEP check)")
+class Question(BaseModel):
+    text: str
 
-    no_flights = report.no_flights
-    if no_flights:
-        print(f"\n{'='*70}")
-        print(f"  ACTION REQUIRED - {len(no_flights)} crew with missing flights")
-        print(f"{'='*70}")
-        for r, issues in no_flights:
-            print(f"  IGA {r.iga} | {r.name}: {', '.join(issues)}")
-    else:
-        print(f"\n  All crew have flights assigned.")
+@app.post("/ask")
+async def ask(question: Question):
+    answer = run_agent(question.text)
+    return {"answer": answer}
+For the frontend, you can build a simple React/HTML chat UI, or embed it in Power BI itself using a Power BI embedded HTML visual.
 
+PHASE 4: Optional — Plug into Copilot Studio
+If your company wants this accessible inside Teams or Power BI:
 
-def export_csv(report: RoutingReport, filepath: str):
-    """Export routing summary as CSV for AIMS entry."""
-    import csv
+Wrap your FastAPI as an Azure Function or App Service
+In Copilot Studio, create a new agent
+Add a Plugin Action → point it to your API endpoint
+Now users can chat with your agent inside Teams
+Quick Summary Checklist
+Here's your order of operations:
 
-    def _clean(s: str) -> str:
-        return s.encode("ascii", "ignore").decode("ascii")
+Publish .pbix to Power BI Service (so you can query via API)
+Register an Azure App and get API credentials
+Document your schema — every table, column, measure, relationship
+Build the RAG layer — store schema in ChromaDB for lookup
+Build the DAX query tool — hit Power BI's executeQueries API
+Build the agent loop — LLM + tools + reasoning
+Build a chat UI — FastAPI + simple frontend
+Test with real questions — iterate on the system prompt and tools
+Deploy — Azure App Service or Azure Functions
+Optional: Plug into Copilot Studio for Teams integration
+Want me to go deeper on any specific phase? For example, I can help you write the full system prompt for DAX generation, or set up the Azure app registration step-by-step, or build out the chat UI.
 
-    rows = []
-    for r in report.routings:
-        d1, d2, d3 = r.day1, r.day2, r.day3
-        is_dummy = d3.dummy
+tell me how much power bi do i need to know for this
 
-        rows.append({
-            "IGA":                  r.iga,
-            "Name":                 r.name,
-            "Base (AIMS)":          r.base,
-            "Hometown Airport":     r.hometown,
-            "Routing Option":       "A - Via Hometown" if r.option == "A" else "B - Direct to Base",
-            "Day1 Date":            d1.date,
-            "Day1 AIMS Code":       d1.code,
-            "Day1 Primary Flight":  _flight_no(d1.primary),
-            "Day1 Primary Route":   _route(d1.primary),
-            "Day1 Primary Dep":     _dep_time(d1.primary),
-            "Day1 Primary Arr":     _arr_time(d1.primary),
-            "Day1 Backup1 Flight":  _flight_no(d1.backup1),
-            "Day1 Backup1 Route":   _route(d1.backup1),
-            "Day1 Backup1 Dep":     _dep_time(d1.backup1),
-            "Day1 Backup2 Flight":  _flight_no(d1.backup2),
-            "Day1 Backup2 Route":   _route(d1.backup2),
-            "Day1 Backup2 Dep":     _dep_time(d1.backup2),
-            "Day2 Date":            d2.date,
-            "Day2 AIMS Code":       d2.code,
-            "Day3 Date":            d3.date,
-            "Day3 AIMS Code":       d3.code,
-            "Day3 Dummy Flight":    "YES" if is_dummy else "NO",
-            "Day3 Primary Flight":  _flight_no(d3.primary),
-            "Day3 Primary Route":   _route(d3.primary),
-            "Day3 Primary Dep":     _dep_time(d3.primary),
-            "Day3 Primary Arr":     _arr_time(d3.primary),
-            "Day3 Backup1 Flight":  "" if is_dummy else _flight_no(d3.backup1),
-            "Day3 Backup1 Route":   "" if is_dummy else _route(d3.backup1),
-            "Day3 Backup1 Dep":     "" if is_dummy else _dep_time(d3.backup1),
-            "Day3 Backup2 Flight":  "" if is_dummy else _flight_no(d3.backup2),
-            "Day3 Backup2 Route":   "" if is_dummy else _route(d3.backup2),
-            "Day3 Backup2 Dep":     "" if is_dummy else _dep_time(d3.backup2),
-            "Day4-5 AIMS Code":     r.day4_5_code,
-            "Notes":                _clean(" | ".join(d1.notes + d3.notes)),
-        })
+07:49
+Great question — and the honest answer is: less than you think, but you do need to know specific things well. Let me break it down clearly.
 
-    with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
-        writer.writeheader()
-        writer.writerows(rows)
+What You DON'T Need to Know
+You're building the agent, not the dashboards. So skip these for now:
 
-    print(f"\n  CSV exported -> {filepath}")
+Visual design (charts, formatting, themes)
+Report building and layout
+Power BI Desktop UI deeply
+Bookmarks, drillthrough, buttons, page navigation
+Row-level security setup (important later, not now)
+Power BI Mobile, paginated reports, etc.
+What You MUST Know (4 Key Areas)
+1. The Data Model (Most Important — spend 2-3 days here)
+This is the foundation your agent reasons over. You need to understand:
 
+Tables and relationships — how your fact tables (e.g., Sales) connect to dimension tables (e.g., Products, Dates, Regions) via keys. Think of it like a database schema.
+Star schema concept — Power BI models are typically one central fact table surrounded by dimension tables. If you understand SQL joins, this will click fast.
+Columns vs Measures — columns are raw data fields, measures are calculated aggregations (like "Total Revenue" or "Avg Order Value"). Your agent needs to know the difference because DAX queries use them differently.
+How to learn this fast: Open your .pbix file in Power BI Desktop, go to the Model View (the icon on the left that looks like a diagram). Spend an hour just reading the table names, columns, and the lines connecting them. That diagram IS your agent's brain map.
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+2. DAX (The Query Language — spend 3-5 days here)
+DAX is how your agent will actually pull data from Power BI. You don't need to master it — you need to know the patterns so you can write a good system prompt and debug when the LLM generates bad DAX.
 
-if __name__ == "__main__":
-    FINAL_MSG  = r"C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\Final relocation -Batch 1061.msg"
-    OUTPUT_CSV = r"C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Relocation\routing_output.csv"
+The 20% of DAX that covers 80% of use cases:
 
-    print("Parsing final mail...")
-    batch = parse_msg(FINAL_MSG)
+dax
+// Basic aggregation — "what's total revenue?"
+EVALUATE
+SUMMARIZECOLUMNS(
+    Sales[Region],
+    "Total Revenue", SUM(Sales[Revenue])
+)
 
-    url = select_url()
+// Filtering — "what's revenue for North region?"
+EVALUATE
+CALCULATETABLE(
+    SUMMARIZECOLUMNS(
+        Sales[Region],
+        "Total Revenue", SUM(Sales[Revenue])
+    ),
+    Sales[Region] = "North"
+)
 
-    print("\nRunning base mapping...")
-    base_report = asyncio.run(run_base_mapping(batch, url))
-    verified = get_verified_bases(base_report)
+// Time intelligence — "compare this year vs last year"
+EVALUATE
+SUMMARIZECOLUMNS(
+    'Date'[Year],
+    "Revenue", SUM(Sales[Revenue])
+)
 
-    print("\nRunning flight routing...")
-    routing_report = asyncio.run(run_flight_routing(batch, verified, url))
-    print_routing_report(routing_report)
+// Top N — "top 5 products by revenue"
+EVALUATE
+TOPN(5,
+    SUMMARIZECOLUMNS(
+        Products[ProductName],
+        "Revenue", SUM(Sales[Revenue])
+    ),
+    [Revenue], DESC
+)
+Key DAX functions to know: EVALUATE, SUMMARIZECOLUMNS, CALCULATETABLE, FILTER, SUM, AVERAGE, COUNT, TOPN, DATEADD, SAMEPERIODLASTYEAR, DIVIDE
 
-    export_csv(routing_report, OUTPUT_CSV)
+Important: The Power BI REST API only accepts EVALUATE style DAX queries (returns a table). It does NOT accept standalone measure definitions. This is a common gotcha — make sure your system prompt tells the LLM this.
+
+3. Power BI Service Basics (spend 1 day here)
+You need to know just enough to set up the API pipeline:
+
+How to publish a .pbix from Desktop to the Power BI Service (it's literally "Publish" button → select a workspace)
+Workspaces — where reports and datasets live. You'll need the workspace ID and dataset ID for API calls
+Semantic model (dataset) — once published, the data model becomes a "semantic model" in the service. This is what your API queries against.
+To find your IDs: Go to Power BI Service → open your workspace → click on the dataset → the URL will look like: app.powerbi.com/groups/{workspaceId}/datasets/{datasetId} — those GUIDs are what your code needs.
+
+4. Power BI REST API (spend 1-2 days here)
+You really only need 3 API endpoints:
+
+Execute Queries — POST /datasets/{id}/executeQueries — this is your main one, sends DAX and gets data back
+Get Tables — GET /datasets/{id}/tables — helps your agent discover what tables exist
+Get Measures — GET /datasets/{id}/measures — helps your agent know what pre-built measures are available
+That's it. You don't need the 50+ other endpoints.
+
+Suggested Learning Plan (10 days total)
+Days 1-2: Open your .pbix in Power BI Desktop. Go to Model View. Map out every table, their columns, and relationships on paper or in a doc. This doc becomes your agent's metadata.
+
+Days 3-5: Learn DAX queries. Use DAX Studio (free tool) — it connects to your Power BI Desktop file and lets you write and test DAX queries interactively. Practice the patterns above against your actual data. This is the most valuable skill because when your agent generates wrong DAX, you need to debug it.
+
+Days 6-7: Publish to Power BI Service. Set up the Azure App Registration. Make your first successful API call to execute a DAX query using Postman or a Python script. Once you see data come back, you're 70% there.
+
+Days 8-10: Start building the agent. You already know this part well since you're an advanced coder.
+
+The Shortcut Most People Miss
+Here's a practical tip — you don't even need to learn DAX deeply yourself. Your real job is to teach the LLM to write DAX. So what matters more is:
+
+Having a complete schema document (table names, column names, data types, relationships, existing measures)
+Having 15-20 example question-to-DAX pairs in your system prompt
+Testing the generated DAX in DAX Studio to catch errors
+If you give the LLM a great schema + good examples, it will write correct DAX 80-90% of the time. Your job is handling the other 10-20% with good error handling and retry logic.
+
+Resources (All Free)
+DAX Studio — download from daxstudio.org, essential for testing
+SQLBI.com articles — best DAX learning resource, read their "EVALUATE" guide specifically
+Microsoft Learn: "Execute Queries" API docs — the official reference for the API endpoint
+Power BI Desktop — free to download and explore your .pbix files
+Want me to help you build the example DAX query set for your system prompt, or set up the Azure App Registration walkthrough?
+
+Admin NA Dashboard.pdf
+pdf
+
+ok i gave you a ppdf of the data not dynamic for understanding
+
+07:53
+Now I have a clear picture of your dashboard. This is an airline operations / crew management dashboard — specifically tracking Admin NA (Not Available) percentages for pilots (CP = Captain, FO = First Officer) on the Airbus fleet. Let me map out exactly what your agent needs to understand.
+
+What Your Dashboard Tracks
+Based on what I can see, there are 3 main pages:
+
+Page 1 — Weekly Admin NA Stats: Tracks weekly NA percentages for FOs, broken down by NA codes (TMU, ESL, PNAP, etc.), by base (DEL, BOM, BLR, etc.), and by contract type (22 PL, 6E Reconnect, 8 Days OFF). Shows Actual vs Published vs Target.
+
+Page 2 — Monthly Admin NA Stats: Same metrics but at monthly granularity for CPs. Includes a distribution chart showing which NA codes contribute most, and an Admin Days bucket table (01-50 days, 51-100 days, etc.).
+
+Page 3 — IGA Level Insights: Individual pilot-level detail — shows each pilot's name, rank, fleet, qualification, their specific NA codes, duration, and a daily calendar view of their NA status.
+
+Your Data Model (What the Agent Needs to Know)
+Based on the dashboard, here's the schema your agent will be working with. This is the most critical piece — let me lay it out:
+
+Core Dimensions:
+
+Dimension	Values You Have
+Rank	CP, FO
+Fleet	Airbus (possibly others)
+Base	DEL, BOM, BLR, HYD, MAA, CCU, COK, JAI, LKO, IXC, AMD, PNQ
+NA Code	TMU, ESL, PNAP, NAFS, MLWP, MED, LWP, PMLW, NME, MTL, NAS, LTSK, NLE, NAFT, WPES, NMEA, ESLU, etc. (~30+ codes)
+Contract	22 PL, 56 PL, 5M/4W, 60 Hrs, 6E Flex, 6E Prime, 6E Reconnect, 8 Days OFF
+Publact	A (Actual), P (Published)
+Status	All / filtered
+Qualification	LTC, SFI, INA, DE, None
+Long NA	Yes / No
+Paid/Unpaid	Paid / Unpaid
+Nationality	All / filtered
+Core Measures:
+
+Measure	What It Means
+Admin NA %	Percentage of crew not available for flying due to admin reasons
+Admin NA Per FO/CP	Average admin NA days per pilot
+Target %	The benchmark target for NA %
+Weekly/Monthly variance	Current vs previous period difference
+Admin Duty (days)	Count of admin days per pilot
+Total HC	Headcount in each admin-days bucket
+Exact Plan for YOUR Dashboard
+Now here's how to build the agent specifically for this data:
+
+Step 1 — Decide Your Data Access Strategy
+Since you mentioned .pbix and Excel files, and I can see Copilot is blocked in your workspace (the dashboard literally says "Your organization doesn't allow Copilot in this workspace"), you have two options:
+
+Option A (Recommended): Export to a database/Excel and use RAG
+
+Since your org blocks Copilot and may also restrict the Power BI REST API, the safest path is:
+
+Export your data tables from Power BI Desktop to CSV/Excel
+Load them into a local database (SQLite is simplest) or just use pandas
+Your agent queries this local data
+Option B: Power BI REST API
+
+If your admin can grant API access, use the executeQueries endpoint as I described earlier. But given the Copilot restriction, check with IT first.
+
+Step 2 — Build the Metadata Document
+This is what you feed your agent. Based on your dashboard, here's exactly what it should look like:
+
+python
+SCHEMA_DOCUMENT = """
+## Database: Admin NA Tracking System (Airline Crew Management)
+
+### Context
+This system tracks Admin NA (Not Available) percentages for pilots.
+Admin NA means a pilot is not available for flying duties due to
+administrative reasons (medical leave, training, office duty, etc.)
+Lower Admin NA % is better — it means more pilots are available to fly.
+
+### Table: admin_na_weekly
+- Week (date): Week starting date, e.g., 2025-01-06
+- Rank (string): CP (Captain) or FO (First Officer)
+- Fleet (string): Aircraft type — currently "Airbus"
+- Base (string): Pilot base station — DEL, BOM, BLR, HYD, MAA, CCU,
+  COK, JAI, LKO, IXC, AMD, PNQ
+- Code (string): NA reason code. Key codes:
+    - TMU = Training Management Unit
+    - ESL = Approved Extended Sick Leave
+    - PNAP = Not Available due to PNAP
+    - MED = Medical without logistical arrangement
+    - MEDT = Medical with logistical arrangement
+    - LWP = Leave Without Pay
+    - MLWP = Maternity Leave Without Pay
+    - PMLW = Paternity/Maternity Leave
+    - NME = Not Available due to Medical
+    - MTL = Management Transfer Leave
+    - NAFS = Not Available for Flying Subsequent
+    - NAS = Not Available for Standards
+    - OFT = Office Day at ISC
+    - PWS = Pilot Welfare Scheme
+    - USL = Unpaid Sick Leave
+    - WPES = Leave Without Pay Post ESL
+- Contract (string): Employment contract type —
+  22 PL, 56 PL, 5M/4W, 60 Hrs, 6E Flex, 6E Prime, 6E Reconnect,
+  8 Days OFF
+- Publact (string): A=Actual, P=Published
+- NA_Percent (decimal): The NA percentage for that week
+- Target_Percent (decimal): Target NA percentage
+
+### Table: admin_na_monthly
+Same structure but aggregated by MonthYr instead of Week.
+Also includes Total_Code (total headcount for denominator).
+
+### Table: pilot_na_detail (IGA Level)
+- ID (int): Pilot employee ID
+- Name (string): Pilot full name
+- Rank (string): CP or FO
+- Fleet (string): Airbus
+- Qualification (string): LTC, SFI, INA, DE, or None
+- Long_NA (boolean): Whether pilot is on long-term NA
+- Admin_Duty (int): Number of admin days
+- Code (string): NA reason code
+- Description (string): Full text description of the code
+- Date columns: Daily status for each date in the selected range
+
+### Common Questions Users Ask:
+1. "What is the current Admin NA % for FOs?" → Filter admin_na_weekly,
+   latest week, Rank=FO
+2. "Which base has the highest NA?" → Group by Base, sort by NA_Percent
+3. "What's trending up?" → Compare last 4 weeks, find increasing codes
+4. "Who is on long NA?" → Filter pilot_na_detail where Long_NA=Yes
+5. "Compare CP vs FO" → Group by Rank, show both
+6. "Break down by code" → Show NA_Percent per Code, sorted descending
+"""
+Step 3 — Build the Query Engine
+Since you're likely going the local data route, here's the practical approach using pandas + SQLite:
+
+python
+# data_loader.py
+import pandas as pd
+import sqlite3
+
+def load_data():
+    """Load exported CSV/Excel files into SQLite"""
+    conn = sqlite3.connect('admin_na.db')
+
+    # Load your exported data
+    weekly = pd.read_excel('exports/weekly_na.xlsx')
+    monthly = pd.read_excel('exports/monthly_na.xlsx')
+    pilot_detail = pd.read_excel('exports/pilot_detail.xlsx')
+
+    weekly.to_sql('admin_na_weekly', conn, if_exists='replace', index=False)
+    monthly.to_sql('admin_na_monthly', conn, if_exists='replace', index=False)
+    pilot_detail.to_sql('pilot_na_detail', conn, if_exists='replace', index=False)
+
+    return conn
+Then your agent generates SQL instead of DAX (much easier for LLMs):
+
+python
+# query_tool.py
+def execute_query(conn, sql_query):
+    """Execute SQL and return results as a formatted string"""
+    try:
+        df = pd.read_sql(sql_query, conn)
+        if len(df) > 50:
+            return df.head(50).to_string() + f"\n... ({len(df)} total rows)"
+        return df.to_string()
+    except Exception as e:
+        return f"Query error: {str(e)}"
+Step 4 — Write the System Prompt (Airline-Specific)
+python
+SYSTEM_PROMPT = """You are an airline operations analyst AI assistant.
+You help crew planning managers analyze Admin NA (Not Available) data
+for pilots.
+
+DOMAIN KNOWLEDGE:
+- Admin NA % = percentage of pilots not available for flying
+- LOWER is better (means more pilots available)
+- Target is around 4-5% for FOs, 6-7% for CPs
+- Key concern areas: any code trending upward, any base above target
+- Seasonal patterns: NA tends to increase in summer months (Jun-Aug)
+
+WHEN ANSWERING:
+1. Use the schema_lookup tool to find relevant tables/columns
+2. Generate a SQL query to get the data
+3. Execute it and analyze the results
+4. Provide insights, not just numbers — e.g., "BLR base NA has
+   increased 1.5% over the last 4 weeks, driven by MLWP code"
+5. Always compare against target when available
+6. Flag any concerning trends proactively
+
+AUTOMATED INSIGHTS (when user asks "give me insights" or "what should
+I know"):
+- Top 3 bases by NA % and whether they're above target
+- Codes that increased most vs last month
+- Any pilots on Long NA > 200 days
+- Contract types with unusually high NA
+
+SQL RULES:
+- Use SQLite syntax
+- Tables: admin_na_weekly, admin_na_monthly, pilot_na_detail
+- Always include WHERE clauses to filter relevant data
+- Use ORDER BY to sort results meaningfully
+"""
+Step 5 — Add Example Q&A Pairs
+This is what makes your agent accurate. Based on your dashboard:
+
+python
+EXAMPLE_PAIRS = [
+    {
+        "question": "What's the latest Admin NA % for FOs on Airbus?",
+        "sql": """SELECT Week, NA_Percent, Target_Percent
+                  FROM admin_na_weekly
+                  WHERE Rank='FO' AND Fleet='Airbus' AND Publact='A'
+                  ORDER BY Week DESC LIMIT 1"""
+    },
+    {
+        "question": "Which base has the highest NA this month?",
+        "sql": """SELECT Base, AVG(NA_Percent) as avg_na
+                  FROM admin_na_weekly
+                  WHERE Rank='FO' AND Week >= date('now', '-30 days')
+                  GROUP BY Base
+                  ORDER BY avg_na DESC"""
+    },
+    {
+        "question": "Show me the trend for ESL code",
+        "sql": """SELECT Week, NA_Percent
+                  FROM admin_na_weekly
+                  WHERE Code='ESL' AND Rank='FO'
+                  ORDER BY Week DESC LIMIT 12"""
+    },
+    {
+        "question": "Who has been on admin NA the longest?",
+        "sql": """SELECT Name, Rank, Code, Description, Admin_Duty
+                  FROM pilot_na_detail
+                  WHERE Long_NA='Yes'
+                  ORDER BY Admin_Duty DESC LIMIT 10"""
+    },
+]
+Your Next Steps (In Order)
+Export your data — Open each page in Power BI Desktop, go to the underlying data tables, export to Excel/CSV. You need 3 files: weekly data, monthly data, and pilot-level detail.
+Set up the project — Create the Python project structure in VS Code with SQLite + pandas + your LLM API of choice (Azure OpenAI or Anthropic).
+Build the metadata + system prompt — Use what I've given you above as a starting point, and customize the codes, bases, and measures to match your exact data.
+Build the agent loop — SQL generation → execution → analysis → natural language response.
+Test with 20 real questions — Ask things your managers actually ask. Fix the ones that fail.
+Add a chat UI — FastAPI + simple HTML, or embed in Teams via Copilot Studio as a plugin.
+Want me to build out the complete working Python project structure with all these files, so you can just drop in your exported data and start testing?
