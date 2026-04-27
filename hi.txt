@@ -1,26 +1,129 @@
-Use Case 2:
+I'll start by reading the skill file and then examining all four datasets thoroughly.Ran 9 commands, viewed a fileRan 9 commands, viewed a fileNow let me build the comprehensive analysis report.Read frontend design skillRead frontend design skillNow let me build the comprehensive analysis dashboard:Ran 2 commandsRan 2 commandsNow I have a thorough picture. Let me build the analysis dashboard and report.
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widgetHere's the full analysis of your FDTL data, covering breach mechanics, sector patterns, operational decisions, and ML readiness.
 
-Business Need
-We have developed a predictive FDTL dashboard that proactively identifies flight duties likely to breach DGCA CAR limits, enabling early intervention by crew controllers. 
-However, the choice of corrective action remains manual and experience driven, leading to inconsistent decisions and increased cognitive load in time critical operational scenarios.
+How the data flows: from source files to the decision mart
+The three FINAL files each contribute a distinct layer. FINAL_1 (12,000 rows) captures FDTL planning — each row is a crew duty with allowable, scheduled, and predicted FDP/FT, along with a criticality score from L0 (safe) to L4 (breach-imminent). FINAL_2 (12,000 rows) captures roster actions — the planned vs actual trip codes, flights, fleets, and duty categories for each pilot, which lets you detect when a pilot was swapped, rescheduled, or moved from standby to a flight. FINAL_3 (59,393 rows) is the leg-level actual operations data — every individual flight segment with departure/arrival times, delays, extension consent indicators (Q/C/P), and leg status (normal, cancelled, or rescheduled). The pilot_sector_decision_mart (95,507 rows) merges all three, exploding each duty into pilot-by-sector rows so you can trace exactly what happened to each pilot on each flight leg.
 
-Proposed Solution
-Build an AI driven recommendation engine that learns from historical FDTL breaches, duty characteristics, and actions taken, to intelligently suggest optimal corrective actions for crew controllers in real time.
+Breach anatomy: what's actually happening
+Out of 95,507 sector-level records across ~12 days (April 16–27, 2026), there are only 55 rows flagged as FDTL breaches, spread across just 6 unique duties involving 11 pilots. Every single breach sits at criticality level L4, and the pattern is remarkably consistent.
+Five of the six breach duties are on extension routes (marked with the 🛧 symbol in the SECTORS field). The routes involved are: BLR-BOM-🛧BLR-AMD-BLR (appears twice across different days, accounting for 20 breach rows), BLR-LKO-🛧BLR-IXE-BLR (16 rows), DEL-HYD-🛧DEL-UDR-DEL (10 rows), and HYD-BHO-🛧HYD-GDB-HYD (8 rows). The only non-extension breach is DEL-BLR-DEL-BLR with just 1 row — a long-haul 2-leg duty where the scheduled FDP was already 12.67 hours against a 13-hour allowance, and the predicted FDP tipped over to 13.03.
+The mechanism is clear: these are duties where the base pairing (say BLR-BOM) was extended with additional sectors (🛧BLR-AMD-BLR), pushing the total predicted FDP past the allowable limit. The variance ranges from a razor-thin -0.03 hours (about 2 minutes over) to -0.97 hours (nearly an hour over). The worst case is the DEL-HYD-🛧DEL-UDR-DEL route where departure delays of 15–41 minutes cascaded into arrival delays of 25–50 minutes, blowing the FDP from a scheduled 10.58 hours to a predicted 12.97 hours against a 12-hour allowance.
 
-Use Case Description
-For each predicted FDTL breach, the AI model will
-•	Analyze the nature of the duty (sector count, reporting time, night stop, fatigue risk, aircraft type, crew type, etc.)
-•	Learn from historical actions taken in similar situations and their outcomes
-•	Consider operational constraints at that point in time (standby availability, network impact, extension limits)
-•	Recommend possible actions such as duty split, pilot consent with extension, standby activation, duty break, or flight cancellation
-•	Provide ranked recommendations with brief reasoning to support decision making
+How flights get broken — the sector separation mechanics
+Looking at NUM_PILOTS_ON_SECTOR, the data shows three distinct resolution patterns. In three of the six breach duties, the sector shows only 1 pilot on the sector — these are cases where the crew appears to have been split, with individual pilots completing different legs rather than the full pairing flying together. In the other three breach duties, 2 pilots remain on each sector, meaning both the CP and FO continued through the extended duty together despite the predicted breach.
+The actual operations file (FINAL_3) reveals that 1,239 flights carried a Q_Indicator=1 flag (extension consent), with a similar count for C_Indicator (1,273) and P_Indicator (1,228). These consent indicators appear on about 2.1% of all flight legs, and they correlate with routes that have the 🛧 extension marker. The average departure delay on Q_Indicator=1 flights is 4.3 minutes versus 2.6 minutes overall — slightly higher but not dramatically so, suggesting that consent-based extensions are sometimes a pre-planned operational decision rather than purely a reaction to delays.
+For cancellations and rescheduling, LEGSTATUS=3 appears on 95 flights (cancelled) and LEGSTATUS=6 on 18 flights. These are relatively rare — less than 0.2% of operations. The cancellations don't strongly cluster around breach-prone routes, suggesting that cancellation isn't the primary tool being used to manage FDTL exposure.
 
-Business Value
-•	Reduces dependency on individual judgment by providing data driven, consistent recommendations
-•	Improves speed and quality of decision making during high pressure operational windows
-•	Enhances regulatory compliance by proactively managing FDTL risks
-•	Optimizes crew utilization while minimizing operational disruption
-•	Acts as a decision support tool, not automation, keeping final control with crew controllers
+Delay-to-breach pipeline: how delays cascade into FDTL violations
+The correlation between delays and criticality is strong and linear. At L0, average departure delay is just 1.3 minutes and arrival delay is 0.0. By L3, departure delay jumps to 6.7 minutes and arrival delay to 10.3. At L4 (where all breaches live), departure delays average 8.9 minutes and arrival delays 12.3 minutes. This confirms that accumulated delays across multi-leg duties are the primary driver pushing FDP past allowable limits.
+The scheduled-vs-predicted FDP gap tells the same story. Across all sectors, 53.6% of flights have a predicted FDP exceeding the scheduled FDP — meaning more than half the time, operations are running slightly behind plan. For the breach cases specifically, the scheduled FDP was typically 1–2 hours below the allowable limit, but predicted FDP exceeded it, with the gap entirely attributable to operational delays accumulating over 3–4 legs.
 
-Strategic Outcome
-Transforms the FDTL dashboard from a predictive monitoring tool into an intelligent decision support system, enabling smarter, faster, and more consistent crew operations management.
+Which sectors and hubs are most vulnerable
+BLR (Bengaluru) is the most breach-prone hub by a wide margin — 18 of 55 breach sector-rows depart from BLR, more than three times the next hub (DEL and HYD at 6 each). The BLR-BOM-🛧BLR-AMD-BLR pattern appears on two separate dates (April 16 and April 26) with different crews, suggesting this is a structurally problematic route pairing rather than a one-off incident.
+Beyond actual breaches, there are 2,363 sector-rows where the remaining predicted FDP is less than 1 hour (dangerously close to breach) but no breach occurs. The top "near-miss" routes include BOM-DEL-BOM-HYD (168 rows), BLR-BBI-BLR-BHO-BLR (132 rows), and MAA-GOX-MAA-IXR-MAA (130 rows). These are your early warning routes — structurally tight pairings where even minor delays could tip into breach territory.
+The 3.7% of duties running above 90% FDP utilization and 0.7% above 95% represent a meaningful tail risk. While only 0.06% actually breach, the funnel from 90% → 95% → 100% narrows sharply, and any delay shock could widen the breach aperture.
+
+Time-of-day patterns
+High-criticality duties (L3 and L4) cluster heavily around early morning reporting hours — 7 AM is the peak with 160 rows, followed by 2 PM with 113 rows. Breach-flagged duties specifically report between 6 AM and 10 AM. This makes operational sense: early morning departures that extend into full-day multi-leg duties accumulate the most FDP, and by late evening the cumulative delays push them past limits.
+
+Roster change patterns (from FINAL_2)
+The roster data shows 16.7% of pilots experienced a tripcode change (actual vs planned mismatch), meaning roughly 1 in 6 pilots got reassigned on the day. The most common category transitions are standby pilots being activated into flight duties (207 cases of SBY→FDUT), which is a significant signal that standby resources are regularly being consumed to cover operational needs. There are also 98 fleet changes (pilots switching between 320 and 321 sub-fleets), and 52 unplanned leave entries — any of which can cascade into FDTL pressure on remaining crews.
+
+ML readiness assessment
+This dataset has several characteristics you'd want to be aware of before training a model.
+The class imbalance is extreme: only 55 positive cases (0.058%) out of 95,507 rows. For a binary classification model predicting FDTL breach, this means standard accuracy metrics would be meaningless — a model that always predicts "no breach" would score 99.94% accuracy. You'd need techniques like SMOTE oversampling, cost-sensitive learning, or framing it as an anomaly detection problem instead.
+Several columns that appear in the mart are entirely null — IGA, A_TRIPCODE, P_TRIPCODE, A_FLT, P_FLT, A_FLEET, P_FLEET, A_DUTY_CATEGORY, and P_DUTY_CATEGORY are all 100% null. Similarly, CHANGED_FLT, CHANGED_FLEET, and CHANGED_TRIPCODE are constant at 1 for every row. These 12 columns carry zero information and should be dropped. The ETD (estimated departure time) is 75% null, and actual times (ATD, ATA) are about 10% null, which aligns with "yet to report" duties where flights haven't operated yet.
+The strongest individual predictor is CRITICALITY_SCORE (correlation 0.24 with breach), followed by FDP_VARIANCE (-0.05) and PREDICTED_FDP (0.06). The relatively weak correlations suggest a model would need to learn interaction effects — it's not just high FDP that causes breaches, but high FDP combined with multiple legs, extension routes, and accumulated delays.
+The feature set that would matter most for a predictive model includes: PREDICTED_FDP relative to ALLOWABLE_FDP (the utilization ratio), OPS_LEGS (3–4 legs are where breaches concentrate), whether the route has an extension marker, departure delay patterns across legs, the hub (BLR is structurally riskier), and time of day. The current data covers only ~12 days, which gives you decent volume (95K rows) but limited temporal diversity — seasonal patterns, holiday effects, weather-driven disruptions, and fleet maintenance cycles would all be missing. For a production model, you'd want at least 6–12 months of data to capture these patterns.
+The mart structure itself — where each row is a pilot-sector combination — is well-suited for sequence modeling. You could frame breach prediction as a time-series problem where, after each sector completes, the model updates its estimate of whether the remaining duty will breach. The REMAINING_FDP_PRED column effectively does this already, but a learned model could incorporate delay trends, weather, and airport congestion patterns that the current rule-based system doesn't.
+
+
+
+
+
+
+
+
+
+
+Let me dig deeper into each criticality level and understand the operational patterns, transitions, and decision-making context within each.Now let me build the comprehensive criticality-level dashboard:Now let me walk you through what each criticality level actually means operationally and what the recommendation system would need to handle at each stage.
+
+---
+
+**L0 — The comfortable majority (96.9% of all sectors)**
+
+L0 is the baseline: average FDP utilization of 62%, with a 4.56-hour buffer remaining. These duties are well within limits and the criticality score is flat zero. The route mix is diverse — 26.5% are simple 2-leg returns like DEL-BLR-DEL, 23.5% are 4-leg returns, and only 6.9% involve extension routes. Delays at L0 are negligible (1.3 min departure, 0 arrival). The scheduled-vs-predicted drift is just 0.02 hours — essentially running on time.
+
+However, even within L0 there's a hidden tail. About 14.7% of L0 sectors are running above 80% FDP utilization, and 1.9% are above 90%. These are the "L0 in name only" cases — duties that haven't been flagged but are operationally tight. For a recommendation system, these are the rows where early warning would add the most value: they're currently invisible to the criticality score but one delay cascade away from escalating.
+
+The binding constraint at L0 is overwhelmingly Flight Time — 88.1% of L0 duties have FT as the tighter limit versus only 11.6% where FDP bites first. This makes sense: at low utilization, the shorter FT window runs out before the longer FDP window.
+
+---
+
+**L1 — The narrow band (0.82%, 781 rows, 79 unique duties)**
+
+L1 is the most uniform and arguably the most interesting level for your recommendation system. Every single L1 sector is above 80% FDP utilization, all 781 are above 90%, and 16% exceed 95%. The average remaining FDP buffer is just 0.64 hours (about 38 minutes), packed into a tight 0.52–0.75h range. The criticality score sits at a remarkably narrow 24.83–25.13 band.
+
+What makes L1 distinctive is that it's the one level where FDP is overwhelmingly the binding constraint — 89.6% of L1 cases have FDP tighter than FT. This flips completely from the L0 pattern and means that for L1 duties, the recommendation system should focus on FDP management specifically (breaks, duty extensions, pilot swaps) rather than flight time management.
+
+The route profile shows 26.8% are extension routes — a huge jump from L0's 6.9%. Top routes include BLR-HKT-BLR (an international route to Phuket with 80 rows) and MAA-GOX-MAA-IXR-MAA (a 4-leg domestic grind). The schedule drift is 0.46 hours with 75% of duties running late and 37.4% more than 30 minutes behind — a clear signal that these duties were planned tight and any slippage is meaningful.
+
+For recommendations: L1 is the "amber alert" zone. The duty is completable but there's no margin for error. The system should flag these for monitoring and pre-position standby crews at the base station. If a delay of 20+ minutes hits any leg, the recommendation should shift to proactive pilot swap or extension consent.
+
+---
+
+**L2 — The structural problem (1.65%, 1,574 rows, 121 duties)**
+
+L2 is where the data reveals a structural pattern shift. The 4-leg return route (A-B-A-C-A) jumps to 48.1% of all L2 sectors — nearly double L0's 23.5%. These are the long-day duties where pilots fly out and back, then out and back again on a different route. Extension routes are 21% of L2. The average remaining FDP is 1.38 hours, but the key insight is the FDP utilization distribution: 86.6% are above 80%, 41.1% above 90%, and 21.8% above 95%.
+
+The binding constraint flips back to FT — 79.6% of L2 sectors have FT as the tighter limit. This is critical for your recommendation system: at L2, it's often the flight time limit (how long the pilot actually flies the aircraft) that's the bottleneck, not the total duty period. So the recommendation for L2 should consider whether a relief pilot can take over the flying portion (a dead-head pilot or augmented crew) rather than just breaking the duty entirely.
+
+Delay patterns are more pronounced: average departure delay of 4.5 minutes, arrival delay of 4.7. The schedule drift is 0.23 hours with 76.7% running late. Top L2 routes include NMI-BLR-HDO-BLR (182 rows — a large cluster from Nanded hub) and NMI-NAG-NMI-IXC-NMI (112 rows). NMI (Nanded) appears disproportionately in L2, which aligns with its 7.2% non-L0 rate — the highest of any hub.
+
+---
+
+**L3 — The high-drift zone (0.18%, 174 rows, 19 duties)**
+
+L3 is a small but critical category. What sets it apart from L2 is the schedule drift: every single L3 duty (100%) is running behind schedule, with 63.2% more than 30 minutes late and a mean drift of 0.51 hours. Average departure delay is 6.7 minutes, arrival delay 10.3 minutes — the arrival delay exceeding departure delay by 3.6 minutes tells you that delays are compounding en route, not just at the gate.
+
+The route structure is dominated by 4-leg returns at 80.5% — a massive concentration. The top L3 route is HYD-IXB-HYD-CJB-HYD with 88 rows (half of all L3), all operating from Hyderabad hub. This is essentially a single route pattern driving most of L3 risk. Extension routes drop to 13.8%, which means L3 problems are driven more by accumulated delays on already-tight conventional duties than by extension-related overloading.
+
+FT remains the binding constraint at 81.6%. The remaining FDP is 1.20 hours on average, but the distribution is concerning: the minimum is just 0.02 hours (about 1 minute of buffer), meaning some L3 duties are one hiccup away from L4.
+
+For recommendations: L3 is the "intervene now" zone. The system should recommend either splitting the remaining legs between a fresh crew, getting extension consent preemptively, or if the last leg hasn't departed, considering a delay or rescheduling. The 100% running-late profile means waiting is not a viable strategy.
+
+---
+
+**L4 — The breach frontier (0.41%, 390 rows, 31 duties)**
+
+L4 is the most heterogeneous level, and this is what makes it valuable for your recommendation system. Of 390 L4 rows, only 55 actually breach (14.1%). The remaining 335 rows are L4 cases that were resolved — and understanding how they were resolved is the training signal your model needs.
+
+The L4 non-breach cases split into distinct patterns. Some routes like JAI-UDR-JAI-IXC-JAI have a comfortable 3.65-hour variance despite being L4, suggesting the criticality score flagged them for a different reason (perhaps historical pattern or flight-time proximity). Others like JAI-LKO-IDR-REW-IDR have just 0.61 hours of variance — genuinely tight. And routes like BLR-BBI-🛧BLR-BHO-BLR sit at exactly 0.00h variance (the knife's edge).
+
+The fleet split at L4 is dramatically different from all other levels: ATR accounts for 63.3% of L4 rows versus only 15.7% overall. This means the smaller ATR fleet is significantly over-represented in critical situations, likely because ATR routes tend to be multi-leg regional hops (average 3.59 legs for ATR vs 2.55 for Airbus) that are structurally tighter.
+
+L4 has the largest schedule drift by far: mean 1.68 hours, with 94.6% running more than 30 minutes behind and 87.9% more than an hour behind. Departure delays average 8.9 minutes, but it's the arrival delays at 12.3 minutes that tell the real story — the system is hemorrhaging time at every leg.
+
+Extension routes are 27.7% of L4 (and 98.2% of actual breaches within L4), confirming that extensions are the primary mechanism through which duties enter breach territory. The 4-leg multi-stop pattern accounts for 49% of L4 — these are not return-to-base routes but linear chains through multiple airports, giving less operational flexibility to swap crews.
+
+---
+
+**What this means for your recommendation system architecture**
+
+The data supports a multi-tier recommendation approach rather than a single binary classifier. Here's what each tier would look like:
+
+The "variance band" analysis shows a clear funnel: 34K sectors at 5h+ buffer → 16K at 2-3h → 5.3K at 1.5-2h → 4K at 1-1.5h → 2K at 0.5-1h → 415 at 0-0.5h → 55 breaches. At each step, extension routes become more prevalent (from 2.3% to 98.2%), legs increase, and the action space narrows. Your model needs to learn when to recommend actions at each band, not just predict whether breach will occur.
+
+The FDP-vs-FT binding constraint switching is a key feature. At L1 (FDP binding), the right recommendation is duty period management (breaks, early release, duty extension consent). At L2-L3 (FT binding), the right recommendation is crew augmentation or flying relief. At L4 (mixed), the recommendation needs to consider both simultaneously.
+
+Delay accumulation is progressive — leg 0 averages 0.5 min late, leg 3 averages 4.6 min. Your model should learn to predict delay accumulation patterns per route and use that to trigger recommendations earlier in multi-leg duties, before the damage is done.
+
+The roster swap data shows standby-to-flight activations happen mostly at L0 (63 of 65 cases), meaning replacements are being sourced reactively from the general pool rather than specifically for high-criticality duties. A smarter system would pre-position standby activation recommendations for L1+ duties, especially on the structurally vulnerable routes (NMI-hub 4-leg patterns, BLR-BOM extensions, HYD regional hops).
+
+For the 12 columns that are completely null or constant in the mart (IGA, A/P_TRIPCODE, A/P_FLT, A/P_FLEET, A/P_DUTY_CATEGORY, CHANGED_FLT/FLEET/TRIPCODE), these seem like join failures from the FINAL_2 roster data — the merge into the mart didn't carry these through. If you can fix that pipeline, the roster-change features (was this pilot swapped? what was their planned duty?) would be extremely valuable training features for the recommendation model, since they represent the ground truth of what action was actually taken.
