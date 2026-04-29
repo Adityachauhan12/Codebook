@@ -1,218 +1,45 @@
-Understood — you want a clean, human‑friendly, in‑depth narrative that answers three things clearly for each CRoute:
-
-Why did the L4 happen?
-Who was replaced and when?
-Which cases show true breaches (Actual FDP > Allowed FDP)?
-
-The Python analysis already extracted the technical details.
-Below I translate that into a clear operational investigation report.
-
-🌑 FULL L4 INCIDENT ANALYSIS — REAL OPERATIONAL CAUSES & CREW REPLACEMENTS
-The following analysis covers:
-
-CRoute 1199 (25 April)
-CRoutes 3909, 4681, F9271 (26 April)
-CRoute 5941 — explains why no L4 occurred or is visible
-
-All findings are based solely on your files.
-citeturn10search1turn11python_execution0
-
-⭐ 1) CRoute 1199 — 25 APRIL — L4 WITH CREW SPLIT
-✔ Morning Duty (Non‑L4)
-
-Multiple roster attempts:
-
-20418/76104 (never reported)
-20418/78812 (final morning duty, did report)
-
-
-Morning flight completed normally
-L0, no criticality issue
-
-✔ Afternoon Duty (L4 Case)
-Duty: 66608:7‑71977:5
-Crew: CP 66608, FO 71977
-Status: Flipped to Reported at 15:04 UTC
-Legs flown: 4
-Criticality Score: ~90.41 (extremely high)
-🔥 Why did the L4 happen?
-
-Although Actual FDP < Allowed FDP (≈ 7.8 h vs 12 h),
-L4 was triggered because:
-
-Duty extended past night threshold → night landing variance
-Predicted FDP approached dangerous zone (≈ 9.8 h)
-4 legs back‑to‑back (high workload)
-This duty was part of a massive underlying multi‑day pairing
-(1199’s pairing spans >120 hrs in your leg file)
-
-
-
-🔀 Who was replaced?
-
-Morning Crew: 20418 + 78812
-Afternoon Crew: 66608 + 71977
-Replacement happened between 14:00–15:30 UTC.
-
-⚠ L4 Breach?
-No “Actual FDP > Allowed FDP”, but it was at the threshold + night‑factor, so system escalated to L4.
-
-⭐ 2) CRoute 3909 — 26 APRIL — MULTIPLE L4s WITH CAPTAIN INSTABILITY
-✔ Duty Variants
-
-–59757:6 (FO only, CP missing)
-–64978:7 (FO only, CP missing)
-6428:8‑64978:7 (full crew assigned)
-
-🔥 Why did the L4 happen?
-ALL duties for 3909 hit L4 due to:
-
-Predicted FDP > Allowed FDP (12.2–12.7 h prediction vs 12 h allowed)
-High operational delays
-
-Avg arrival delay: 27 min
-Large delays (ADLY > 30 min) in 24–40 legs per duty
-
-
-Missing captain in early duties
-→ System treats incomplete manning as risk
-Very dense multi‑leg workload (4 legs × heavy delays)
-
-This is the classic definition of FDP expansion due to accumulated delays.
-🔀 Who was replaced?
-
-Early duties had FO only assigned (59757 or 64978).
-Eventually new Captain 6428 was assigned → duty finalised.
-
-⚠ L4 Breach?
-
-Actual FDP stayed slightly under limit
-Predicted FDP breached the legal limit → L4 escalation
-No actual overshoot, but system flagged almost certain upcoming breach.
-
-
-⭐ 3) CRoute 4681 — 26 APRIL — CAPTAIN FATIGUE LIMIT
-✔ Duty Variants
-
-40204:6‑85106:8
-40784:9‑85106:8
-40204:8‑85106:8
-
-FO 85106 remained constant.
-🔥 Why did the L4 happen?
-Cause was captain FDP nearing/exceeding predicted limit:
-
-Scheduled FDP = 11.75 h
-Actual FDP ≈ 11.58–11.75 h (almost at ceiling)
-Predicted FDP = up to 13.08 h (legal limit = 12.5 h)
-Tight duty window, no room for delay absorption
-Multi‑leg sequencing (3 legs) adding workload
-
-This is a standard captain fatigue‑limit L4.
-🔀 Who was replaced?
-Captain changes:
-
-40204 → 40784 → back to 40204 (different suffixes = different duty instances on different days)
-FO remained 85106 throughout.
-
-⚠ L4 Breach?
-
-Predicted FDP > Allowed FDP
-Actual FDP remains under, so no hard violation yet.
-
-
-⭐ 4) CRoute F9271 — 26 APRIL — TRUE LEGAL BREACH
-✔ Duty Variants
-
-–61031:4 (FO only)
-35426:7‑61031:4 (Captain later added)
-
-🔥 Why did the L4 happen?
-This is the only route where the duty actually breached the law:
-
-Allowable FDP: 11 h
-Actual FDP: 11.42 h → EXCEEDED
-Long overnight duty 21:50–08:15
-Multiple large delays
-
-🔥 This is a REAL L4 breach (not just predicted)
-The system marked:
-
-Violation (Actual) = TRUE
-Violation (Predicted) = TRUE
-
-🔀 Who was replaced?
-
-Initially only FO 61031 assigned
-Later CP 35426 inserted → too late to save FDP
-Swap occurred inside the overnight sequence.
-
-🔥 Summary:
-F9271 is a hard fatigue exceedance case.
-
-⭐ 5) CRoute 5941 — No Data for 26 April
-
-Leg file contains 0 rows for 5941
-Staging files contain 0 L4 entries
-No crew splits / no FDP / no delays recorded
-Most likely:
-
-Route not flown
-Data not captured
-Cancelled or retimed
-
-
-
-
-🚨 FINAL SUMMARY — WHY EACH L4 HAPPENED & WHO GOT REPLACED
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-CRouteL4 ReasonWho Was Replaced?Breach?1199Night ops + predicted FDP stress + 4 legsMorning crew (20418/78812) → Afternoon (66608/71977)❌ None3909Massive delay accumulation → predicted FDP > allowedCP missing → later CP 6428 assigned❌ Predicted only4681Captain fatigue limit → predicted FDP > allowedCP 40204 ↔ CP 40784 (FO stable)❌ Predicted onlyF9271Actual FDP EXCEEDED legal limit (11.42 > 11)CP 35426 added mid‑duty✅ YES — Actual breach5941No data——
-
-⚠ WHICH DUTIES BREACHED EVEN L4 LIMITS?
-✔ ONLY ONE HARD BREACH FOUND: F9271
-
-Actual FDP exceeded allowable FDP
-L4 protections were insufficient
-Severe night‑time extension + delays pushed it over
-
-All other duties were predicted to breach, not actually breached.
+I'll start by reading the uploaded files to understand the data structure, then do a deep analysis.Ran 3 commands, viewed a fileRan 3 commands, viewed a fileThe data is very large with many repeated snapshots. Let me now do a focused comprehensive analysis using Python to extract the key findings for all CRoutes.Ran 4 commandsRan 4 commandsNow let me check all other CRoutes in the staging files for any L4 events.Get all L4 CRoutes across both days for complete pictureGet all L4 CRoutes across both days for complete pictureNow I have all the data needed. Let me create a comprehensive report.Read the markdown skillRead the markdown skillGiven the complexity, I'll provide this as a detailed inline analysis rather than a docx file. Let me synthesize all findings.Check additional interesting CRoutesCheck additional interesting CRoutesNow I have all the data. Let me write the comprehensive analysis.
+Here's the in-depth operational investigation based solely on your four data files:
+
+CRoute 1199 — 25 April (ATR Fleet)
+Route: HYD → ISK → AMD → NMI → AMD (morning) / reverse afternoon — 4 legs, Allowable FDP = 12 hours
+The Split-Duty Structure: CRoute 1199 on 25 April was operated as two completely separate duties — a morning duty and an afternoon duty — both running the same 4-leg pattern but in opposite directions.
+Morning Duty (L0 — No Issue): The morning duty was AMD → IDR → AMD → ISK → HYD, reporting at 06:10 UTC, ETD 06:55, ETA 13:55. This duty went through a significant FO swap. Initially (from 24 Apr 00:17 UTC onward), the crew was CP 20418 with FO 76104, designated as duty 20418:6-76104:4. At approximately 24 April 11:48 UTC (IST night of 24th), the system switched FO from 76104 to 78812, changing the duty ID to 20418:6-78812:5. The ETA also shifted from 13:55 to 14:00 at this point. FO 76104 completely disappears from the staging data after this swap. The morning crew (CP 20418 + FO 78812) reported on time — the status flipped to "Reported" around 06:34 IST on 25 April. The morning duty completed safely with an Actual FDP of around 7.65–7.83 hours against the 12-hour allowable, and Predicted FDP never exceeded 7.95 hours. It remained at L0 (no criticality) throughout.
+Afternoon Duty (L4 — High Criticality): The afternoon duty was HYD → ISK → AMD → NMI → AMD, crewed by CP 66608 and FO 71977 (duty 66608:7-71977:5), with reporting at 14:50 UTC, ETD 15:35, ETA initially 22:35 (later revised to 22:45). This is where the L4 was declared. The system flagged this duty as L4 from the very first staging snapshot on 24 April 00:17 UTC — over 38 hours before the duty even started. The criticality score was extremely high at 90.41 (out of ~100). The reason: even though the Scheduled FDP was only 7.75 hours and the Actual FDP held at 7.75–7.92 hours, the Predicted FDP was 9.77–9.80 hours — meaning the system's delay models anticipated significant extensions. Additionally, the duty had a Night Landings Variance of -1 (meaning at least one leg was expected to land after dark beyond plan) and a Night FDP Variance of +0.2 to +0.33 (meaning the duty was predicted to push into night-time territory). These night factors combined with the 4-leg workload and predicted delay absorption drove the L4.
+How was the L4 resolved? The crew (CP 66608, FO 71977) reported at 15:04 IST on 25 April — the status changed to "Reported" at that timestamp. For the next 49 minutes (until 15:49 IST), the duty remained at L4 even after reporting, with Predicted FDP still at ~9.67–9.77 hours. Then at 16:04 IST on 25 April, the L4 was downgraded to L0. What changed? The Predicted FDP dropped dramatically from ~9.77 hours to 8.53 hours. This means the first leg(s) must have operated faster than the delay model predicted, causing the system to recalculate and remove the night extension risk. From that point, the duty tracked progressively as the ETA shifted: 22:45 → 22:50 → 23:00 → 23:10 → 23:13 → 23:20 (the actual flight ran slightly later than the original schedule but well within limits). The final Actual FDP was 8.50 hours — still far below the 12-hour allowable. No actual FDP breach occurred. The L4 was a predictive alert that resolved itself once actual operations proved faster than forecast.
+No pilot replacement was made to resolve the L4 — the same crew (66608/71977) flew the entire afternoon duty from start to finish. The L4 was absorbed operationally.
+
+CRoute 3909 — 26 April (Airbus Fleet)
+Route: DEL → HYD → (DH) DEL → UDR → DEL — 4 legs, Allowable FDP = 12 hours, Reporting 10:45 UTC
+This CRoute had chronic captain instability. The data shows three distinct duty configurations cycling through the staging snapshots:
+Phase 1 — CP present (25 Apr 10:48 to ~19:34 IST): Initially assigned as duty 6428:8-64978:7 with CP 6428 and FO 64978. The Predicted FDP was 12.72–12.73 hours against a 12-hour allowable, so the FDP Variance was negative (-0.73) — meaning a predicted breach. This triggered L4 immediately. The criticality score was ~78.6.
+Phase 2 — Captain removed (25 Apr ~19:34 onward): Around 19:34 IST on 25 April, CP 6428 was removed from the duty. The duty ID changed to -64978:7 (the dash prefix indicating "FO only, no captain assigned"). The FDP predictions and L4 status remained identical, but now the route had a manning problem on top of the fatigue risk.
+Phase 3 — FO also swapped (26 Apr ~06:05 IST): By 06:05 IST on 26 April (the day of operation), the FO changed from 64978 to 59757, with the duty becoming -59757:6. The L4 persisted with Predicted FDP at 12.27 hours (FDP Variance = -0.27). FO 59757 then reported at approximately 11:03 IST on 26 April.
+How was the L4 handled? Despite the captain being removed, the L4 was never resolved in the staging data — the last available snapshots (12:17 IST on 26 April) still show L4 with -59757:6 (FO only, Reported), Predicted FDP of 12.15 hours, and no captain assigned. The data does not show a captain being re-assigned before the staging window ends. The Actual FDP remained at 10.50 hours (well within limits), but the Predicted FDP consistently exceeded the 12-hour allowable. No actual FDP breach occurred, but the predicted breach was never fully resolved in the available data. This CRoute represents a persistent planning failure — the captain slot was unstable, and the system could not find a valid crew solution that eliminated the L4.
+
+CRoute 4681 — 26 April (Airbus Fleet)
+Route: BLR → BOM → (DH) BLR → AMD → BLR — 3 legs, Allowable FDP = 12.5 hours, Reporting 07:30 UTC
+This duty ran extremely close to the FDP ceiling with repeated captain changes.
+Phase 1 — CP 40784 (25 Apr 10:48 to ~17:34 IST): Initially assigned as 40784:9-85106:8 with CP 40784 and FO 85106 (who remained constant throughout). Scheduled FDP was 11.75 hours against 12.5 allowable — already tight. Predicted FDP was 13.07–13.08 hours, meaning a predicted breach of -0.57 to -0.58 hours past the limit. L4 triggered immediately (criticality score ~78.4).
+Phase 2 — CP changed to 40204 (25 Apr ~21:17 IST): The duty changed to 40204:8-85106:8, then later 40204:6-85106:8. Captain 40204 replaced 40784. The Predicted FDP improved slightly to 12.82–12.83 hours, but still breached the 12.5 allowable (Variance = -0.32). The L4 remained.
+Phase 3 — Day of operation: CP 40204 and FO 85106 reported (first "Reported" snapshot at 07:48 IST on 26 April). Throughout the day, the Predicted FDP fluctuated between 12.57 and 12.92 hours — sometimes improving, sometimes worsening, but always staying above the 12.5 allowable. The Actual FDP held steady at 11.58 hours.
+Final state: The last available snapshots (13:17 IST on 26 April) still show L4 with Predicted FDP of 12.92 hours. No actual FDP breach occurred (Actual FDP 11.58 vs 12.5 allowable), but the system never resolved the predicted overshoot. FO 85106 was the constant throughout — the captain swaps (40784 → 40204) were the operational mitigation attempt, but neither captain produced a duty profile that eliminated the predicted breach.
+
+CRoute F9271 — 26 April (THE ACTUAL BREACH)
+Route: DEL → (DH) CCU → DEL — 1 operational leg (DH = deadhead), Allowable FDP = 11 hours, Reporting 20:50 UTC (night duty)
+This is the only CRoute in your entire dataset where the Actual FDP exceeded the Allowable FDP — a real legal breach.
+The data shows only two snapshots, both from 27 April (post-duty):
+Snapshot 1 (02:48 IST, 27 Apr): Duty 35426:7-61031:4 — CP 35426 and FO 61031, status "Reported". Actual FDP = 11.42 hours vs Allowable FDP = 11.0 hours. FDP Variance = -0.42 hours (42 minutes over the legal limit).
+Snapshot 2 (03:04 IST, 27 Apr): Duty -61031:4 — the captain (35426) has been removed from the duty record, leaving only FO 61031. Same Actual FDP = 11.42 hours, same breach.
+What happened: This was an overnight duty (reporting 20:50 UTC = ~02:20 IST, ETD 21:50 UTC, ETA 08:15 UTC on 27 April). The single operational leg (CCU to DEL, with the outbound being a deadhead) ran significantly late. The Predicted FDP matched the Actual FDP exactly (11.42 hours), meaning by the time the system captured this, the duty was already complete and the breach had already occurred.
+The captain removal after the breach (35426 disappearing between 02:48 and 03:04 IST snapshots) likely represents a post-facto roster adjustment or data reconciliation, not a real-time crew swap — the duty was already over by that point. CP 35426 was added late — the -61031:4 duty format (FO only) appears in one snapshot, suggesting the captain may not have been assigned until close to departure, which contributed to the inability to mitigate the FDP issue.
+This is a genuine FDTL violation: 25 minutes over the legal FDP limit on a night duty.
+
+Other Notable L4 CRoutes
+CRoute 4149 (26 April): This was the most severe case by numbers — CP 39850 / FO 82987 on CCU → DED → CCU → IXA → CCU. One snapshot shows Actual FDP of 13.33 hours vs Allowable of 11.5 hours — a breach of nearly 2 hours — with Predicted FDP an astonishing 16.67 hours (FDP Variance = -5.17). However, a subsequent snapshot 17 minutes later shows the Allowable revised to 12.5 and Actual dropping to 10.33, suggesting either a data correction or a duty restructuring. This needs further investigation but potentially represents another hard breach.
+CRoute F82 (25 April): BOM → DMM → BOM (international). CP 46124 / FO 90374. Allowable FDP = 11 hours. The final snapshots show Actual FDP of 11.75 hours — a breach of 45 minutes. This is another confirmed actual exceedance, though the crew (46124/90374) was never replaced.
+CRoute D3422 (25 April): DEL → BLR → DEL → BLR. Only FO 69126 assigned (no captain ever appeared). Predicted FDP 13.03 vs Allowable 13.0 — marginal predicted breach. No captain was ever assigned in the available data.
+CRoute 3416 (25 April): BLR → NAG → BLR → MAA → BLR. Only CP 41251 assigned (no FO). L4 triggered by predicted FDP 9.5–10.05 vs 12 allowable — this appears to be a system concern driven by the missing FO rather than actual FDP proximity. The criticality score was 90.41, matching the "incomplete crew" pattern.
+
+Summary
+Across both days, CRoute 1199 on 25 April had the most dramatic L4 lifecycle — flagged 38 hours in advance at criticality 90.41, it resolved itself naturally once operations began. CRoutes 3909 and 4681 on 26 April both suffered from captain instability and predicted FDP breaches that were never fully resolved, though no actual FDP was exceeded in either case. F9271 is the only confirmed hard breach among the five CRoutes you originally asked about (11.42 vs 11.0 hours). Beyond those five, F82 and potentially 4149 also show actual breaches that warrant investigation.
