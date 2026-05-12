@@ -1,88 +1,84 @@
-Great question — let me break down what's actually viable given your constraints (no VS Code, no GitHub deployment).
+Maximizing Smart Narrative in Power BI
+The Smart Narrative visual is more customizable than most people realize. Here's how to actually squeeze performance out of it:
 
-## The Core Problem with Power BI + Agents
+Understanding What You're Working With
+Smart Narrative has two modes:
 
-Power BI is fundamentally a **read-only visualization layer** — it doesn't natively support stateful agents. But here's what can get you close to your goal:
+Auto-generated — Power BI writes it, you have little control
+Custom with dynamic values — You write the narrative, embed live DAX values inside it
 
----
+The second mode is where the real power is, and most people never use it.
 
-## Option 1: DAX Dynamic Text Measures *(Best no-deploy option)*
+The Right Way to Set It Up
+Step 1 — Switch to Custom Narrative Mode
+Insert Smart Narrative → click inside it → "Add a value" button appears. This lets you embed dynamic DAX expressions inline inside your text.
+Your narrative becomes:
 
-This is underrated and genuinely powerful. You write measures that generate full narrative text, and they **auto-respond to every filter/slicer change**.
+"Sales this month reached [+Value: SUM(Sales)] which is [+Value: Growth%] compared to last period..."
 
-```dax
-Dynamic Summary = 
-VAR _rev = [Total Revenue]
-VAR _revLY = [Revenue LY]
-VAR _growth = DIVIDE(_rev - _revLY, _revLY)
-VAR _topProduct = CALCULATE(TOPN(1, VALUES(Products[Name]), [Revenue]))
-VAR _trend = IF(_growth > 0, "▲ up", "▼ down")
+Every bracketed value is live and filter-responsive.
+Step 2 — Pre-build Your KPI Measures in DAX First
+Don't embed raw aggregations in the narrative. Build clean measures:
+daxRevenue Growth % = 
+DIVIDE([Revenue] - [Revenue LY], [Revenue LY], 0)
 
-RETURN
-"Revenue is " & FORMAT(_rev, "#,##0") & 
-" — " & _trend & " " & FORMAT(ABS(_growth), "0.0%") & 
-" vs last year. Top performer: " & _topProduct & "."
-```
+Performance Flag = 
+SWITCH(TRUE(),
+    [Revenue Growth %] > 0.1, "strong growth",
+    [Revenue Growth %] > 0, "moderate growth",
+    [Revenue Growth %] < 0, "declining",
+    "flat"
+)
 
-Put this in a **Card visual** or **Smart Narrative** — it becomes a living summary that reacts to any filter. You can make it as rich as you want.
+Top Region = 
+CALCULATE(
+    FIRSTNONBLANK(Region[Region Name], 1),
+    TOPN(1, VALUES(Region[Region Name]), [Revenue])
+)
+Then your narrative reads naturally:
 
----
+"Revenue shows [Performance Flag] at [Revenue] . Top region is [Top Region]."
 
-## Option 2: Power BI Copilot *(If your org has it)*
+Step 3 — Write the Narrative Like an Analyst Would
+Structure it in 3 blocks:
+HEADLINE
+"[Month] performance is [Status]. Revenue hit [Revenue] — [Growth%] vs target."
 
-This is the closest to a true agent **without any deployment**:
+DETAIL
+"Best performing area: [Top Region] at [Region Revenue].
+Biggest drag: [Bottom Region] at [Bottom Revenue]."
 
-- Generates AI summaries that adapt to report context
-- Answers natural language questions about your data
-- Creates visuals from prompts
-- **Requirement**: Fabric F64 capacity or Power BI Premium P1/P2
+ALERT (conditional)
+"⚠ [X] KPIs are below threshold this period."
 
-> Check with your admin — many companies already have this and don't use it.
+Making It "Adapt" to Filters
+The Smart Narrative already reacts to slicers — but only if your measures use proper filter context. The key rules:
+Do this — measures that respect context:
+daxRevenue = SUM(Sales[Amount])  -- responds to any filter
+Avoid this — hardcoded ALL() that ignores filters:
+daxRevenue = CALCULATE(SUM(Sales[Amount]), ALL(Date))  -- breaks narrative
+Also sync your Smart Narrative visual with your slicers explicitly via View → Sync Slicers — otherwise it may not update on all filter changes.
 
----
+Conditional Language (Pseudo-Intelligence)
+You can make the narrative feel smart by using IF/SWITCH inside your value expressions:
+daxSummary Sentence = 
+"Revenue is " & FORMAT([Revenue], "#,##0") & 
+" which is " & 
+IF([Revenue Growth %] > 0, 
+   "above target by " & FORMAT([Revenue Growth %], "0.0%"),
+   "BELOW target by " & FORMAT(ABS([Revenue Growth %]), "0.0%") & " ⚠"
+)
+This makes the tone of the narrative change based on actual performance — it reads differently in good months vs bad months.
 
-## Option 3: Power Automate + OpenAI Connector *(Low-code agent)*
+Practical Limitations to Know
+LimitationWorkaroundNo memory between sessionsEmbed all context in DAX measuresCan't reference other visual selections dynamicallyUse SELECTEDVALUE() in measuresLong text gets cut offBreak into multiple Smart Narrative cardsFont/formatting limitedLayer over a formatted text box
 
-This is available **inside Power BI Desktop** via the Power Automate visual:
+What to Build First
+The highest-value thing you can build right now is a 3-card narrative panel:
 
-```
-Trigger: Button click in Power BI visual
-→ Power Automate Flow
-→ Passes current filter context as parameters
-→ Calls OpenAI / Azure OpenAI HTTP connector
-→ Returns dynamic GPT-generated summary back to report
-```
+Executive card — one sentence headline with traffic light emoji based on overall performance
+Detail card — top 3 KPIs with vs-target language
+Alert card — only shows text when something is off-threshold (use a measure that returns blank when everything is fine)
 
-No VS Code, no GitHub — just Power Automate flows which you likely already have access to. The key trick is **passing slicer values as dynamic parameters** into the flow.
 
----
-
-## Option 4: Custom Connector via Power Query *(HTTP to any LLM)*
-
-If your company allows external HTTP calls in Power Query, you can hit an LLM API directly:
-
-```powerquery
-let
-    body = Json.FromValue([prompt = "Summarize: Revenue=" & Text.From(revenue)]),
-    response = Web.Contents("https://api.openai.com/v1/chat/completions", 
-        [Headers=[Authorization="Bearer YOUR_KEY"], Content=body])
-in
-    Json.Document(response)
-```
-
-Limitation: this refreshes on schedule, not on filter change.
-
----
-
-## What I'd Actually Recommend For You
-
-| Goal | Best Option |
-|---|---|
-| Dynamic summary on filter change | DAX Text Measures |
-| True AI-generated narrative | Power BI Copilot (check capacity) |
-| Interactive Q&A agent feel | Power Automate + OpenAI visual |
-| KPI alerts + summaries | Data Alerts + Power Automate |
-
-**Start with DAX measures** — they're zero-dependency, incredibly responsive, and most people never push them to their full potential for narrative generation. You can build something that looks and feels genuinely intelligent just with well-crafted DAX.
-
-Want me to build out a full DAX-based dynamic summary template for your specific KPIs? Just tell me what metrics you're tracking.
+Want me to write out the full DAX measures for a specific set of KPIs you're tracking? Tell me what your main metrics are (revenue, units, margins, etc.) and I'll build the whole thing out.
