@@ -1,38 +1,31 @@
-Dear Aditya Chauhan,
-Thank you for updating your dependent(s) details. The below mentioned details are captured only for Group Mediclaim Insurance enrolment purpose.
-Policy period is 07-June-2026 to 06-June-2027.
-Please note that this is not the confirmation of policy activation. Once confirmed, the updated dependent details will be available post June 15, 2026 and we request you to check your dependent details on 6E Breez under ‘My Mediclaim’ section. 
-Name	Relation	Date of Birth	Age (In Years)
-Aditya Chauhan	Employee	04-Aug-2003	22
+API_KEY = ""
+BASE_URL = "https://openai-lab37-hackathon.openai.azure.com/"
+DEPLOYMENT_NAME = "gpt-5-mini5"
+API_VERSION = "2025-04-01-preview"
 
-Name	Relation	Date of Birth	Age (In Years)
-Poonam Chandra	Mother	16-Dec-1971	54
-Jai Prakash Chauhan	Father	06-Feb-1970	56
 
-Premium Summary
-Policy Type	Plan	Sum Insured (In INR)	Annual Premium (In INR)
-Employee
-Policy	Employee Base Policy (ESC)	3,00,000	0
-	Employee Top-Up Policy (ESC)	0	0
-	Co-Pay Buy Back (ESC)	0	0
-	Post Hospitalisation Extension	0	0
-	Critical Illness Benefit	0	0
-	Covid-19 Benefit ESC (Per Member)	0	0
-Parental
-Policy	Parental Policy	5,00,000	54,361
-	Co-Pay Buy Back (Parents)	0	0
-	Covid-19 Benefit Parents (Per Member)	0	0
-Total Premium (In INR, Including GST)	54,361
-Monthly Premium (In INR, Including GST) in 10 instalments	5,436.10
 
-For any assistance, please contact:
-MDIndia TPA SPOCs
-•	Anutosh Patra (+91 7669117973, indigo@mdindia.com)
-For any escalation, please contact:
-Prudent SPOCs
-•	Amit Kumar (+91 8448183965, amit.kumar@prudentbrokers.com)
-•	Sandeep Gupta (+91 7428691908, sandeep.gupta@prudentbrokers.com)
-•	Sanjeev Kumar (+91 7303594246, sanjeev.kumar1@prudentbrokers.com)
+# ✅ Initialize client
+client = AzureOpenAI(
+    azure_endpoint=BASE_URL,
+    api_key=API_KEY,
+    api_version=API_VERSION
+)
 
-Warm Regards,
-MDIndia Health Insurance TPA Pvt. Ltd.
+
+# ✅ Connectivity test
+def test_connection():
+    try:
+        response = client.chat.completions.create(
+            model=DEPLOYMENT_NAME,  
+            messages=[
+                {"role": "user", "content": "Say 'connection successful'"}
+            ],
+        )
+
+        print("✅ SUCCESS")
+        print(response.choices[0].message.content)
+
+    except Exception as e:
+        print("❌ CONNECTION FAILED")
+        print(str(e))
