@@ -1,41 +1,43 @@
-See a crew is supposed to graduate in may
-then ifs has to implement flight routing by 10th April to occ
-and for that he needs the data from ifly by 25th march at max.
+You're right, I only covered the manual process. Let me redo it with the solution woven in properly — problem → solution at each step:
 
-The IFS team receives various revision mails of the batch list as there are crew who may fail the the test and need to redo it or some other crew gets added in the list so the final revision is received to IFS around 25th march and that's why they the last two revision lists only as too much changes happen before that
+---
 
--------------------The first step is base mapping ------------------------
+**[OPENING — 20 sec]**
+"After a batch completes training at iFly, IFS has to relocate 40-50 crew back to their bases. Every person — different base, different hometown, different flight. This was being done fully manually: spreadsheets, individual AIMS entries, zero validation. We built a Python + FastAPI pipeline to automate the whole thing."
 
-:->Many a times crew gets there base changed so they first recheck the base from AIMS.
+---
 
-Now various codes have meaning->
+**[STEP 1: EMAIL PARSING — 25 sec]**
+"It starts with IFS receiving the batch list from iFly — comes in as an unstructured `.msg` email file. Manually, someone had to read it, extract crew names, IDs, base assignments. Our system auto-parses it using regex, pulls all crew data out, and immediately cross-references each crew's base against the AIMS API to validate it. Because bases change — if you don't verify, you route someone to the wrong city."
 
-1 RLL-> relocation leave
-2 RLLH-> relocation leave with hotel
-3 OFG->off day
+---
 
-Now there is three days process
+**[STEP 2: FLIGHT ROUTING — 50 sec]**
+"Now the 3-day routing. Day 1, crew leaves iFly. Our system calls the JOC API, generates a flight route, and applies the **RLL code** automatically. It prioritizes morning departures — that's a rule baked into the logic. It also books 2 backup flights automatically.
 
-lets take 3,4,5 dates
+One thing we had to specifically code for: the **DHT code**. This has to be ticked inside the route to mark the crew as a passenger, not operating crew. If it's missed, AIMS thinks she's flying the plane. Previously this was a manual checkbox someone could forget. Now it's applied by the pipeline with no exceptions.
 
-Now on 3rd the crew has the option to go from Ifly to either to their base or hometown
+Day 2 is just **OFG** — off day. System applies it, no flight needed.
 
-Case 1:  Crew goes to Hometown
-        So ifs generates there flight route of 3rd to there base
-        Through aims they assign there flight with rll code also keep 2 flights as backup and tries to arrange a flight in the morning so that the crew can have more               time to spend but if no flights available of early morning then assign which ever is available.
-Then on 4th she has her off day were she s spending time in hometown code->OFG(off).
-Then on 5th she has to get to her base so ifs routes a flight such that it is around 7-10 in the morning if available but not too early as then inconvenient for crew(this is a human step) Code->RLLH
+Day 3, return to base — system routes the flight in the 7-10 AM window where possible, applies **RLLH code** which is mandatory for hotel allocation downstream."
 
-Also if hotel has to be allotted then RLLH code is mandatory and the otherwise hotel doesn't get allotted
+---
 
-Hotel allocation and flight booking done by Logistics IFS does flight route only for pnr generation
+**[EDGE CASE — 25 sec]**
+"One edge case we specifically handled: own-transport crew. If someone says they'll go by car, we still attach a **dummy flight** in the system — because without it, no RLLH code, no hotel. And AIMS throws an error thinking the crew never left hometown. The pipeline detects own-transport cases and auto-generates the dummy flight for them."
 
-It is preferred to done early so that the flights are also booked cheaply
+---
 
-Also for example if the crew wants to go to base on there own through car etc. then a dummy flight is attached to her still because otherwise She cant get hotel so RLLH code is still attached with a dummy flight
+**[STEP 3: CODE APPLICATION + OUTPUT — 30 sec]**
+"Once routing is done, the system applies all the AIMS codes — RLL, RLLH, DHT, OFG, N/A — based on predefined logic for each crew's scenario. No manual decisions. The final output is an AIMS-ready CSV that IFS can directly upload. There's a human confirmation checkpoint before the upload — so oversight is still there, but the heavy lifting is automated."
 
-also attached otherwise lets say if a crew had hometown flight of Delhi to amd then if we don't book dummy flight from amd to base then system cant capture and thinks crew is still in amd and system gives error
+---
 
-Also when we assign the route of crew in order to fill details in the route with that specific crew assign the code inside the route assigned not the actual 3 codes, DHT(this will pick by system default we have to tick manually compulsory) otherwise it will be assumed that she is operating on the flight instead.
+**[N/A + CLOSE — 25 sec]**
+"Post-relocation, Days 4 and 5 get **N/A code** — buffer for license or AEP issues. That's also auto-applied.
 
-When she gets on the base she gets hotel of 13 nights and 14 days and also her next two days i.e. 6th and 7th have the code of N/A because there may be eror that her license is expired or aep is expired so to sought that out she gets two days of N/A
+What used to take hours of manual AIMS entries, email parsing, and spreadsheet tracking now runs end-to-end in minutes. All codes applied correctly, backup flights included, edge cases handled — and a clean audit trail throughout."
+
+---
+
+~3 min 45 sec at a normal pace. Ab solution and process dono equally covered hain — PPT ke saath sync bhi karega properly.
