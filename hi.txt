@@ -1,3 +1,41 @@
-mota mota ye samjho k autonomous marketing ka project h like user just enter their product and a budget and our system will auto allocate and run ads on meta and google.
+See a crew is supposed to graduate in may
+then ifs has to implement flight routing by 10th April to occ
+and for that he needs the data from ifly by 25th march at max.
 
-like lets say indigo has cabs toh uski marketing karni h toh user comes to our system will enter details like i want to run ads for indigo cabs my budget is 30 lakhs toh apna system automatically decide kar lega ki kismet kitna allocate karna h creative create kar dega and will run ads
+The IFS team receives various revision mails of the batch list as there are crew who may fail the the test and need to redo it or some other crew gets added in the list so the final revision is received to IFS around 25th march and that's why they the last two revision lists only as too much changes happen before that
+
+-------------------The first step is base mapping ------------------------
+
+:->Many a times crew gets there base changed so they first recheck the base from AIMS.
+
+Now various codes have meaning->
+
+1 RLL-> relocation leave
+2 RLLH-> relocation leave with hotel
+3 OFG->off day
+
+Now there is three days process
+
+lets take 3,4,5 dates
+
+Now on 3rd the crew has the option to go from Ifly to either to their base or hometown
+
+Case 1:  Crew goes to Hometown
+        So ifs generates there flight route of 3rd to there base
+        Through aims they assign there flight with rll code also keep 2 flights as backup and tries to arrange a flight in the morning so that the crew can have more               time to spend but if no flights available of early morning then assign which ever is available.
+Then on 4th she has her off day were she s spending time in hometown code->OFG(off).
+Then on 5th she has to get to her base so ifs routes a flight such that it is around 7-10 in the morning if available but not too early as then inconvenient for crew(this is a human step) Code->RLLH
+
+Also if hotel has to be allotted then RLLH code is mandatory and the otherwise hotel doesn't get allotted
+
+Hotel allocation and flight booking done by Logistics IFS does flight route only for pnr generation
+
+It is preferred to done early so that the flights are also booked cheaply
+
+Also for example if the crew wants to go to base on there own through car etc. then a dummy flight is attached to her still because otherwise She cant get hotel so RLLH code is still attached with a dummy flight
+
+also attached otherwise lets say if a crew had hometown flight of Delhi to amd then if we don't book dummy flight from amd to base then system cant capture and thinks crew is still in amd and system gives error
+
+Also when we assign the route of crew in order to fill details in the route with that specific crew assign the code inside the route assigned not the actual 3 codes, DHT(this will pick by system default we have to tick manually compulsory) otherwise it will be assumed that she is operating on the flight instead.
+
+When she gets on the base she gets hotel of 13 nights and 14 days and also her next two days i.e. 6th and 7th have the code of N/A because there may be eror that her license is expired or aep is expired so to sought that out she gets two days of N/A
