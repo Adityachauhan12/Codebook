@@ -1,31 +1,3 @@
-API_KEY = ""
-BASE_URL = "https://openai-lab37-hackathon.openai.azure.com/"
-DEPLOYMENT_NAME = "gpt-5-mini5"
-API_VERSION = "2025-04-01-preview"
+mota mota ye samjho k autonomous marketing ka project h like user just enter their product and a budget and our system will auto allocate and run ads on meta and google.
 
-
-
-# ✅ Initialize client
-client = AzureOpenAI(
-    azure_endpoint=BASE_URL,
-    api_key=API_KEY,
-    api_version=API_VERSION
-)
-
-
-# ✅ Connectivity test
-def test_connection():
-    try:
-        response = client.chat.completions.create(
-            model=DEPLOYMENT_NAME,  
-            messages=[
-                {"role": "user", "content": "Say 'connection successful'"}
-            ],
-        )
-
-        print("✅ SUCCESS")
-        print(response.choices[0].message.content)
-
-    except Exception as e:
-        print("❌ CONNECTION FAILED")
-        print(str(e))
+like lets say indigo has cabs toh uski marketing karni h toh user comes to our system will enter details like i want to run ads for indigo cabs my budget is 30 lakhs toh apna system automatically decide kar lega ki kismet kitna allocate karna h creative create kar dega and will run ads
