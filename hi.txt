@@ -1,5 +1,20 @@
-C:\Users\Shubham.x.Buara\OneDrive - InterGlobe Aviation Limited\Documents\IBC Bluechip\IBC-365-BE>git push     
-Remote "origin" does not support the Git LFS locking API. Consider disabling it with:
-  $ git config lfs.https://github.com/6E-Lab37/IBC-365-BE.git/info/lfs.locksverify false
-Post "https://github.com/6E-Lab37/IBC-365-BE.git/info/lfs/locks/verify": tls: failed to verify certificate: x509: certificate signed by unknown authority
-error: failed to push some refs to 'https://github.com/6E-Lab37/IBC-365-BE.git'
+Two separate issues here. Let me break them down.
+Issue 1: LFS Locks Verify (Warning, not the blocker)
+GitHub.com doesn't support the LFS locking API in the way your config expects. Just a warning but worth silencing:
+bashgit config lfs.https://github.com/6E-Lab37/IBC-365-BE.git/info/lfs.locksverify false
+
+Issue 2: x509 Certificate Error (The actual blocker)
+tls: failed to verify certificate: x509: certificate signed by unknown authority
+Root cause: IndiGo's corporate network uses an SSL inspection proxy (Zscaler or similar). It intercepts HTTPS traffic and re-signs it with an internal corporate CA cert. Git has its own SSL library that doesn't trust this internal CA — Windows does, but Git doesn't.
+Fix — tell Git to use Windows' certificate store (which already trusts IndiGo's CA):
+bashgit config --global http.sslBackend schannel
+That's usually all you need on a corporate Windows machine. Try pushing again after this.
+
+If it still fails, the alternative is to point Git to IndiGo's CA cert bundle explicitly:
+bash# Ask IT for the corporate CA cert path, then:
+git config --global http.sslCAInfo "C:/path/to/corporate-ca.pem"
+
+Do NOT do this (tempting but bad practice on a corp machine with actual secrets):
+bashgit config --global http.sslVerify false  # ❌ disables all cert verification
+
+schannel fix should work since you're on a domain-joined Windows machine — IndiGo's CA is almost certainly already in the Windows trust store.
