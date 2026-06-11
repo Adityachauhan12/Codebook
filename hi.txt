@@ -1,43 +1,5 @@
-You're right, I only covered the manual process. Let me redo it with the solution woven in properly — problem → solution at each step:
-
----
-
-**[OPENING — 20 sec]**
-"After a batch completes training at iFly, IFS has to relocate 40-50 crew back to their bases. Every person — different base, different hometown, different flight. This was being done fully manually: spreadsheets, individual AIMS entries, zero validation. We built a Python + FastAPI pipeline to automate the whole thing."
-
----
-
-**[STEP 1: EMAIL PARSING — 25 sec]**
-"It starts with IFS receiving the batch list from iFly — comes in as an unstructured `.msg` email file. Manually, someone had to read it, extract crew names, IDs, base assignments. Our system auto-parses it using regex, pulls all crew data out, and immediately cross-references each crew's base against the AIMS API to validate it. Because bases change — if you don't verify, you route someone to the wrong city."
-
----
-
-**[STEP 2: FLIGHT ROUTING — 50 sec]**
-"Now the 3-day routing. Day 1, crew leaves iFly. Our system calls the JOC API, generates a flight route, and applies the **RLL code** automatically. It prioritizes morning departures — that's a rule baked into the logic. It also books 2 backup flights automatically.
-
-One thing we had to specifically code for: the **DHT code**. This has to be ticked inside the route to mark the crew as a passenger, not operating crew. If it's missed, AIMS thinks she's flying the plane. Previously this was a manual checkbox someone could forget. Now it's applied by the pipeline with no exceptions.
-
-Day 2 is just **OFG** — off day. System applies it, no flight needed.
-
-Day 3, return to base — system routes the flight in the 7-10 AM window where possible, applies **RLLH code** which is mandatory for hotel allocation downstream."
-
----
-
-**[EDGE CASE — 25 sec]**
-"One edge case we specifically handled: own-transport crew. If someone says they'll go by car, we still attach a **dummy flight** in the system — because without it, no RLLH code, no hotel. And AIMS throws an error thinking the crew never left hometown. The pipeline detects own-transport cases and auto-generates the dummy flight for them."
-
----
-
-**[STEP 3: CODE APPLICATION + OUTPUT — 30 sec]**
-"Once routing is done, the system applies all the AIMS codes — RLL, RLLH, DHT, OFG, N/A — based on predefined logic for each crew's scenario. No manual decisions. The final output is an AIMS-ready CSV that IFS can directly upload. There's a human confirmation checkpoint before the upload — so oversight is still there, but the heavy lifting is automated."
-
----
-
-**[N/A + CLOSE — 25 sec]**
-"Post-relocation, Days 4 and 5 get **N/A code** — buffer for license or AEP issues. That's also auto-applied.
-
-What used to take hours of manual AIMS entries, email parsing, and spreadsheet tracking now runs end-to-end in minutes. All codes applied correctly, backup flights included, edge cases handled — and a clean audit trail throughout."
-
----
-
-~3 min 45 sec at a normal pace. Ab solution and process dono equally covered hain — PPT ke saath sync bhi karega properly.
+C:\Users\Shubham.x.Buara\OneDrive - InterGlobe Aviation Limited\Documents\IBC Bluechip\IBC-365-BE>git push     
+Remote "origin" does not support the Git LFS locking API. Consider disabling it with:
+  $ git config lfs.https://github.com/6E-Lab37/IBC-365-BE.git/info/lfs.locksverify false
+Post "https://github.com/6E-Lab37/IBC-365-BE.git/info/lfs/locks/verify": tls: failed to verify certificate: x509: certificate signed by unknown authority
+error: failed to push some refs to 'https://github.com/6E-Lab37/IBC-365-BE.git'
