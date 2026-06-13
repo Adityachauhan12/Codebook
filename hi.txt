@@ -1,20 +1,89 @@
-Two separate issues here. Let me break them down.
-Issue 1: LFS Locks Verify (Warning, not the blocker)
-GitHub.com doesn't support the LFS locking API in the way your config expects. Just a warning but worth silencing:
-bashgit config lfs.https://github.com/6E-Lab37/IBC-365-BE.git/info/lfs.locksverify false
+Functional Overview: Digital 
 
-Issue 2: x509 Certificate Error (The actual blocker)
-tls: failed to verify certificate: x509: certificate signed by unknown authority
-Root cause: IndiGo's corporate network uses an SSL inspection proxy (Zscaler or similar). It intercepts HTTPS traffic and re-signs it with an internal corporate CA cert. Git has its own SSL library that doesn't trust this internal CA — Windows does, but Git doesn't.
-Fix — tell Git to use Windows' certificate store (which already trusts IndiGo's CA):
-bashgit config --global http.sslBackend schannel
-That's usually all you need on a corporate Windows machine. Try pushing again after this.
+This department provides new business solutions to deliver competitive advantage through innovation as well as offer scale, productivity, and efficiency to the business. They manage the infrastructure, connectivity across our airports network, all airport technology, and several mission critical business support applications for hassle free computing.   
 
-If it still fails, the alternative is to point Git to IndiGo's CA cert bundle explicitly:
-bash# Ask IT for the corporate CA cert path, then:
-git config --global http.sslCAInfo "C:/path/to/corporate-ca.pem"
+Role Summary: 
 
-Do NOT do this (tempting but bad practice on a corp machine with actual secrets):
-bashgit config --global http.sslVerify false  # ❌ disables all cert verification
+LAB37, the innovation lab of one of the India's leading airlines, is seeking a highly skilled AI Engineers to join our team shaping the future of intelligent aviation. The ideal candidate should possess strong expertise in software engineering and machine learning, with a proven ability to translate research into scalable, real-world AI solutions. 
 
-schannel fix should work since you're on a domain-joined Windows machine — IndiGo's CA is almost certainly already in the Windows trust store.
+In this role, you will collaborate within the lab and also with other AI Engineers, product teams, and technology partners to design, build, and deploy next-generation AI solutions and systems that power transformative experiences across the airline ecosystem—from customer engagement to operational excellence. 
+
+ 
+
+Key Responsibilities: 
+
+Apply AI software engineering knowledge to design and deliver innovative software solutions and applications. 
+
+Translate state-of-the-art research around Agentic AI, Autonomous and adaptable AI and other data science and engineering methods into robust, maintainable, and scalable systems. 
+
+Conduct experiments to improve AI/ML models and analyze results to meet business requirements. 
+
+Collaborate cross-functionally with engineering, product, and research teams to solve complex problems efficiently. 
+
+Work closely with fellow engineers and scientists to brainstorm and implement new ideas. 
+
+ 
+
+Required Skills & Qualifications: 
+
+Strong proficiency in Python; experience with C/C++ is a plus. 
+
+Solid understanding of deep learning concepts and hands-on experience with frameworks like TensorFlow or PyTorch. 
+
+Experience training and deploying production-level deep learning models including Feedforward Neural Networks, CNNs, LSTMs, GANs, etc. 
+
+Familiarity with model optimization and deployment tools such as TensorRT, ONNX, or Triton Inference Server. 
+
+Proven track record of solving ML problems in domains such as Natural Language Processing (NLP) or Computer Vision (CV). 
+
+Excellent attention to detail and ability to produce high-quality engineering documentation. 
+
+
+
+
+
+
+
+
+
+Functional Overview: Digital 
+
+This department provides new business solutions to deliver competitive advantage through innovation as well as offer scale, productivity, and efficiency to the business. They manage the infrastructure, connectivity across our airports network, all airport technology, and several mission critical business support applications for hassle free computing.   
+
+Role Summary: 
+
+LAB37, the innovation lab of one of the India's leading airlines, is seeking a highly skilled AI Engineers to join our team shaping the future of intelligent aviation. The ideal candidate should possess strong expertise in software engineering and machine learning, with a proven ability to translate research into scalable, real-world AI solutions. 
+
+In this role, you will collaborate within the lab and also with other AI Engineers, product teams, and technology partners to design, build, and deploy next-generation AI solutions and systems that power transformative experiences across the airline ecosystem—from customer engagement to operational excellence. 
+
+ 
+
+Key Responsibilities: 
+
+Apply AI software engineering knowledge to design and deliver innovative software solutions and applications. 
+
+Translate state-of-the-art research around Agentic AI, Autonomous and adaptable AI and other data science and engineering methods into robust, maintainable, and scalable systems. 
+
+Conduct experiments to improve AI/ML models and analyze results to meet business requirements. 
+
+Collaborate cross-functionally with engineering, product, and research teams to solve complex problems efficiently. 
+
+Work closely with fellow engineers and scientists to brainstorm and implement new ideas. 
+
+ 
+
+Required Skills & Qualifications: 
+
+Strong proficiency in Python; experience with C/C++ is a plus. 
+
+Solid understanding of deep learning concepts and hands-on experience with frameworks like TensorFlow or PyTorch. 
+
+Experience training and deploying production-level deep learning models including Feedforward Neural Networks, CNNs, LSTMs, GANs, etc. 
+
+Familiarity with model optimization and deployment tools such as TensorRT, ONNX, or Triton Inference Server. 
+
+Proven track record of solving ML problems in domains such as Natural Language Processing (NLP) or Computer Vision (CV). 
+
+Excellent attention to detail and ability to produce high-quality engineering documentation. 
+
+ 
