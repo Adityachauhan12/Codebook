@@ -12,3 +12,9 @@ FLIGHTS = {
         "existing_list": "Opted-in email/SMS list and BluChip base exist",
     },
 }
+
+grounded — real, verified facts
+Data that is true and known — pulled from a live source (here, IndiGo's actual "Destination of the Week" FLYMORE offer). The agent must use these as-is, never invent or change them: the real product, the real offer (10% off, code FLYMORE), real booking/travel windows, real available channels.
+
+assumed — placeholders / guesses
+Data that is not public or not confirmed — budget, objective phrasing, margin notes, "assume an email list exists." These are stand-ins the agent uses to proceed, but they're flagged as not real so you know to replace them with actual internal numbers later.
