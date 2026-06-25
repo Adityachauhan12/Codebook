@@ -1,7 +1,163 @@
-(marketing_venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project>python run_campaigns.py          
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\run_campaigns.py", line 29, in <module>
-    from campaign_graph import run_logged as run_campaign
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\campaign_graph.py", line 34, in <module>
-    from campaign_memory import InMemoryStore, SQLiteMemory, DEFAULT_DB_PATH
-ImportError: cannot import name 'SQLiteMemory' from 'campaign_memory' (C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\campaign_memory.py)
+#!/usr/bin/env python3
+"""
+Pluggable memory for the Metrics agent.
+
+The whole point: we have NO past KPI data right now (cold start). So:
+
+- Cold (RAM)   -> EmptyMemory / InMemoryStore  -> nothing survives the process.
+- Durable      -> SQLiteMemory                 -> a single .db file on disk;
+                  learnings persist ACROSS runs (no server, no extra deps).
+- Scale (later)-> PostgresMemory               -> same interface, multi-writer.
+
+The graph NEVER changes. You swap the store. The post-launch feedback loop is
+the only thing that ever writes rows, so the system earns its data over time.
+"""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+from typing import Any, Protocol
+
+DEFAULT_DB_PATH = "campaign_memory.db"
+
+
+class MemoryStore(Protocol):
+    def get_relevant_history(
+        self, product: str, objective: str, channels: list[str]
+    ) -> list[dict[str, Any]]: ...
+
+    def save_campaign_feedback(self, feedback: dict[str, Any]) -> None: ...
+
+
+class EmptyMemory:
+    """Cold-start store: knows nothing, persists nothing."""
+
+    def get_relevant_history(self, product, objective, channels):
+        return []
+
+    def save_campaign_feedback(self, feedback):
+        # Real persistence arrives with PostgresMemory. No-op for now.
+        pass
+
+
+class InMemoryStore:
+    """
+    Testing store: keeps results in a Python list so the learning loop is
+    actually visible within a process run. Channels are matched on canonical
+    names (same taxonomy as campaign_state.normalize_channel_name).
+    """
+
+    def __init__(self, seed: list[dict[str, Any]] | None = None):
+        self.history: list[dict[str, Any]] = list(seed or [])
+
+    def get_relevant_history(self, product, objective, channels):
+        p = (product or "").lower()
+        o = (objective or "").lower()
+        wanted = set(channels)
+        return [
+            row
+            for row in self.history
+            if row.get("objective", "").lower() == o
+            and row.get("channel") in wanted
+            and (p in row.get("product", "").lower() or row.get("product", "").lower() in p)
+        ]
+
+    def save_campaign_feedback(self, feedback):
+        self.history.append(feedback)
+
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS campaign_feedback (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    product         TEXT NOT NULL,
+    objective       TEXT NOT NULL,
+    channel         TEXT NOT NULL,
+    roas            REAL,
+    cpa             REAL,
+    ctr             REAL,
+    conversion_rate REAL,
+    cpm             REAL,
+    spend           REAL,
+    conversions     INTEGER,
+    status          TEXT,
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_lookup
+    ON campaign_feedback (objective, channel);
+"""
+
+
+class SQLiteMemory:
+    """
+    Durable MemoryStore backed by a single SQLite file (stdlib `sqlite3`, no
+    server, no extra dependencies). Learnings persist ACROSS process runs.
+
+    Matching semantics are IDENTICAL to InMemoryStore, so it is a true drop-in:
+        * objective : exact, case-insensitive
+        * channel   : membership in the requested canonical channels
+        * product   : two-way substring, case-insensitive
+          ("flights" matches brief "International flights to SIN", and vice versa)
+
+    The columns mirror the feedback dict written by
+    metrics_agent.performance_feedback() and the seed rows in tests/seed_data.py.
+    """
+
+    # Column order used for INSERT; matches the feedback/seed dict keys.
+    _FIELDS = (
+        "product", "objective", "channel", "roas", "cpa", "ctr",
+        "conversion_rate", "cpm", "spend", "conversions", "status",
+    )
+
+    def __init__(self, db_path: str = DEFAULT_DB_PATH,
+                 seed: list[dict[str, Any]] | None = None):
+        self.db_path = str(db_path)
+        # check_same_thread=False so LangGraph/Studio worker threads can share it.
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(_SCHEMA)
+        self.conn.commit()
+        # Seed priors only into a fresh DB; never clobber accumulated learnings.
+        if seed and self._is_empty():
+            for row in seed:
+                self.save_campaign_feedback(row)
+
+    def _is_empty(self) -> bool:
+        cur = self.conn.execute("SELECT COUNT(*) FROM campaign_feedback")
+        return cur.fetchone()[0] == 0
+
+    @property
+    def history(self) -> list[dict[str, Any]]:
+        """Compatibility shim: callers (run_campaigns.py) read len(memory.history)."""
+        cur = self.conn.execute("SELECT * FROM campaign_feedback")
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_relevant_history(self, product, objective, channels):
+        if not channels:
+            return []
+        p = (product or "").lower()
+        o = (objective or "").lower()
+        placeholders = ",".join("?" for _ in channels)
+        # instr(haystack, needle) > 0  replicates Python's `needle in haystack`,
+        # applied both ways for the two-way product substring match.
+        sql = (
+            "SELECT * FROM campaign_feedback "
+            "WHERE LOWER(objective) = ? "
+            f"AND channel IN ({placeholders}) "
+            "AND (instr(LOWER(product), ?) > 0 OR instr(?, LOWER(product)) > 0)"
+        )
+        params = [o, *channels, p, p]
+        cur = self.conn.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
+
+    def save_campaign_feedback(self, feedback):
+        cols = ",".join(self._FIELDS)
+        placeholders = ",".join("?" for _ in self._FIELDS)
+        values = [feedback.get(f) for f in self._FIELDS]
+        self.conn.execute(
+            f"INSERT INTO campaign_feedback ({cols}) VALUES ({placeholders})",
+            values,
+        )
+        self.conn.commit()
+
+    def close(self) -> None:
+        self.conn.close()
