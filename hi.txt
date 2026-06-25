@@ -1,3 +1,1 @@
-=BlxC3HCRJ7hzquQqqaQLnjVHMt0K3kuUotRXBiJeyR8wtTX17VmxJQQJ99BIACHYHv6XJ3w3AAABACOGbnnJA
-OPENAI_BASE_URL=https://openai-lab37-eastus2-sb-poc.openai.azure.com
-LLM_MODEL=gpt-4o
+
