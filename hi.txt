@@ -1,20 +1,3 @@
-FLIGHTS = {
-    "grounded": {
-        "product": "International flights to Singapore (SIN) and Bangkok (BKK)",
-        "offer": "Up to 12% off base fare, promo code FLY12",
-        "booking_window": "7-day sale window",
-        "bluchip_eligible": True,
-        "available_channels": ["Google Search", "Meta", "Email", "goindigo.in website"],
-    },
-    "assumed": {
-        "budget_inr": 1_500_000,
-        "objective": "Maximize international flight bookings within the 7-day window",
-        "existing_list": "Opted-in email/SMS list and BluChip base exist",
-    },
-}
-
-grounded — real, verified facts
-Data that is true and known — pulled from a live source (here, IndiGo's actual "Destination of the Week" FLYMORE offer). The agent must use these as-is, never invent or change them: the real product, the real offer (10% off, code FLYMORE), real booking/travel windows, real available channels.
-
-assumed — placeholders / guesses
-Data that is not public or not confirmed — budget, objective phrasing, margin notes, "assume an email list exists." These are stand-ins the agent uses to proceed, but they're flagged as not real so you know to replace them with actual internal numbers later.
+=BlxC3HCRJ7hzquQqqaQLnjVHMt0K3kuUotRXBiJeyR8wtTX17VmxJQQJ99BIACHYHv6XJ3w3AAABACOGbnnJA
+OPENAI_BASE_URL=https://openai-lab37-eastus2-sb-poc.openai.azure.com
+LLM_MODEL=gpt-4o
