@@ -1,117 +1,12 @@
-(marketing_venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project>python run_campaigns.py       
-PART 1 — Seeded memory with 318 rows from tests/seed_data.py (flights, gift card, shop x objectives x channels).
-         NOTE: 'hotels' is deliberately NOT seeded -> stays cold start.
-
-PART 2 — Generating 3 campaigns through the full LLM pipeline...
-
->>> FLOW TRACE: CAMPAIGN A — FLIGHTS
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\run_campaigns.py", line 214, in <module>
-    main()
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\run_campaigns.py", line 207, in main
-    _run()
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\run_campaigns.py", line 148, in _run
-    flights = run_campaign(FLIGHTS, memory=memory)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\campaign_graph.py", line 195, in run_logged
-    app = build_campaign_graph(memory, gtm_subgraph=gtm_subgraph)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\campaign_graph.py", line 102, in build_campaign_graph
-    g.add_node("gtm", gtm_subgraph or build_gtm_subgraph())  # subgraph as a node
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\graph\state.py", line 791, in add_node
-    raise RuntimeError
-RuntimeError
-
-(marketing_venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project>python run_campaigns.py
-PART 1 — Seeded memory with 318 rows from tests/seed_data.py (flights, gift card, shop x objectives x channels).
-         NOTE: 'hotels' is deliberately NOT seeded -> stays cold start.
-
-PART 2 — Generating 3 campaigns through the full LLM pipeline...
-
->>> FLOW TRACE: CAMPAIGN A — FLIGHTS
-   1. intake                     objective=bookings  budget=Rs 1,500,000
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\run_campaigns.py", line 214, in <module>
-    main()
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\run_campaigns.py", line 207, in main
-    _run()
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\run_campaigns.py", line 148, in _run
-    flights = run_campaign(FLIGHTS, memory=memory)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\campaign_graph.py", line 198, in run_logged
-    for namespace, update in app.stream(
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\pregel\main.py", line 2982, in stream
-    for _ in runner.tick(
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\pregel\_runner.py", line 344, in tick
-    _panic_or_proceed(
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\pregel\_runner.py", line 687, in _panic_or_proceed
-    raise exc
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\pregel\_executor.py", line 80, in done
-    task.result()
-  File "C:\Program Files\Python312\Lib\concurrent\futures\_base.py", line 449, in result
-    return self.__get_result()
-           ^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\concurrent\futures\_base.py", line 401, in __get_result
-    raise self._exception
-  File "C:\Program Files\Python312\Lib\concurrent\futures\thread.py", line 58, in run
-    result = self.fn(*self.args, **self.kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\pregel\_retry.py", line 617, in run_with_retry
-    return task.proc.invoke(task.input, config)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\_internal\_runnable.py", line 684, in invoke
-    input = context.run(step.invoke, input, config, **kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\pregel\main.py", line 3928, in invoke
-    for chunk in self.stream(
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\pregel\main.py", line 2982, in stream
-    for _ in runner.tick(
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\pregel\_runner.py", line 207, in tick
-    run_with_retry(
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\pregel\_retry.py", line 617, in run_with_retry
-    return task.proc.invoke(task.input, config)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\_internal\_runnable.py", line 684, in invoke
-    input = context.run(step.invoke, input, config, **kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langgraph\_internal\_runnable.py", line 426, in invoke
-    ret = self.func(*args, **kwargs)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\gtm_agent.py", line 82, in classify
-    resp = _llm().invoke(
-           ^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langchain_core\language_models\chat_models.py", line 476, in invoke
-    self.generate_prompt(
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langchain_core\language_models\chat_models.py", line 1849, in generate_prompt
-    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langchain_core\language_models\chat_models.py", line 1656, in generate
-    self._generate_with_cache(
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langchain_core\language_models\chat_models.py", line 1994, in _generate_with_cache
-    result = self._generate(
-             ^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langchain_openai\chat_models\base.py", line 1692, in _generate
-    _handle_openai_api_error(e)
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\langchain_openai\chat_models\base.py", line 1687, in _generate
-    raw_response = self.client.with_raw_response.create(**payload)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\openai\_legacy_response.py", line 367, in wrapped
-    return cast(LegacyAPIResponse[R], func(*args, **kwargs))
-                                      ^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\openai\_utils\_utils.py", line 298, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\openai\resources\chat\completions\completions.py", line 1251, in create
-    return self._post(
-           ^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\openai\_base_client.py", line 1332, in post
-    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
-                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project\marketing_venv\Lib\site-packages\openai\_base_client.py", line 1105, in request
-    raise self._make_status_error_from_response(err.response) from None
-openai.NotFoundError: Error code: 404 - {'error': {'code': '404', 'message': 'Resource not found'}}
-During task with name 'classify' and id 'bfa6ce38-b40a-adbb-7f0d-da3547da5036'
-During task with name 'gtm' and id '7aee0a88-ad65-b7ec-6c38-753284992f8d'
-
-(marketing_venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing-project>
+{
+    "data": null,
+    "errors": {
+        "type": "System.Security.Cryptography.CryptographicException",
+        "code": "System.Security.Cryptography.CryptographicException",
+        "message": "Error occurred, please contact admin, Padding is invalid and cannot be removed.",
+        "subType": "BadRequest",
+        "timeTaken": "22",
+        "requestStartTime": "06/25/2026 07:36:38",
+        "correlationId": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJpYmUiLCJqdGkiOiJjNmZhNTg0NC04YmY2LWM1NWItYTliOS0yYzY4ZmZmMzc4YjEiLCJpc3MiOiJkb3RSRVogQVBJIn0.FDVsDgSI4E8lvj14UjpbqmaFjf4JuWbwx1hZk2t-F8Q"
+    }
+}
