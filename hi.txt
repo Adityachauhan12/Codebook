@@ -1,1 +1,14 @@
-https://s6web-uat.goindigo.in/
+FLIGHTS = {
+    "grounded": {
+        "product": "International flights to Singapore (SIN) and Bangkok (BKK)",
+        "offer": "Up to 12% off base fare, promo code FLY12",
+        "booking_window": "7-day sale window",
+        "bluchip_eligible": True,
+        "available_channels": ["Google Search", "Meta", "Email", "goindigo.in website"],
+    },
+    "assumed": {
+        "budget_inr": 1_500_000,
+        "objective": "Maximize international flight bookings within the 7-day window",
+        "existing_list": "Opted-in email/SMS list and BluChip base exist",
+    },
+}
