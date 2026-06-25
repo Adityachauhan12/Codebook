@@ -1,12 +1,38 @@
-{
-    "data": null,
-    "errors": {
-        "type": "System.Security.Cryptography.CryptographicException",
-        "code": "System.Security.Cryptography.CryptographicException",
-        "message": "Error occurred, please contact admin, Padding is invalid and cannot be removed.",
-        "subType": "BadRequest",
-        "timeTaken": "22",
-        "requestStartTime": "06/25/2026 07:36:38",
-        "correlationId": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJpYmUiLCJqdGkiOiJjNmZhNTg0NC04YmY2LWM1NWItYTliOS0yYzY4ZmZmMzc4YjEiLCJpc3MiOiJkb3RSRVogQVBJIn0.FDVsDgSI4E8lvj14UjpbqmaFjf4JuWbwx1hZk2t-F8Q"
-    }
-}
+ 
+Stage 1	Stage 2	Stage 3
+Account creation & Artifacts creation	M1>>M2	New Acc. creation with M1
+Logged in	 	 
+PNR booked , but flight not flown	 	 
+Cash PNR booked with M1 ( Domestic (direct,round trip and multi city) & International	Mobile no update with M2 and then flight is flown	Repeat all steps of stage 1
+Burn PNR booked  with M1 (Domestic and international)	Mobile no update with M2 and then flight is flown	 
+ 	 	 
+ 	 	 
+Cancel flight	 	 
+Book a Cash PNR  with M1	mob no update  with m2 and then cancel	 
+Book a Burn PNR  with M1	Mobile no update with M2 and then cancel	 
+ 	 	 
+Change flight	 	 
+Book a cash flight with m1	mob no update with m2 and then change flight	 
+ 	 	 
+Split PNR	 	 
+Book a cash flight with m1	mob no update  with m2 and then split flight	 
+ 	 	 
+Plan-B	 	 
+Book a cash flight with m1	mob no update  with m2 and then change/cancel using PLAN-B	 
+Book a burn flight with m1	mob no update  with m2 and then change/cancel using PLAN-B	 
+ 	 	 
+Trip history	 	 
+Cash and burn boooking by mob m1 ( not flown)	update mob m2 then logged in using m2 and check trip history	 
+Cash and burn boooking by mob m1 (flown)	 	 
+ 	 	 
+Gst invoice	 	 
+Cash and burn boooking by mob m1 	update mob m2 then fetch gst invoice	 
+Cash and burn boooking by mob m1(domestic)	update mob m2(international) then fetch gst invoice	 
+ 	 	 
+Auto-tagging	 	 
+Book a cash flight with m1 -->get it auto tagged with m1	mob no update  with m2 and then flown the flight	 
+ 	 	 
+Retro	 	 
+Book a cash flight with m1	mob no update  with m2 and then flown the flight then retro by logging through m2	 
+ 
+ 
