@@ -1,6 +1,5 @@
-navitaire ke liye vikas sir 
+HI Pradeep ,
 
-ciam lms capillary ke liye supriya 
+We have encountered a blocker during our testing for bluchip mobile number update. The mobile number M1 was used to create an account and then was changed to M2. That particular account is working fine. But when we are trying to create a new account from M1 we are unable to do so. Kindly help in this as we need to create the account using M1 on urgent basis.
 
-pradeep for api 
-
+Regards
