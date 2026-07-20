@@ -1,2 +1,29 @@
-We have encountered a blocker during our testing for BluChip mobile number update. The mobile number M1 was used to create an account and then was changed to M2. That particular account is working fine. But when we try to create a new account using M1, we are unable to do so — it fails at [step: e.g. OTP / final submit] with the error: "[exact error text]".
-Kindly help on an urgent basis as our testing is on hold until we can create the account using M1.
+All changes are in the target app: /Users/adityachauhan/Desktop/6e-365-ifs-fe-develop/
+
+🆕 Added
+src/features/eventScheduler/ (copied whole feature + new wrapper)
+
+EventSchedulerAdminPage.tsx ← new (Layout wrapper / route entry)
+pages/EventSchedulerPage.tsx
+components/EventSchedulerForm.tsx
+components/SurveySchedulerForm.tsx
+components/SurveyResultsTable.tsx
+components/SurveyResponseForm.tsx
+components/SurveyFormBuilder.tsx
+components/DraftsSection.tsx
+components/DraftDiscardModal.tsx
+types/index.ts, types/survey.ts
+mocks/index.ts, mocks/survey.mock.ts
+src/stores/ (new folder)
+
+draftStore.ts (copied verbatim)
+surveyStore.ts (copied verbatim)
+authStore.ts ← new minimal version
+notificationStore.ts ← new minimal version
+✏️ Modified
+src/router/AppRouter.tsx — lazy import + /admin/event-scheduler route
+src/hooks/usePermissions.ts — STATIC_PERMISSIONS + withStaticPermissions (sidebar entry + route access)
+package.json / package-lock.json — added zustand dependency
+Untouched (already existed, reused)
+src/utils/cn.ts, src/components/common/FeaturePageHeader.tsx — identical in both apps, no change needed.
+Nothing in the source sandbox app (crew-hub-frontend-sandbox) was modified.
