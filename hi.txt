@@ -1,59 +1,76 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import type { ScheduleFrequency, Priority } from '@/features/eventScheduler/types'
+import type { SurveyQuestion } from '@/features/eventScheduler/types/survey'
 
-/**
- * Minimal auth store vendored for the Event Scheduler feature.
- *
- * The Event Scheduler only reads the current user's display fields
- * (name, role, crewIga, initials) to stamp the "sender" on published
- * notifications, plus the ROLE_LABELS lookup for the targeting UI.
- * The host app manages real auth via UserContext; this store simply
- * provides a stable admin identity so the feature is self-contained.
- */
-
-export type UserRole =
-  | 'crew'
-  | 'lead'
-  | 'mentor'
-  | 'manager'
-  | 'admin'
-  | 'clms_verifier'
-  | 'crew_ops'
-
-/** Human-readable role labels shown across the UI. */
-export const ROLE_LABELS: Record<UserRole, string> = {
-  crew: 'Cabin Crew',
-  lead: 'Lead Crew',
-  mentor: 'PEP Mentor',
-  manager: 'Manager',
-  admin: 'Admin',
-  clms_verifier: 'CLMS Verifier',
-  crew_ops: 'Crew Ops Base Manager',
-}
-
-export interface AppUser {
+export interface MessageDraft {
   id: string
-  name: string
-  crewIga: string
-  role: UserRole
-  email: string
-  base: string
-  initials: string
+  type: 'message'
+  message: string
+  documentName?: string
+  priority: Priority
+  frequency: ScheduleFrequency
+  fromDate: string
+  toDate: string
+  customDays: string[]
+  topLevel: 'cabin_crew' | 'backend_ops' | null
+  ccRoles: string[]
+  ccBases: string[]
+  ccIndividuals: string[]
+  boTeams: string[]
+  boRoles: string[]
+  boIndividuals: string[]
+  updatedAt: string
 }
 
-interface AuthState {
-  user: AppUser | null
+export interface SurveyDraft {
+  id: string
+  type: 'survey'
+  surveyTitle: string
+  surveyDescription: string
+  questions: SurveyQuestion[]
+  allowDocUpload: boolean
+  priority: Priority
+  frequency: ScheduleFrequency
+  fromDate: string
+  toDate: string
+  topLevel: 'cabin_crew' | 'backend_ops' | null
+  ccRoles: string[]
+  ccBases: string[]
+  ccIndividuals: string[]
+  boTeams: string[]
+  boRoles: string[]
+  boIndividuals: string[]
+  updatedAt: string
 }
 
-const DEFAULT_ADMIN: AppUser = {
-  id: 'admin',
-  name: 'Hemant Admin',
-  crewIga: '10001',
-  role: 'admin',
-  email: 'hemant.admin@indigo.in',
-  base: 'DEL',
-  initials: 'HA',
+export type Draft = MessageDraft | SurveyDraft
+
+interface DraftStore {
+  drafts: Draft[]
+  saveDraft: (draft: Draft) => void
+  removeDraft: (id: string) => void
+  getDraft: (id: string) => Draft | undefined
 }
 
-export const useAuthStore = create<AuthState>(() => ({
-  user: DEFAULT_ADMIN,
-}))
+export const useDraftStore = create<DraftStore>()(
+  persist(
+    (set, get) => ({
+      drafts: [],
+      saveDraft: (draft) =>
+        set((state) => {
+          const existing = state.drafts.findIndex((d) => d.id === draft.id)
+          if (existing >= 0) {
+            const updated = [...state.drafts]
+            updated[existing] = draft
+            return { drafts: updated }
+          }
+          return { drafts: [draft, ...state.drafts] }
+        }),
+      removeDraft: (id) =>
+        set((state) => ({ drafts: state.drafts.filter((d) => d.id !== id) })),
+      getDraft: (id) => get().drafts.find((d) => d.id === id),
+    }),
+    { name: 'event-scheduler-drafts' },
+  ),
+)
