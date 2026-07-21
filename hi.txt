@@ -1,29 +1,59 @@
-All changes are in the target app: /Users/adityachauhan/Desktop/6e-365-ifs-fe-develop/
+import { create } from 'zustand'
 
-🆕 Added
-src/features/eventScheduler/ (copied whole feature + new wrapper)
+/**
+ * Minimal auth store vendored for the Event Scheduler feature.
+ *
+ * The Event Scheduler only reads the current user's display fields
+ * (name, role, crewIga, initials) to stamp the "sender" on published
+ * notifications, plus the ROLE_LABELS lookup for the targeting UI.
+ * The host app manages real auth via UserContext; this store simply
+ * provides a stable admin identity so the feature is self-contained.
+ */
 
-EventSchedulerAdminPage.tsx ← new (Layout wrapper / route entry)
-pages/EventSchedulerPage.tsx
-components/EventSchedulerForm.tsx
-components/SurveySchedulerForm.tsx
-components/SurveyResultsTable.tsx
-components/SurveyResponseForm.tsx
-components/SurveyFormBuilder.tsx
-components/DraftsSection.tsx
-components/DraftDiscardModal.tsx
-types/index.ts, types/survey.ts
-mocks/index.ts, mocks/survey.mock.ts
-src/stores/ (new folder)
+export type UserRole =
+  | 'crew'
+  | 'lead'
+  | 'mentor'
+  | 'manager'
+  | 'admin'
+  | 'clms_verifier'
+  | 'crew_ops'
 
-draftStore.ts (copied verbatim)
-surveyStore.ts (copied verbatim)
-authStore.ts ← new minimal version
-notificationStore.ts ← new minimal version
-✏️ Modified
-src/router/AppRouter.tsx — lazy import + /admin/event-scheduler route
-src/hooks/usePermissions.ts — STATIC_PERMISSIONS + withStaticPermissions (sidebar entry + route access)
-package.json / package-lock.json — added zustand dependency
-Untouched (already existed, reused)
-src/utils/cn.ts, src/components/common/FeaturePageHeader.tsx — identical in both apps, no change needed.
-Nothing in the source sandbox app (crew-hub-frontend-sandbox) was modified.
+/** Human-readable role labels shown across the UI. */
+export const ROLE_LABELS: Record<UserRole, string> = {
+  crew: 'Cabin Crew',
+  lead: 'Lead Crew',
+  mentor: 'PEP Mentor',
+  manager: 'Manager',
+  admin: 'Admin',
+  clms_verifier: 'CLMS Verifier',
+  crew_ops: 'Crew Ops Base Manager',
+}
+
+export interface AppUser {
+  id: string
+  name: string
+  crewIga: string
+  role: UserRole
+  email: string
+  base: string
+  initials: string
+}
+
+interface AuthState {
+  user: AppUser | null
+}
+
+const DEFAULT_ADMIN: AppUser = {
+  id: 'admin',
+  name: 'Hemant Admin',
+  crewIga: '10001',
+  role: 'admin',
+  email: 'hemant.admin@indigo.in',
+  base: 'DEL',
+  initials: 'HA',
+}
+
+export const useAuthStore = create<AuthState>(() => ({
+  user: DEFAULT_ADMIN,
+}))
