@@ -1,42 +1,112 @@
-import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
-import type { SurveyRecord } from '@/features/eventScheduler/types/survey'
-import { MOCK_SURVEY_RECORDS } from '@/features/eventScheduler/mocks/survey.mock'
+import { lazy, Suspense, type ComponentType, type LazyExoticComponent, type ReactNode } from 'react'
+import { createBrowserRouter, RouterProvider } from 'react-router-dom'
+import RouteGuard from '../components/RouteGuard'
+import ProtectedRoute from '../components/ui/ProtectedRoute'
 
-interface SurveyStore {
-  surveys: SurveyRecord[]
-  addSurvey: (survey: SurveyRecord) => void
-  submitResponse: (surveyId: string, userId: string, userName: string, answers: Record<string, string | string[]>) => void
+/**
+ * Wraps lazy() so that if a chunk fails to fetch (stale hash after a rebuild),
+ * the page reloads once to pick up the latest build manifest.
+ */
+function lazyWithRetry<T extends ComponentType<any>>(
+  factory: () => Promise<{ default: T }>,
+): LazyExoticComponent<T> {
+  return lazy(() =>
+    factory().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('Failed to fetch') || msg.includes('dynamically imported')) {
+        window.location.reload()
+        return new Promise<never>(() => {})
+      }
+      throw err
+    }),
+  )
 }
 
-export const useSurveyStore = create<SurveyStore>()(
-  persist(
-    (set) => ({
-      surveys: MOCK_SURVEY_RECORDS,
-      addSurvey: (survey) => set((state) => ({ surveys: [survey, ...state.surveys] })),
-      submitResponse: (surveyId, userId, userName, answers) =>
-        set((state) => ({
-          surveys: state.surveys.map((s) => {
-            if (s.id !== surveyId) return s
-            const existingIdx = s.responses.findIndex((r) => r.userId === userId)
-            const entry = {
-              userId,
-              userName,
-              iga: '',
-              base: '-',
-              status: 'filled' as const,
-              submittedAt: new Date().toISOString(),
-              answers,
-            }
-            const responses =
-              existingIdx >= 0
-                ? s.responses.map((r, i) => (i === existingIdx ? { ...r, ...entry } : r))
-                : [...s.responses, entry]
-            const filledCount = responses.filter((r) => r.status === 'filled').length
-            return { ...s, responses, filledCount }
-          }),
-        })),
-    }),
-    { name: 'survey-store' },
-  ),
+const Welcome = lazyWithRetry(() => import('../pages/welcome'))
+const SAMLCallbackHandler = lazyWithRetry(() => import('../pages/SAMLCallbackHandler'))
+const AccessDeniedPage = lazyWithRetry(() => import('../pages/AccessDeniedPage'))
+
+const HomePage = lazyWithRetry(() => import('../features/home/index'))
+
+const DocumentsAdminPage = lazyWithRetry(() => import('../features/document-expiry/DocumentsPage'))
+const AdminUrtiPage = lazyWithRetry(() => import('../features/urti-leaves/urti_admin_page'))
+const UrtiAIAnalyticsAdminPage = lazyWithRetry(() => import('../features/urti-leaves/urti_ai_analytics_admin_page'))
+const Grooming = lazyWithRetry(() => import('../features/grooming-reports/grooming_reports_admin'))
+const FlightReports = lazyWithRetry(() => import('../features/flight-reports/admin_flightReports'))
+const Letters = lazyWithRetry(() => import('../features/letters/admin_letters'))
+const CrewInfo = lazyWithRetry(() => import('../features/crew-profile/admin_page_crew_profile'))
+const AISearch = lazyWithRetry(() => import('../features/ai-search/admin_ai_search'))
+const RbacComponent = lazyWithRetry(() => import('../features/rbac/Rbac_component'))
+const CrewDocuments = lazyWithRetry(() => import('../features/document-ocr-admin/admin_page_crew_documents'))
+const NPSAnalytics = lazyWithRetry(() => import('../features/nps-analytics/nps_analytics'))
+const Crew365Page = lazyWithRetry(() => import('../features/ifs_365/pages/MyProfile'))
+const MailerReports = lazyWithRetry(() => import('../features/mailer-reports/MailerReports'))
+
+const LeadershipDocs = lazyWithRetry(() => import('../features/document-ocr-admin/LeadershipDocs'))
+
+const CrewProfile = lazyWithRetry(() => import('../features/crew-profile/Crew_Profile'))
+const GroomingPage = lazyWithRetry(() => import('../features/grooming/pages/GroomingPage'))
+const CrewFlightReports = lazyWithRetry(() => import('../features/flight-reports/Crew_FlightReports'))
+const VIPCustomers = lazyWithRetry(() => import('../features/vip-customers/VIPCustomers'))
+const MyDocuments = lazyWithRetry(() => import('../features/document-ocr-crew/upload_documents_crew'))
+
+const FlightopsUrtiPage = lazyWithRetry(() => import('../features/urti-leaves/urti_flightops_page'))
+const FlightOperations = lazyWithRetry(() => import('../features/flight-operations/flight_operations'))
+const CrewCallingPage = lazyWithRetry(() =>
+  import('../features/crewCalling/crewCalling').then((m) => ({ default: m.CrewCallingPage })),
 )
+
+const EmployeeDiaryPage = lazyWithRetry(() => import('../features/ed/pages/EmployeeDiaryPage').then((m) => ({ default: m.EmployeeDiaryPage })))
+const EventSchedulerAdminPage = lazyWithRetry(() => import('../features/eventScheduler/EventSchedulerAdminPage'))
+const PageLoader = () => <div className="text-center mt-10 text-lg">Loading...</div>
+
+const withSuspense = (node: ReactNode) => <Suspense fallback={<PageLoader />}>{node}</Suspense>
+
+const protectedElement = (allowedRoles: string[], node: ReactNode) =>
+  withSuspense(
+    <ProtectedRoute allowedRoles={allowedRoles}>
+      <RouteGuard>{node}</RouteGuard>
+    </ProtectedRoute>,
+  )
+
+const router = createBrowserRouter([
+  { path: '/', element: withSuspense(<Welcome />) },
+  { path: '/dashboard', element: withSuspense(<AccessDeniedPage />) },
+  { path: '/sso/callback', element: withSuspense(<SAMLCallbackHandler />) },
+  { path: '/admin/home', element: protectedElement(['Admin'], <HomePage />) },
+  { path: '/admin/documents', element: protectedElement(['Admin'], <DocumentsAdminPage />) },
+  { path: '/admin/urti_management', element: protectedElement(['Admin'], <AdminUrtiPage />) },
+  { path: '/admin/urti_ai_analytics', element: protectedElement(['Admin'], <UrtiAIAnalyticsAdminPage />) },
+  { path: '/admin/grooming-reports', element: protectedElement(['Admin'], <Grooming />) },
+  { path: '/admin/flight-reports', element: protectedElement(['Admin'], <FlightReports />) },
+  { path: '/admin/letters', element: protectedElement(['Admin'], <Letters />) },
+  // { path: '/admin/nps', element: protectedElement(['Admin'], <NPSAnalytics />) },
+  { path: '/admin/crew-info', element: protectedElement(['Admin'], <CrewInfo />) },
+  { path: '/admin/ai-search', element: protectedElement(['Admin'], <AISearch />) },
+  { path: '/admin/rbac', element: protectedElement(['Admin'], <RbacComponent />) },
+  // { path: '/admin/crew-documents', element: protectedElement(['Admin'], <CrewDocuments />) },
+  { path: '/admin/crew-365', element: protectedElement(['Admin'], <Crew365Page />) },
+  { path: '/admin/ifs-365', element: protectedElement(['Admin'], <Crew365Page />) },
+  { path: '/admin/nps-analytics', element: protectedElement(['Admin'], <NPSAnalytics />) },
+  { path: '/admin/mailer-reports', element: protectedElement(['Admin'], <MailerReports />) },
+  { path: '/admin/event-scheduler', element: protectedElement(['Admin'], <EventSchedulerAdminPage />) },
+
+  { path: '/leadership/documents', element: protectedElement(['Leadership'], <LeadershipDocs />) },
+
+  { path: '/crew/flightreports', element: protectedElement(['Crew'], <CrewFlightReports />) },
+  { path: '/crew/profile', element: protectedElement(['Crew'], <CrewProfile />) },
+  { path: '/crew/grooming', element: protectedElement(['Crew'], <GroomingPage />) },
+  { path: '/crew/top10passengers', element: protectedElement(['Crew'], <VIPCustomers />) },
+  { path: '/crew/my-documents', element: protectedElement(['Crew'], <MyDocuments />) },
+  {path: '/crew/employee-diary', element: protectedElement(['Crew'], <EmployeeDiaryPage />) },
+
+  { path: '/flightops/urti_application', element: protectedElement(['Flightops'], <FlightopsUrtiPage />) },
+  { path: '/flightops/base-osp', element: protectedElement(['Flightops'], <FlightOperations />) },
+  { path: '/flightops/base-operations', element: protectedElement(['Flightops'], <FlightOperations />) },
+  { path: '/flightops/flight-operations', element: protectedElement(['Flightops'], <FlightOperations />) },
+  { path: '/admin/crew-calling', element: protectedElement(['Flightops'], <CrewCallingPage />) },
+])
+
+export function AppRouter() {
+  return <RouterProvider router={router} />
+}
