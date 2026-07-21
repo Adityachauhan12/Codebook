@@ -1,51 +1,42 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import type { SurveyRecord } from '@/features/eventScheduler/types/survey'
+import { MOCK_SURVEY_RECORDS } from '@/features/eventScheduler/mocks/survey.mock'
 
-/**
- * Minimal notification store vendored for the Event Scheduler feature.
- *
- * The Event Scheduler publishes notifications via `addNotification`. The host
- * app has its own notification delivery; here we simply keep published items
- * in memory so the feature's publish/toast flow works end-to-end. The type
- * shapes mirror the source app so the feature compiles unchanged.
- */
-
-export interface AppNotification {
-  id: string
-  title: string
-  message: string
-  timestamp: string
-  read: boolean
-  link?: string
-  meta?: Record<string, string>
-  targets?: NotificationTarget | null
-  source?: 'system' | 'event_scheduler'
-  priority?: 'normal' | 'urgent'
-  sender?: {
-    name: string
-    role: string
-    crewIga: string
-    initials: string
-    avatarUrl?: string
-  }
-  attachmentName?: string
+interface SurveyStore {
+  surveys: SurveyRecord[]
+  addSurvey: (survey: SurveyRecord) => void
+  submitResponse: (surveyId: string, userId: string, userName: string, answers: Record<string, string | string[]>) => void
 }
 
-/** Targeting payload — mirrors Event Scheduler selection. */
-export interface NotificationTarget {
-  roles?: string[]
-  bases?: string[]
-  organisations?: string[]
-  teams?: string[]
-  userIds?: string[]
-}
-
-interface NotificationState {
-  notifications: AppNotification[]
-  addNotification: (n: AppNotification) => void
-}
-
-export const useNotificationStore = create<NotificationState>((set) => ({
-  notifications: [],
-  addNotification: (n) =>
-    set((state) => ({ notifications: [n, ...state.notifications] })),
-}))
+export const useSurveyStore = create<SurveyStore>()(
+  persist(
+    (set) => ({
+      surveys: MOCK_SURVEY_RECORDS,
+      addSurvey: (survey) => set((state) => ({ surveys: [survey, ...state.surveys] })),
+      submitResponse: (surveyId, userId, userName, answers) =>
+        set((state) => ({
+          surveys: state.surveys.map((s) => {
+            if (s.id !== surveyId) return s
+            const existingIdx = s.responses.findIndex((r) => r.userId === userId)
+            const entry = {
+              userId,
+              userName,
+              iga: '',
+              base: '-',
+              status: 'filled' as const,
+              submittedAt: new Date().toISOString(),
+              answers,
+            }
+            const responses =
+              existingIdx >= 0
+                ? s.responses.map((r, i) => (i === existingIdx ? { ...r, ...entry } : r))
+                : [...s.responses, entry]
+            const filledCount = responses.filter((r) => r.status === 'filled').length
+            return { ...s, responses, filledCount }
+          }),
+        })),
+    }),
+    { name: 'survey-store' },
+  ),
+)
