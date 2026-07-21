@@ -1,76 +1,51 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
-import type { ScheduleFrequency, Priority } from '@/features/eventScheduler/types'
-import type { SurveyQuestion } from '@/features/eventScheduler/types/survey'
 
-export interface MessageDraft {
+/**
+ * Minimal notification store vendored for the Event Scheduler feature.
+ *
+ * The Event Scheduler publishes notifications via `addNotification`. The host
+ * app has its own notification delivery; here we simply keep published items
+ * in memory so the feature's publish/toast flow works end-to-end. The type
+ * shapes mirror the source app so the feature compiles unchanged.
+ */
+
+export interface AppNotification {
   id: string
-  type: 'message'
+  title: string
   message: string
-  documentName?: string
-  priority: Priority
-  frequency: ScheduleFrequency
-  fromDate: string
-  toDate: string
-  customDays: string[]
-  topLevel: 'cabin_crew' | 'backend_ops' | null
-  ccRoles: string[]
-  ccBases: string[]
-  ccIndividuals: string[]
-  boTeams: string[]
-  boRoles: string[]
-  boIndividuals: string[]
-  updatedAt: string
+  timestamp: string
+  read: boolean
+  link?: string
+  meta?: Record<string, string>
+  targets?: NotificationTarget | null
+  source?: 'system' | 'event_scheduler'
+  priority?: 'normal' | 'urgent'
+  sender?: {
+    name: string
+    role: string
+    crewIga: string
+    initials: string
+    avatarUrl?: string
+  }
+  attachmentName?: string
 }
 
-export interface SurveyDraft {
-  id: string
-  type: 'survey'
-  surveyTitle: string
-  surveyDescription: string
-  questions: SurveyQuestion[]
-  allowDocUpload: boolean
-  priority: Priority
-  frequency: ScheduleFrequency
-  fromDate: string
-  toDate: string
-  topLevel: 'cabin_crew' | 'backend_ops' | null
-  ccRoles: string[]
-  ccBases: string[]
-  ccIndividuals: string[]
-  boTeams: string[]
-  boRoles: string[]
-  boIndividuals: string[]
-  updatedAt: string
+/** Targeting payload — mirrors Event Scheduler selection. */
+export interface NotificationTarget {
+  roles?: string[]
+  bases?: string[]
+  organisations?: string[]
+  teams?: string[]
+  userIds?: string[]
 }
 
-export type Draft = MessageDraft | SurveyDraft
-
-interface DraftStore {
-  drafts: Draft[]
-  saveDraft: (draft: Draft) => void
-  removeDraft: (id: string) => void
-  getDraft: (id: string) => Draft | undefined
+interface NotificationState {
+  notifications: AppNotification[]
+  addNotification: (n: AppNotification) => void
 }
 
-export const useDraftStore = create<DraftStore>()(
-  persist(
-    (set, get) => ({
-      drafts: [],
-      saveDraft: (draft) =>
-        set((state) => {
-          const existing = state.drafts.findIndex((d) => d.id === draft.id)
-          if (existing >= 0) {
-            const updated = [...state.drafts]
-            updated[existing] = draft
-            return { drafts: updated }
-          }
-          return { drafts: [draft, ...state.drafts] }
-        }),
-      removeDraft: (id) =>
-        set((state) => ({ drafts: state.drafts.filter((d) => d.id !== id) })),
-      getDraft: (id) => get().drafts.find((d) => d.id === id),
-    }),
-    { name: 'event-scheduler-drafts' },
-  ),
-)
+export const useNotificationStore = create<NotificationState>((set) => ({
+  notifications: [],
+  addNotification: (n) =>
+    set((state) => ({ notifications: [n, ...state.notifications] })),
+}))
