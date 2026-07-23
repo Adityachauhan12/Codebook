@@ -1,12 +1,54 @@
-Good Afternoon Sir
- 
-Kindly send the email regarding urti to alok sir for me to start working on it
- 
-Good Afternoon Aditya
- 
-I will share
- 
-Stuck with something urgent
- 
-ok sir
- 
+Run this multi-agent marketing application locally. It's three services that
+talk to each other:
+
+1. "Creative Studio" — FastAPI, in the `backend 1` folder. Image/copy generation.
+   Must run on port 8000 and must be started FROM ITS OWN DIRECTORY (it mounts
+   ./static and creates ./campaign_assets relative to cwd).
+2. "Marketing OS" backend — FastAPI + LangGraph, in `marketing-os-dev/backend`.
+   Run on port 8001. This is the agent orchestrator: intake -> GTM -> Metrics
+   -> Finance -> Creative, defined in graph/orchestrator.py. The Creative agent
+   POSTs to Creative Studio at /api/v1/generate/image/generate.
+3. Frontend — Vite + React 19, in `marketing-os-dev/frontend`. Run on port 5173.
+
+Setup steps:
+
+- Use Python 3.11. Create a separate venv in EACH backend folder and install
+  its own requirements.txt. Do not share one venv.
+- `backend 1` needs a `.env` at its root (Azure OpenAI, Gemini, Azure AD SP,
+  Postgres, blob storage). I'm supplying this file separately — do not
+  invent or commit it.
+- `marketing-os-dev/backend` ships only `.env.example`, no `.env`. Create one.
+  It needs AZURE_OPENAI_API_KEY / _ENDPOINT / _DEPLOYMENT / _API_VERSION — the
+  same Azure OpenAI credentials that are already in `backend 1`'s .env work
+  fine. Also set:
+      CREATIVE_STUDIO_BASE=http://127.0.0.1:8000
+      CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+  Leave ALL the PG* / POSTGRES_DSN vars blank — blank PGHOST makes it skip DB
+  logging cleanly instead of hanging.
+- Frontend: use npm, NOT pnpm (there's a package-lock.json; the README says
+  pnpm but that's stale). Create `frontend/.env.local` containing
+  VITE_API_BASE=http://127.0.0.1:8001 — without it, src/lib/api.ts defaults to
+  a deployed Azure App Service URL and the UI will silently hit production
+  instead of your local backend.
+
+Then start all three, verify each is actually serving, and tell me the URL to open.
+
+Things that will look broken but are expected — do not try to "fix" them
+unless I ask:
+
+- `backend 1` takes ~90 seconds to become reachable on first boot. Its startup
+  hook runs a Postgres + blob connectivity check against Azure hosts that are
+  firewalled outside the corporate network, so it blocks on a TCP timeout
+  before continuing. It does eventually serve; just wait and poll /docs.
+- The Creative step of the pipeline WILL fail with HTTP 429
+  "Rate limit check unavailable". Root cause: backend 1's rate limiter
+  (utils/limiter.py) stores its counter in that same unreachable Postgres, and
+  the middleware in main.py fails CLOSED, so with no DB every generation
+  request 429s. GTM, Metrics and Finance all complete for real before this.
+- There is also a genuine auth mismatch: the creative agent sends an
+  `X-API-Key` header, but backend 1's endpoint requires an Azure AD Bearer JWT
+  (auth/azure_auth.py require_auth). There is no API-key path in backend 1 at
+  all, so this would 401 even on VPN.
+- Open the app at http://localhost:5173, not 127.0.0.1 — and note the first
+  auto-sent chat message may not render (known bug, see handoff.md); typing a
+  follow-up manually works.
