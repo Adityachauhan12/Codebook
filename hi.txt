@@ -1,40 +1,529 @@
----
-agent: creative
-version: 2.0
----
+#!/usr/bin/env python3
+"""
+Creative agent as a LangGraph SUBGRAPH on the shared CampaignState.
 
-You are a creative director writing image-generation prompts for airline campaign banners.
+Internal flow:
+    plan -> generate -> log_outputs
 
-Brand rules — colour, logo, typography, and photography restrictions — are injected
-automatically further down the pipeline. Do NOT restate them. Your job is the IDEA.
+What it reads from the blackboard:
+    run_id          â€” DB campaign run id for audit logging (None if DB not configured)
+    product         (intake)
+    objective       (intake)
+    total_budget    (intake)
+    brief           (intake) â€” full brief for metadata tagging
+    channels        (GTM)   â€” selected channels with weights
+    finance         (Finance) â€” per-channel budget allocations
 
-## Write each prompt as
-1. **Concept** — the insight or emotional hook, in one clause
-2. **Subject** — a specific scene, object, or place. Never a category.
-3. **Atmosphere** — light, time of day, weather, mood
-4. **Composition** — where the subject sits, and where empty space is left
+What it writes:
+    creative: {
+        plans:   [{channel, format, width, height, prompt}]
+        outputs: [{channel, format, status, job_id, image_url, error_message}]
+        summary: {total, success, failed}
+    }
+    _creative_plans:   None   (cleared after generate)
+    _creative_outputs: None   (cleared after log_outputs)
+"""
+from __future__ import annotations
 
-## Hard constraints
-- Never mention colours, hex codes, logos, fonts, brand names, or channel names
-- Never describe text to be rendered inside the image
-- State the offer once as campaign context so the scene supports it, then leave
-  clear empty space for it — do not say where the text goes or how it is styled
-- Prefer a specific destination or a single telling object over a generic scene
-- Under 60 words per prompt. Concrete nouns. No stacked adjectives.
-- Avoid: aircraft, runways, airports, crowds, posed or smiling people
+import json
+import logging
+import os
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
-## Three concepts per channel
-For every channel return exactly three prompts, one per angle below. They must be
-genuinely different pictures — not the same idea reworded.
+import httpx
+from openai import AzureOpenAI
+from langgraph.graph import StateGraph, START, END
 
-- `destination-led` — a specific named place, atmospheric, wide establishing view
-- `object-detail` — one telling object, close crop, shallow depth of field
-- `negative-space` — a single small subject against a large uninterrupted area
+from core.state import CampaignState
 
-## Output
-Valid JSON only — an array of objects with keys: `channel`, `concepts`.
-`concepts` is an array of exactly three objects with keys `angle` and `prompt`.
-No explanation, no markdown fences.
+logger = logging.getLogger(__name__)
 
-Example shape:
-[{"channel":"Meta","concepts":[{"angle":"destination-led","prompt":"..."},{"angle":"object-detail","prompt":"..."},{"angle":"negative-space","prompt":"..."}]}]
+# --------------------------------------------------------------------------- #
+# Config
+# --------------------------------------------------------------------------- #
+SKILL_FILE       = str(Path(__file__).resolve().parent / "skill.md")
+GUARDRAILS_FILE  = str(Path(__file__).resolve().parent.parent.parent / "prompts" / "indigo_brand_guardrails.md")
+
+# Channels that produce image creative; maps to (width, height, format label).
+CHANNEL_FORMAT: dict[str, dict] = {
+    "Meta":            {"width": 1080, "height": 1080, "label": "square_feed",    "aspect_ratio": "1:1"},
+    "YouTube":         {"width": 1920, "height": 1080, "label": "display_banner", "aspect_ratio": "16:9"},
+    "Email":           {"width": 600,  "height": 300,  "label": "email_header",   "aspect_ratio": "16:9"},
+    "Google Shopping": {"width": 800,  "height": 800,  "label": "product_image",  "aspect_ratio": "1:1"},
+    "Affiliates":      {"width": 1200, "height": 628,  "label": "web_banner",     "aspect_ratio": "16:9"},
+}
+
+# Fallback order when we need to pad to MIN_VISUAL_CHANNELS.
+_VISUAL_CHANNEL_PRIORITY = ["Meta", "YouTube", "Email", "Google Shopping", "Affiliates"]
+MIN_VISUAL_CHANNELS = 3
+
+# Three distinct art directions per channel. Previously all three images per
+# channel reused one prompt, so they came back near-identical — same concept
+# sampled three times. Fanning out across angles costs no extra API calls.
+CONCEPT_ANGLES = [
+    {"angle": "destination-led",
+     "direction": "a specific named place, atmospheric, wide establishing view"},
+    {"angle": "object-detail",
+     "direction": "one telling object, close crop, shallow depth of field"},
+    {"angle": "negative-space",
+     "direction": "a single small subject against a large uninterrupted area"},
+]
+CONCEPTS_PER_CHANNEL = len(CONCEPT_ANGLES)
+
+AZURE_OPENAI_DEPLOYMENT  = os.getenv("AZURE_OPENAI_DEPLOYMENT",  "gpt-4.1")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview")
+REQUEST_TIMEOUT = 1000  # seconds per individual Creative Studio call
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def _load_skill() -> str:
+    body = Path(SKILL_FILE).read_text(encoding="utf-8")
+    return re.sub(r"^---\n.*?\n---\n", "", body, count=1, flags=re.DOTALL).strip()
+
+
+def _load_guardrails() -> str:
+    try:
+        return Path(GUARDRAILS_FILE).read_text(encoding="utf-8").strip()
+    except Exception:
+        logger.warning("[creative] Could not load brand guardrails from %s", GUARDRAILS_FILE)
+        return ""
+
+
+def _llm() -> AzureOpenAI:
+    return AzureOpenAI(
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        api_version=AZURE_OPENAI_API_VERSION,
+    )
+
+
+
+def _visual_channels(state_channels: list[dict]) -> list[dict]:
+    """Filter to only channels that have a Creative Studio image format."""
+    return [ch for ch in state_channels if ch.get("name") in CHANNEL_FORMAT]
+
+
+def _ensure_min_visual_channels(visual_chs: list[dict]) -> list[dict]:
+    """Always return exactly MIN_VISUAL_CHANNELS visual channels.
+
+    >3: keep top-3 by weight so we don't overrun API budget.
+    <3: pad with lowest-weight supplementary channels from the priority list.
+    """
+    if len(visual_chs) > MIN_VISUAL_CHANNELS:
+        return sorted(visual_chs, key=lambda c: -c.get("weight", 0))[:MIN_VISUAL_CHANNELS]
+
+    if len(visual_chs) < MIN_VISUAL_CHANNELS:
+        existing = {ch["name"] for ch in visual_chs}
+        result = list(visual_chs)
+        for name in _VISUAL_CHANNEL_PRIORITY:
+            if len(result) >= MIN_VISUAL_CHANNELS:
+                break
+            if name not in existing:
+                result.append({"name": name, "weight": 0, "priority": "low", "rationale": "supplementary visual channel"})
+                existing.add(name)
+        return result
+
+    return visual_chs
+
+
+def _normalise_concepts(item: dict, fallbacks: list[dict]) -> list[dict]:
+    """Coerce whatever the LLM returned into exactly CONCEPTS_PER_CHANNEL concepts.
+
+    Tolerates the old flat {"prompt": ...} shape, a short concepts array, and
+    concepts missing their angle label. Pads from `fallbacks` so a sloppy
+    response still yields three genuinely different pictures rather than one
+    prompt repeated three times.
+    """
+    raw = item.get("concepts")
+    if not isinstance(raw, list):
+        # Old flat shape, or a model that ignored the schema.
+        single = (item.get("prompt") or "").strip()
+        raw = [{"angle": CONCEPT_ANGLES[0]["angle"], "prompt": single}] if single else []
+
+    concepts: list[dict] = []
+    for i, c in enumerate(raw[:CONCEPTS_PER_CHANNEL]):
+        if isinstance(c, str):
+            c = {"prompt": c}
+        if not isinstance(c, dict):
+            continue
+        prompt = (c.get("prompt") or "").strip()
+        if not prompt:
+            continue
+        concepts.append({
+            "angle":  (c.get("angle") or CONCEPT_ANGLES[i]["angle"]).strip(),
+            "prompt": prompt,
+        })
+
+    # Pad any missing slots from the fallback set, keeping angles distinct.
+    used = {c["angle"] for c in concepts}
+    for fb in fallbacks:
+        if len(concepts) >= CONCEPTS_PER_CHANNEL:
+            break
+        if fb["angle"] not in used:
+            concepts.append(fb)
+            used.add(fb["angle"])
+
+    return concepts
+
+
+def _extract_offer(state: CampaignState) -> str:
+    brief = state.get("brief", {})
+    grounded = brief.get("grounded", brief)
+    assumed  = brief.get("assumed", {})
+    return grounded.get("offer") or assumed.get("offer") or "special fare"
+
+
+# --------------------------------------------------------------------------- #
+# Nodes
+# --------------------------------------------------------------------------- #
+def plan(state: CampaignState) -> dict:
+    """
+    LLM node: decide which channels need visual creative and write image prompts.
+    One (channel, format) pair per visual channel selected by GTM.
+    Returns _creative_plans â€” list of plan dicts consumed by generate.
+    """
+    channels     = state.get("channels") or []
+    visual_chs   = _ensure_min_visual_channels(_visual_channels(channels))
+
+    if not visual_chs:
+        logger.info("[creative/plan] No visual channels in campaign â€” skipping generation.")
+        return {"_creative_plans": []}
+
+    product   = state.get("product", "IndiGo campaign")
+    objective = state.get("objective", "bookings")
+    budget    = state.get("total_budget", 0)
+    offer     = _extract_offer(state)
+
+    brief    = state.get("brief", {})
+    grounded = brief.get("grounded", brief)
+    assumed  = brief.get("assumed", {})
+    creative_brief = (grounded.get("creative_brief") or assumed.get("creative_brief") or "").strip()
+
+    skill      = _load_skill()
+    guardrails = _load_guardrails()
+    system_prompt = f"{skill}\n\n{guardrails}" if guardrails else skill
+
+    # Shape guidance only — the channel NAME is never sent to the image model.
+    ch_lines = "\n".join(
+        f'- {ch["name"]}: {CHANNEL_FORMAT[ch["name"]]["aspect_ratio"]} '
+        f'({CHANNEL_FORMAT[ch["name"]]["width"]}x{CHANNEL_FORMAT[ch["name"]]["height"]})'
+        for ch in visual_chs
+    )
+    angle_lines = "\n".join(f"- {a['angle']}: {a['direction']}" for a in CONCEPT_ANGLES)
+
+    user_prompt = (
+        f"Campaign product: {product}\n"
+        f"Offer: {offer}\n"
+        f"Objective: {objective}\n"
+        f"Total budget: Rs {budget:,.0f}\n"
+        + (f"Visual direction from client: {creative_brief}\n" if creative_brief else "") +
+        f"\nFrames to fill:\n{ch_lines}\n\n"
+        f"For each frame write {CONCEPTS_PER_CHANNEL} concepts, one per angle:\n{angle_lines}\n\n"
+        'Return a JSON array. One object per frame with keys "channel" and "concepts". '
+        '"concepts" is an array of exactly '
+        f'{CONCEPTS_PER_CHANNEL} objects with keys "angle" and "prompt". '
+        "Use the channel name only as the object key — never inside a prompt."
+    )
+
+    def _fallback_concepts(ch: dict) -> list[dict]:
+        """Guardrail-clean concept set used when the LLM omits or malforms a channel.
+
+        Deliberately carries no channel name, colour, logo or text-overlay
+        instruction — those are enforced server-side by Creative Studio.
+        """
+        if creative_brief:
+            base = creative_brief.rstrip(". ")
+            return [
+                {"angle": CONCEPT_ANGLES[0]["angle"],
+                 "prompt": f"{base}. Wide establishing view, early light, unhurried. "
+                           f"Subject low in frame, open space above."},
+                {"angle": CONCEPT_ANGLES[1]["angle"],
+                 "prompt": f"{base}. Single object in close crop, shallow depth of field, "
+                           f"soft daylight. Plain uncluttered ground behind."},
+                {"angle": CONCEPT_ANGLES[2]["angle"],
+                 "prompt": f"{base}. One small subject against a large uninterrupted "
+                           f"expanse. Minimal, calm, generous empty area."},
+            ]
+        return [
+            {"angle": CONCEPT_ANGLES[0]["angle"],
+             "prompt": "A coastal town waking at dawn, low sun through morning haze, "
+                       "quiet streets. Wide establishing view, rooftops low in frame, "
+                       "open sky filling the upper two-thirds."},
+            {"angle": CONCEPT_ANGLES[1]["angle"],
+             "prompt": "A worn cabin bag resting by a window at first light, close crop, "
+                       "shallow depth of field. Soft daylight, plain uncluttered "
+                       "background, generous space to one side."},
+            {"angle": CONCEPT_ANGLES[2]["angle"],
+             "prompt": "A single traveller walking a wide empty shoreline at low tide, "
+                       "seen small and distant. Flat calm water, soft overcast light, "
+                       "large uninterrupted expanse around the figure."},
+        ]
+
+    def _fallback_plan(ch: dict) -> dict:
+        fmt = CHANNEL_FORMAT[ch["name"]]
+        concepts = _fallback_concepts(ch)
+        return {
+            "channel":  ch["name"],
+            "format":   fmt["label"],
+            "width":    fmt["width"],
+            "height":   fmt["height"],
+            "concepts": concepts,
+            "prompt":   concepts[0]["prompt"],
+        }
+
+    plans: list[dict] = []
+    try:
+        client = _llm()
+        resp = client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            temperature=0.8,
+            max_completion_tokens=2000,
+        )
+        raw = resp.choices[0].message.content or ""
+        logger.info("[creative/plan] LLM raw output: %.500s", raw)
+        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if json_match:
+            parsed = json.loads(json_match.group())
+            # Normalise: ensure width/height come from our map (LLM may hallucinate)
+            for item in parsed:
+                ch_name = item.get("channel", "")
+                fmt     = CHANNEL_FORMAT.get(ch_name, {})
+                if not fmt:
+                    logger.warning("[creative/plan] LLM returned unknown channel %r â€” skipping", ch_name)
+                    continue
+
+                concepts = _normalise_concepts(item, _fallback_concepts({"name": ch_name}))
+                if not concepts:
+                    logger.warning("[creative/plan] Channel %r had no usable concepts â€” skipping", ch_name)
+                    continue
+
+                plans.append({
+                    "channel":  ch_name,
+                    "format":   item.get("format") or fmt.get("label", "banner"),
+                    "width":    fmt.get("width",  1200),
+                    "height":   fmt.get("height", 628),
+                    "concepts": concepts,
+                    "prompt":   concepts[0]["prompt"],
+                })
+    except Exception:
+        logger.exception("[creative/plan] LLM call failed â€” falling back to template prompts.")
+
+    # Guarantee every visual channel has a plan regardless of what the LLM returned.
+    planned = {p["channel"] for p in plans}
+    for ch in visual_chs:
+        if ch["name"] not in planned:
+            logger.warning("[creative/plan] Channel %r missing from LLM response â€” injecting fallback plan", ch["name"])
+            plans.append(_fallback_plan(ch))
+
+    return {"_creative_plans": plans}
+
+
+IMAGES_PER_CHANNEL = CONCEPTS_PER_CHANNEL
+
+
+def _generate_single_image(p: dict, concept: dict, endpoint: str, project_id: str,
+                           api_key: str, img_idx: int) -> dict:
+    """Fire one image_count=1 request for a single concept slot. Never raises."""
+    aspect_ratio = CHANNEL_FORMAT.get(p["channel"], {}).get("aspect_ratio", "16:9")
+    payload: dict = {
+        "image_description": concept["prompt"],
+        "aspect_ratio":      aspect_ratio,
+        "resolution":        "2K",
+        "image_count":       1,
+        # Exact pixel size. Creative Studio resizes to these via resize_to_exact;
+        # without them the plan's width/height were decorative and every asset
+        # came back at the nearest preset ratio instead of the size requested.
+        "custom_width":      p["width"],
+        "custom_height":     p["height"],
+    }
+    if project_id:
+        payload["project_id"] = project_id
+
+    headers: dict = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    angle = concept.get("angle", "")
+    try:
+        with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
+            r = client.post(endpoint, json=payload, headers=headers)
+        r.raise_for_status()
+        body = r.json()
+        for img in (body.get("images") or body.get("data") or []):
+            b64 = img if isinstance(img, str) else img.get("b64_json", "")
+            if b64:
+                logger.info("[creative/generate] %s[%s] âœ“", p["channel"], angle)
+                return {"channel": p["channel"], "img_idx": img_idx, "angle": angle,
+                        "image_url": f"data:image/png;base64,{b64}", "error": None}
+        return {"channel": p["channel"], "img_idx": img_idx, "angle": angle,
+                "image_url": None, "error": "No image in response"}
+    except httpx.HTTPStatusError as exc:
+        err = f"HTTP {exc.response.status_code}: {exc.response.text[:300]}"
+        logger.warning("[creative/generate] %s[%s] â†’ %s", p["channel"], angle, err)
+        return {"channel": p["channel"], "img_idx": img_idx, "angle": angle,
+                "image_url": None, "error": err}
+    except Exception as exc:
+        logger.warning("[creative/generate] %s[%s] â†’ %s", p["channel"], angle, exc)
+        return {"channel": p["channel"], "img_idx": img_idx, "angle": angle,
+                "image_url": None, "error": str(exc)}
+
+
+def generate(state: CampaignState) -> dict:
+    """
+    API node: fire all images across all channels in a single parallel pool.
+    Each image is a separate image_count=1 request so they all start simultaneously
+    instead of waiting for a sequential image_count=3 response.
+    Never raises â€” failed slots are recorded with status='error'.
+    """
+    plans      = state.get("_creative_plans") or []
+    base_url   = os.getenv("CREATIVE_STUDIO_BASE", "").rstrip("/")
+    project_id = os.getenv("CREATIVE_STUDIO_PROJECT_ID", "")
+    api_key    = os.getenv("CREATIVE_STUDIO_API_KEY", "")
+    endpoint   = f"{base_url}/api/v1/generate/image/generate"
+
+    if not plans:
+        return {"_creative_outputs": []}
+
+    if not base_url:
+        return {"_creative_outputs": [
+            {**_empty_out(p), "error_message": "CREATIVE_STUDIO_BASE not configured"}
+            for p in plans
+        ]}
+
+    if not api_key:
+        logger.warning("[creative/generate] CREATIVE_STUDIO_API_KEY is not set â€” requests will be rejected with 401")
+
+    # Flatten: one task per (channel, concept) â€” all fire simultaneously.
+    # Each slot now carries a DIFFERENT prompt, so the three images per channel
+    # are three distinct ideas rather than one prompt sampled three times.
+    tasks = [(p, c, i) for p in plans for i, c in enumerate(p["concepts"])]
+    slot_results: list[dict] = [None] * len(tasks)  # type: ignore[list-item]
+
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        future_to_idx = {
+            pool.submit(_generate_single_image, p, c, endpoint, project_id, api_key, i): idx
+            for idx, (p, c, i) in enumerate(tasks)
+        }
+        for future in as_completed(future_to_idx):
+            slot_results[future_to_idx[future]] = future.result()
+
+    # Re-group by channel, preserving plan order.
+    urls_by_channel: dict[str, list[str]] = {p["channel"]: [] for p in plans}
+    angles_by_channel: dict[str, list[str]] = {p["channel"]: [] for p in plans}
+    errors_by_channel: dict[str, list[str]] = {p["channel"]: [] for p in plans}
+    for r in slot_results:
+        if r["image_url"]:
+            urls_by_channel[r["channel"]].append(r["image_url"])
+            angles_by_channel[r["channel"]].append(r.get("angle", ""))
+        elif r["error"]:
+            errors_by_channel[r["channel"]].append(r["error"])
+
+    outputs: list[dict] = []
+    for p in plans:
+        out = _empty_out(p)
+        image_urls = urls_by_channel[p["channel"]]
+        out["image_urls"] = image_urls
+        out["image_url"]  = image_urls[0] if image_urls else None
+        out["angles"]     = angles_by_channel[p["channel"]]
+        if image_urls:
+            out["status"] = "success"
+            logger.info("[creative/generate] %s %s â†’ %d/%d images (%s)",
+                        p["channel"], p["format"], len(image_urls), IMAGES_PER_CHANNEL,
+                        ", ".join(a for a in out["angles"] if a))
+        else:
+            out["error_message"] = "; ".join(errors_by_channel[p["channel"]]) or "No images in response"
+            logger.warning("[creative/generate] %s %s â†’ 0 images. %s",
+                           p["channel"], p["format"], out["error_message"])
+        outputs.append(out)
+
+    return {"_creative_outputs": outputs}
+
+
+def _empty_out(p: dict) -> dict:
+    return {
+        "channel":       p["channel"],
+        "format":        p["format"],
+        "width":         p["width"],
+        "height":        p["height"],
+        "prompt":        p["prompt"],
+        "concepts":      p.get("concepts", []),
+        "status":        "error",
+        "job_id":        None,
+        "image_url":     None,
+        "image_urls":    [],
+        "angles":        [],
+        "raw_response":  None,
+        "error_message": None,
+        "token_scope":   None,
+    }
+
+
+def log_outputs(state: CampaignState) -> dict:
+    """
+    Assemble the final creative dict, write rows to mos_creative_outputs (best-effort),
+    and clear the intermediate working keys.
+    """
+    outputs  = state.get("_creative_outputs") or []
+    plans    = state.get("_creative_plans")    or []
+    run_id   = state.get("run_id")
+    brief    = state.get("brief", {})
+
+    success = sum(1 for o in outputs if o.get("status") == "success")
+    failed  = len(outputs) - success
+
+    # DB logging â€” best-effort, never raises
+    if run_id is not None:
+        try:
+            from core.db import log_creative_output
+            for out in outputs:
+                log_creative_output(run_id, {**out, "campaign_brief": brief})
+        except Exception:
+            logger.exception("[creative/log_outputs] DB logging failed.")
+
+    creative = {
+        "plans":   plans,
+        "outputs": [
+            {k: v for k, v in o.items() if k != "raw_response"}
+            for o in outputs
+        ],
+        "summary": {
+            "total":   len(outputs),
+            "success": success,
+            "failed":  failed,
+        },
+    }
+
+    return {
+        "creative":          creative,
+        "_creative_plans":   None,
+        "_creative_outputs": None,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Subgraph
+# --------------------------------------------------------------------------- #
+def build_creative_subgraph():
+    g = StateGraph(CampaignState)
+
+    g.add_node("plan",        plan)
+    g.add_node("generate",    generate)
+    g.add_node("log_outputs", log_outputs)
+
+    g.add_edge(START,        "plan")
+    g.add_edge("plan",       "generate")
+    g.add_edge("generate",   "log_outputs")
+    g.add_edge("log_outputs", END)
+
+    return g.compile()
+
+
+
