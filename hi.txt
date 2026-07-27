@@ -1,98 +1,551 @@
-import { SendHorizonal } from 'lucide-react'
-import { MessageBubble } from './MessageBubble'
-import { ProcessingPane } from './ProcessingPane'
-import type { ChatPhase, ChatSession, ProcessingSnapshot } from '../types'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { BadgeCheck, CircleDot, Clock, ImageOff, X } from 'lucide-react'
+import type { CreativeOutput, PlanData, ProcessingSnapshot } from '../types'
+import { formatCurrency } from '../lib/utils'
+import { isIndexedImageRef, resolveIndexedImageRef } from '../lib/indexedStorage'
 
 type Props = {
-  chat: ChatSession | null
   processing: ProcessingSnapshot
-  phase: ChatPhase
-  onSend: (value: string) => void
-  initialPrompt?: string
 }
 
-const composerPlaceholder: Record<ChatPhase, string> = {
-  intake:   'Answer the question or add more details...',
-  running:  'Generating your plan — please wait...',
-  complete: 'Ask to adjust budget, channels, or anything else...',
-  error:    'Something went wrong. Try again or start a new campaign.',
+function ConfidenceBadge({ value }: { value?: string }) {
+  const learned = value === 'learned'
+  return (
+    <span
+      style={{
+        fontSize: '0.65rem',
+        fontWeight: 600,
+        padding: '2px 6px',
+        borderRadius: '4px',
+        background: learned ? '#dcfce7' : '#f3f4f6',
+        color: learned ? '#16a34a' : '#6b7280',
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+      }}
+    >
+      {learned ? 'Learned' : 'Estimated'}
+    </span>
+  )
 }
 
-export function Workspace({ chat, processing, phase, onSend, initialPrompt }: Props) {
-  const messages = chat?.messages ?? []
-  const isRunning = phase === 'running'
+function WeightBar({ weight }: { weight: number }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={{ flex: 1, background: '#f3f4f6', borderRadius: '4px', height: '6px' }}>
+        <div
+          style={{
+            width: `${weight}%`,
+            background: '#2563eb',
+            borderRadius: '4px',
+            height: '6px',
+            transition: 'width 0.5s ease',
+          }}
+        />
+      </div>
+      <span style={{ fontSize: '0.75rem', color: '#6b7280', minWidth: '32px' }}>{weight}%</span>
+    </div>
+  )
+}
+
+function SectionHeader({ title, filled }: { title: string; filled: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+      {filled
+        ? <BadgeCheck size={15} color="#16a34a" />
+        : <CircleDot size={15} color="#d1d5db" />}
+      <h3 style={{ margin: 0, fontSize: '0.8rem', fontWeight: 700, color: filled ? '#111' : '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        {title}
+      </h3>
+    </div>
+  )
+}
+
+const ARCHETYPE_LABELS: Record<string, string> = {
+  A: 'High-intent transactional',
+  B: 'Discovery / considered',
+  C: 'E-commerce catalog',
+  D: 'Gifting / occasion',
+}
+
+function StrategySection({ planData }: { planData: PlanData }) {
+  const { archetype, archetype_reason, channels } = planData
+  const filled = !!(archetype || channels?.length)
 
   return (
-    <div className="workspace-grid">
-      <section className="panel panel--chat">
-        <div className="panel__header">
-          <div>
-            <span className="eyebrow">Conversation</span>
-            <h2>{chat?.title ?? 'New campaign'}</h2>
-          </div>
-          <div className="status-pill">
-            <span>{phase}</span>
-          </div>
-        </div>
-
-        <div className="chat-stream">
-          {initialPrompt && messages.length === 0 && (
-            <article className="message message--user">
-              <div className="message__meta">
-                <strong>User</strong>
+    <div className="panel-section">
+      <SectionHeader title="Strategy" filled={filled} />
+      {!filled ? (
+        <p className="muted" style={{ fontSize: '0.8rem' }}>Waiting for GTM agent...</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {archetype && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Archetype</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', background: '#eff6ff', color: '#1d4ed8', padding: '2px 10px', borderRadius: '6px' }}>
+                  {ARCHETYPE_LABELS[archetype] ?? archetype}
+                </span>
               </div>
-              <p>{initialPrompt}</p>
-            </article>
-          )}
-          {messages.length === 0 ? (
-            <div className="empty-state">
-              <p>Send a prompt to begin the campaign.</p>
+              {archetype_reason && (
+                <p style={{ fontSize: '0.72rem', color: '#6b7280', margin: 0 }}>{archetype_reason}</p>
+              )}
             </div>
-          ) : (
-            messages.map((message) => <MessageBubble key={message.id} message={message} />)
+          )}
+          {channels && channels.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {channels.map((ch) => (
+                <div key={ch.name} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{ch.name}</span>
+                    <span style={{ fontSize: '0.7rem', color: '#6b7280', textTransform: 'uppercase' }}>{ch.priority}</span>
+                  </div>
+                  <WeightBar weight={ch.weight} />
+                </div>
+              ))}
+            </div>
           )}
         </div>
-
-        <form
-          className="composer composer--bottom"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (isRunning) return
-            const formData = new FormData(event.currentTarget)
-            const value = String(formData.get('followup') ?? '').trim()
-            if (!value) return
-            onSend(value)
-            event.currentTarget.reset()
-          }}
-        >
-          <textarea
-            name="followup"
-            rows={2}
-            placeholder={composerPlaceholder[phase]}
-            disabled={isRunning}
-            onKeyDown={(event) => {
-              // Enter sends, Shift+Enter makes a new line.
-              // isComposing guards IME input, where Enter confirms a candidate
-              // and must not submit the message.
-              if (event.key !== 'Enter' || event.shiftKey) return
-              if (event.nativeEvent.isComposing) return
-              event.preventDefault()
-              if (isRunning) return
-              event.currentTarget.form?.requestSubmit()
-            }}
-          />
-          <button
-            className="button button--primary"
-            type="submit"
-            disabled={isRunning}
-          >
-            <SendHorizonal size={16} />
-            <span>Send</span>
-          </button>
-        </form>
-      </section>
-
-      <ProcessingPane processing={processing} />
+      )}
     </div>
+  )
+}
+
+function TargetsSection({ planData }: { planData: PlanData }) {
+  const { primary_kpi, channel_targets } = planData
+  const filled = !!(primary_kpi || channel_targets)
+
+  return (
+    <div className="panel-section">
+      <SectionHeader title="Performance Targets" filled={filled} />
+      {!filled ? (
+        <p className="muted" style={{ fontSize: '0.8rem' }}>Waiting for Metrics agent...</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {primary_kpi && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+              <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Primary KPI</span>
+              <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>{primary_kpi}</span>
+            </div>
+          )}
+          {channel_targets && (
+            <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ color: '#9ca3af' }}>
+                  <th style={{ textAlign: 'left', padding: '4px 0', fontWeight: 600 }}>Channel</th>
+                  <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 600 }}>ROAS</th>
+                  <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 600 }}>CPA</th>
+                  <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 600 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(channel_targets).map(([ch, t]) => (
+                  <tr key={ch} style={{ borderTop: '1px solid #f3f4f6' }}>
+                    <td style={{ padding: '6px 0', fontWeight: 500 }}>{ch}</td>
+                    <td style={{ textAlign: 'right', padding: '6px 0', color: '#374151' }}>{t.target_roas ?? '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '6px 0', color: '#374151' }}>{t.target_cpa ? `₹${t.target_cpa}` : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '6px 0' }}>
+                      <ConfidenceBadge value={t.confidence as string} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BudgetSection({ planData }: { planData: PlanData }) {
+  const { finance } = planData
+  const filled = !!finance
+
+  return (
+    <div className="panel-section">
+      <SectionHeader title="Budget Allocation" filled={filled} />
+      {!filled ? (
+        <p className="muted" style={{ fontSize: '0.8rem' }}>Waiting for Finance agent...</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {finance.reserve_buffer && (
+            <div style={{ fontSize: '0.75rem', color: '#6b7280', padding: '6px 10px', background: '#fafafa', borderRadius: '6px', border: '1px solid #f3f4f6' }}>
+              Reserve: <strong style={{ color: '#111' }}>{formatCurrency(finance.reserve_buffer.amount)}</strong> ({finance.reserve_buffer.percent}%)
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {finance.channels.map((ch) => (
+              <div key={ch.channel} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{ch.channel}</span>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{formatCurrency(ch.total_allocation)}</span>
+                </div>
+                <div style={{ fontSize: '0.7rem', color: '#9ca3af' }}>
+                  {formatCurrency(ch.daily_cap)} / day
+                  {ch.reasoning && <span> · {ch.reasoning}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StatusBadge({ status }: { status: CreativeOutput['status'] }) {
+  const styles: Record<string, { bg: string; color: string; label: string }> = {
+    success: { bg: '#dcfce7', color: '#16a34a', label: 'Generated' },
+    error:   { bg: '#fee2e2', color: '#dc2626', label: 'Failed' },
+    pending: { bg: '#f3f4f6', color: '#6b7280', label: 'Pending' },
+  }
+  const s = styles[status] ?? styles.pending
+  return (
+    <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '2px 6px', borderRadius: '4px', background: s.bg, color: s.color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      {s.label}
+    </span>
+  )
+}
+
+function CreativeSkeletonCard() {
+  return (
+    <div className="creative-card creative-card--loading" aria-hidden="true">
+      <div className="creative-card__media creative-card__media--loading" />
+      <div className="creative-card__line shimmer-block" />
+      <div className="creative-card__line creative-card__line--short shimmer-block" />
+    </div>
+  )
+}
+
+function CreativeSection({ planData, activeAgent }: { planData: PlanData; activeAgent: string | null }) {
+  const creative = planData.creative
+  const isGenerating = activeAgent === 'creative'
+  const filled = !!(creative?.outputs?.length || creative?.summary)
+  const [selectedOutput, setSelectedOutput] = useState<CreativeOutput | null>(null)
+  const [resolvedImageUrls, setResolvedImageUrls] = useState<Record<string, string | null>>({})
+
+  useEffect(() => {
+    const outputs = creative?.outputs ?? []
+    const refs = outputs
+    .flatMap((output) => [
+      output.image_url,
+      ...(output.image_urls ?? []),
+    ])
+    .filter(
+      (value): value is string =>
+        typeof value === 'string' && isIndexedImageRef(value),
+    )
+
+    if (refs.length === 0) return
+
+    let cancelled = false
+    void Promise.all(refs.map(async (ref) => ({ ref, url: await resolveIndexedImageRef(ref) }))).then((entries) => {
+      if (cancelled) return
+      setResolvedImageUrls((current) => {
+        const next = { ...current }
+        for (const entry of entries) {
+          next[entry.ref] = entry.url
+        }
+        return next
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [creative?.outputs])
+
+  const getRenderableImageUrl = (value: string | null | undefined) => {
+    if (!value) return null
+    if (!isIndexedImageRef(value)) return value
+    return resolvedImageUrls[value] ?? null
+  }
+  const displayOutputs: CreativeOutput[] = (
+    creative?.outputs ?? []
+  ).flatMap((output) => {
+    const imageUrls = output.image_urls?.length
+      ? output.image_urls
+      : output.image_url
+        ? [output.image_url]
+        : []
+
+    if (!imageUrls.length) return [output]
+
+    return imageUrls.map((imageUrl, index) => ({
+      ...output,
+      image_url: imageUrl,
+      image_urls: [imageUrl],
+      // Each image comes from its own prompt variant, so attribute the real one
+      // rather than repeating the channel's first prompt on every card.
+      prompt: output.used_prompts?.[index] ?? output.prompt,
+      variant_index: index + 1,
+    }))
+  })
+
+  const selectedImageUrl = getRenderableImageUrl(selectedOutput?.image_url)
+  const visibleOutputs = displayOutputs.filter(
+    (output) => output.status !== 'pending',
+  )
+  const isLoadingGrid = isGenerating && (!creative?.outputs?.length || creative.outputs.some((output) => output.status === 'pending'))
+  const skeletonCount = Math.max(3, creative?.planning?.length ?? 0)
+  const creativeSummary = creative?.summary
+  const creativePlanning = creative?.planning ?? []
+
+  useEffect(() => {
+    if (!selectedOutput) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedOutput(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectedOutput])
+
+  return (
+    <div className="panel-section">
+      <SectionHeader title="Creative Assets" filled={filled} />
+      {!filled && !isGenerating && !creative?.planning && (
+        <p className="muted" style={{ fontSize: '0.8rem' }}>Waiting for Creative agent...</p>
+      )}
+      {!filled && isGenerating && creativePlanning.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <p style={{ fontSize: '0.78rem', color: '#6b7280', margin: 0 }}>Generating banners for:</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {creativePlanning.map((ch) => (
+              <span key={ch} style={{ fontSize: '0.72rem', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: '#eff6ff', color: '#1d4ed8' }}>{ch}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {(filled || isLoadingGrid) && (
+        <div style={{ display: 'grid', gap: '10px' }}>
+          {creativeSummary && (
+            <div style={{ fontSize: '0.72rem', color: '#6b7280', padding: '5px 10px', background: '#fafafa', borderRadius: '6px', border: '1px solid #f3f4f6' }}>
+              {creativeSummary.total_images ??
+                visibleOutputs.filter(
+                  (output) => output.status === 'success',
+                ).length}{' '}
+              images generated
+
+              {(creativeSummary.failed_channels ??
+                creativeSummary.failed ??
+                0) > 0 && (
+                <span style={{ color: '#dc2626' }}>
+                  {' '}·{' '}
+                  {creativeSummary.failed_channels ??
+                    creativeSummary.failed}{' '}
+                  channel(s) failed
+                </span>
+              )}
+            </div>
+          )}
+          <div className="creative-grid">
+            {visibleOutputs.map((out, i) => (
+              <div
+                key={`${out.channel}-${out.variant_index ?? i}`}
+                className="creative-card"
+              >
+                {getRenderableImageUrl(out.image_url) ? (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOutput(out)}
+                    className="creative-card__preview"
+                  >
+                    <img
+                      src={getRenderableImageUrl(out.image_url) ?? undefined}
+                      alt={`${out.channel} ${out.format ?? ''} banner`}
+                      className="creative-card__image"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                    />
+                  </button>
+                ) : out.status === 'success' ? (
+                  <div className="creative-card__media creative-card__placeholder creative-card__placeholder--success">
+                    <BadgeCheck size={14} />
+                    Asset ready — no preview URL
+                  </div>
+                ) : (
+                  <div className="creative-card__media creative-card__placeholder">
+                    <ImageOff size={20} />
+                  </div>
+                )}
+                <div className="creative-card__meta">
+                 <div>
+                    <div className="creative-card__title">
+                      {out.channel}
+                    </div>
+
+                    {out.format && (
+                      <div className="creative-card__format">
+                        {out.format}
+                      </div>
+                    )}
+
+                    {out.variant_index && (
+                      <div className="creative-card__format">
+                        Image {out.variant_index}
+                      </div>
+                    )}
+                  </div>
+                  <div className="creative-card__actions">
+                    <StatusBadge status={out.status} />
+                    {getRenderableImageUrl(out.image_url) && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedOutput(out)}
+                        className="creative-card__view"
+                        aria-label={`Open ${out.channel} creative preview`}
+                      >
+                        <span>View</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {out.status === 'error' && out.error_message && (
+                  <p className="creative-card__error">{out.error_message}</p>
+                )}
+              </div>
+            ))}
+            {isLoadingGrid && Array.from({ length: skeletonCount }).map((_, index) => (
+              <CreativeSkeletonCard key={`creative-skeleton-${index}`} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {selectedOutput && selectedImageUrl && typeof document !== 'undefined' && createPortal(
+        <div className="creative-modal" role="dialog" aria-modal="true" aria-label="Creative preview" onClick={() => setSelectedOutput(null)}>
+          <div className="creative-modal__surface" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="creative-modal__close"
+              onClick={() => setSelectedOutput(null)}
+              aria-label="Close creative preview"
+            >
+              <X size={16} />
+            </button>
+
+            <div className="creative-modal__media">
+              <img
+                src={selectedImageUrl}
+                alt={`${selectedOutput.channel} ${selectedOutput.format ?? ''} banner`}
+              />
+            </div>
+
+            <div className="creative-modal__body">
+              <div className="creative-modal__header">
+                <div>
+                  <span className="eyebrow">Creative preview</span>
+                  <h3>
+                    {selectedOutput.channel}
+                    {selectedOutput.format
+                      ? ` · ${selectedOutput.format}`
+                      : ''}
+                    {selectedOutput.variant_index
+                      ? ` · Image ${selectedOutput.variant_index}`
+                      : ''}
+                  </h3>
+                </div>
+                <StatusBadge status={selectedOutput.status} />
+              </div>
+
+              {selectedOutput.headline && (
+                <div className="creative-modal__prompt">
+                  <strong>Headline</strong>
+                  <p>{selectedOutput.headline}</p>
+                </div>
+              )}
+
+              {selectedOutput.concept && (
+                <div className="creative-modal__prompt">
+                  <strong>Concept</strong>
+                  <p>{selectedOutput.concept}</p>
+                </div>
+              )}
+
+              <div className="creative-modal__prompt">
+                <strong>Prompt</strong>
+                <p>{selectedOutput.prompt ?? 'Prompt not available for this asset.'}</p>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
+export function ProcessingPane({ processing }: Props) {
+  const { activeAgent, agentStatus, events, planData } = processing
+  const allUpdates = events.filter((e) => e.kind === 'update')
+
+  const activeLabel: Record<string, string> = {
+    gtm:          'Crafting go-to-market strategy',
+    metrics:      'Setting performance targets',
+    finance:      'Allocating your budget',
+    creative:     'Generating banner assets',
+    orchestrator: 'Coordinating agents',
+    summary:      'Writing campaign summary',
+  }
+
+  const trackedAgents = ['gtm', 'metrics', 'finance', 'creative']
+  const agentsTotal = trackedAgents.length
+
+  const agentsDone = processing.finalSummary
+    ? agentsTotal
+    : trackedAgents.filter(
+        (agent) => agentStatus[agent] === 'done',
+      ).length
+
+  return (
+    <section className="panel panel--processing">
+      <div className="panel__header">
+        <div>
+          <span className="eyebrow">Live plan</span>
+          <h2>Campaign being built</h2>
+        </div>
+        <div className={`status-pill ${processing.error ? 'status-pill--error' : ''}`}>
+          {activeAgent ? (
+            <>
+              <Clock size={13} />
+              <span>{activeLabel[activeAgent] ?? activeAgent}</span>
+            </>
+          ) : agentsDone > 0 ? (
+            <>
+              <BadgeCheck size={13} />
+              <span>{agentsDone}/{agentsTotal} agents done</span>
+            </>
+          ) : (
+            <span>Waiting to start</span>
+          )}
+        </div>
+      </div>
+
+      {allUpdates.length > 0 && (
+        <div className="panel-section">
+          <h3 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#9ca3af', marginBottom: '8px' }}>Activity log</h3>
+          <div className="trace-list" style={{ maxHeight: '185px', overflowY: 'auto' }}>
+            {allUpdates.map((event) => (
+              <div key={event.id} className="trace-item">
+                <BadgeCheck size={13} color="#10b981" />
+                <div>
+                  <strong style={{ fontSize: '0.75rem' }}>{event.node}</strong>
+                  <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: 0 }}>{event.summary}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <StrategySection planData={planData} />
+      <TargetsSection planData={planData} />
+      <BudgetSection planData={planData} />
+      <CreativeSection planData={planData} activeAgent={activeAgent} />
+    </section>
   )
 }
