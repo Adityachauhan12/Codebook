@@ -1,65 +1,442 @@
-# Finance Agent — Budget Allocation Skill
+# Metrics Agent Documentation
 
-You are a performance marketing budget strategist. Your only job is to explain budget allocation decisions clearly and concisely for a human reviewer.
+> **This file is documentation, not a prompt.** Unlike `agents/gtm/skill.md`,
+> `agents/finance/skill.md` and `agents/creative/skill.md`, nothing loads this file into an
+> LLM — the Metrics Agent is fully deterministic and makes no model calls. It is named
+> `skill.md` only for symmetry with the other agent folders. Editing it changes no
+> behaviour; the logic lives in `agents/metrics/agent.py`. Consider renaming it to
+> `README.md` to stop it reading as a live prompt.
 
-## Your role in this system
+## 1. Purpose
 
-The channel selection, weights, and KPI targets have already been decided by the GTM and Metrics agents. The Python system has already done the math. You are given the final numbers and must write a one-line reasoning string for each channel explaining WHY it received its allocation — in plain language a marketing manager can read and approve.
+The **Metrics Agent** is a LangGraph subgraph used in the Autonomous Marketing System to define campaign success metrics, set KPI targets, validate those targets against channel benchmarks, and align the output with the GTM Agent's recommended channel strategy.
 
-## How to reason about channel allocation
+The Metrics Agent operates after the GTM Agent has created a strategy plan. The GTM Agent selects channels and assigns weights, while the Metrics Agent decides what success means for those channels and whether the plan is realistic.
 
-### Channel priority shapes the split
-- **High priority channels** received a larger share because they are best suited to the campaign objective and expected to drive the most efficient return.
-- **Medium priority channels** received a supporting role — they extend reach or capture demand that high-priority channels miss.
-- **Low priority channels** received a minimal allocation — they are retained for coverage or testing but are not the primary drivers.
+---
 
-### ROAS and CPA targets tell you the channel's efficiency
-- A channel with a high ROAS target (e.g. Email at 5.0×) means the system expects strong return — justify higher allocation on efficiency grounds.
-- A channel with a high CPA target (e.g. YouTube at ₹1200) means the system expects expensive conversions — justify lower allocation or supporting role.
-- "Learned" confidence means real historical data backed the target. "Prior" means it is a benchmark estimate — note this where relevant.
+## 2. Role in the Autonomous Marketing System
 
-### Budget allocation principles (from paid media best practice)
-- Concentrate spend where return is highest — don't spread evenly across all channels.
-- Reserve buffer exists for live optimization: shifting budget mid-campaign to winners without going back for approval.
-- Weekly caps prevent overspend in a single week; daily caps prevent single-day spikes.
+The Metrics Agent is part of the strategy phase.
 
-## Output contract — this is parsed, not read
-
-Return a plain numbered list and **nothing else**. No preamble, no heading, no closing
-remark, no blank lines between items, no markdown bold.
-
-```
-1. <reasoning for channel 1>
-2. <reasoning for channel 2>
-3. <reasoning for channel 3>
+```text
+Campaign Brief
+   ↓
+GTM Agent
+   ↓
+Channels + weights + positioning + pricing
+   ↓
+Metrics Agent
+   ↓
+Primary KPI + secondary KPIs + channel targets + alignment status
 ```
 
-Hard rules:
-- **Exactly one line per channel, in the same order you were given them.** The list is
-  zipped positionally onto the allocations — a missing or extra line silently attaches the
-  wrong reasoning to the wrong channel and a reviewer approves a budget on it.
-- Never merge two channels into one line, never split one channel across two.
-- Do not restate the channel name at the start of the line; it is already displayed.
+The Metrics Agent does **not** create ad copy, allocate budget, or publish campaigns. Its responsibility is KPI and target reasoning.
 
-## What to write
+---
 
-For each channel, ONE sentence, **max 20 words**, covering:
-- Why this channel got this share (priority + efficiency signal)
-- The one notable factor: learned vs prior confidence, an unusually high CPA, or a strong
-  ROAS ceiling
+## 3. Inputs
 
-**Examples of good reasoning:**
-- "Strongest expected return and targets learned from past campaigns, so it leads the split."
-- "Supporting channel on benchmark estimates only — allocation kept deliberately conservative."
-- "High-intent search with proven historical return; second-largest share."
-- "Expensive conversions here, so a small allocation buys reach without draining the budget."
+The Metrics Agent expects campaign context from the shared campaign state.
 
-## What NOT to write
-- Do not restate the figures — the allocation, ROAS and CPA are already on screen next to
-  your sentence. Refer to them qualitatively ("strongest expected return", "expensive
-  conversions"), not numerically.
-- Do not use jargon the reviewer won't understand.
-- Do not write more than one sentence per channel.
-- Do not hedge with "it may be worth considering", "arguably", "potentially".
-- Do not recommend changes to the split. It is already decided and the maths is done; you
-  are explaining it, not reopening it.
+Typical inputs include:
+
+```python
+{
+    "product": "Flight Sale",
+    "objective": "bookings",
+    "total_budget": 100000,
+    "channels": [
+        {"name": "Google Search", "weight": 50, "priority": "high"},
+        {"name": "Meta", "weight": 25, "priority": "medium"},
+        {"name": "Email", "weight": 25, "priority": "medium"}
+    ],
+    "memory": InMemoryStore(),
+    "negotiation_round": 0,
+    "feedback": []
+}
+```
+
+### Key input fields
+
+| Field | Meaning |
+|---|---|
+| `product` | Campaign product, such as Flight Sale or Gift Card Sale |
+| `objective` | Campaign goal, such as bookings, revenue, sales, signups, leads, trials, awareness, or reach |
+| `total_budget` | Total available campaign budget |
+| `channels` | GTM-selected channels with weights and priority |
+| `memory` | Historical campaign memory store |
+| `negotiation_round` | Number of target negotiation attempts already completed |
+| `feedback` | Strategy-level feedback sent back to GTM when channel plan needs revision |
+
+---
+
+## 4. Outputs
+
+The Metrics Agent writes KPI and alignment fields back into the shared campaign state.
+
+Main outputs:
+
+```python
+{
+    "primary_kpi": "ROAS",
+    "secondary_kpis": ["CPA", "CTR", "Conversion Rate"],
+    "manual_targets": {...},
+    "historical_performance": [...],
+    "learned_targets": {...},
+    "global_targets": {...},
+    "benchmark_data": {...},
+    "channel_targets": {...},
+    "metrics_issues": [...],
+    "alignment_status": "aligned",
+    "feedback": []
+}
+```
+
+### Final status values
+
+| Status | Meaning |
+|---|---|
+| `aligned` | Metrics targets and GTM strategy are compatible |
+| `warnings` | Strategy can proceed, but Metrics Agent found some concerns |
+| `halt` | Strategy has serious unresolved target issues |
+
+---
+
+## 5. KPI Logic
+
+The Metrics Agent first maps the campaign objective to primary and secondary KPIs.
+
+### Objective-to-KPI examples
+
+| Objective | Primary KPI | Secondary KPIs |
+|---|---|---|
+| `bookings` | ROAS | CPA, CTR, Conversion Rate, Revenue, Conversions |
+| `revenue` | ROAS | CPA, CTR, Conversion Rate, Revenue |
+| `sales` | ROAS | CPA, CTR, Conversion Rate, Revenue |
+| `signups` | CPA | Conversions, CTR, CPC, Conversion Rate |
+| `leads` | CPA | Conversions, CTR, CPC, Conversion Rate |
+| `trials` | CPA | Trial Starts, CTR, CPC, Conversion Rate |
+| `awareness` | CPM | Impressions, Reach, CTR, Frequency |
+| `reach` | Reach | Impressions, CPM, Frequency, CTR |
+
+The objective-level KPI mapping is defined in `OBJECTIVE_KPI_CONFIG`.
+
+---
+
+## 6. Benchmark Logic
+
+The Metrics Agent uses a static benchmark database as a cold-start prior.
+
+Benchmarks are stored per canonical channel name.
+
+Example:
+
+```python
+BENCHMARK_DB = {
+    "Google Search": {
+        "cpa_range": [250, 900],
+        "roas_range": [2.5, 6.0],
+        "ctr_range": [2.0, 7.0],
+        "conversion_rate_range": [1.5, 6.0],
+        "cpm_range": [80, 300]
+    }
+}
+```
+
+### Target vs benchmark
+
+| Concept | Meaning |
+|---|---|
+| Target | What the campaign wants to achieve |
+| Benchmark | What is considered realistic for the channel |
+
+Example:
+
+```text
+Target ROAS = 7.0
+Meta benchmark ROAS range = 2.0 to 5.0
+```
+
+The Metrics Agent should flag this as too aggressive.
+
+---
+
+## 7. Historical Learning
+
+The Metrics Agent can use historical campaign memory.
+
+Historical data is loaded from:
+
+```python
+state["memory"].get_relevant_history(...)
+```
+
+The memory store may currently be an in-memory store, but later it can be replaced with PostgreSQL.
+
+Historical performance is used to improve targets.
+
+Example:
+
+```text
+Previous Email ROAS = 9.0
+Learned Email ROAS target = 9.0 × 1.10 = 9.9
+```
+
+The Metrics Agent marks targets as:
+
+| Confidence | Meaning |
+|---|---|
+| `prior` | Cold-start target based on benchmark/manual config |
+| `learned` | Target is based on historical campaign performance |
+
+---
+
+## 8. Check-Before-Clamp Logic
+
+A key design point is **check-before-clamp**.
+
+The Metrics Agent stores both:
+
+```text
+raw target = target before benchmark correction
+final target = target after benchmark clamp
+```
+
+This matters because if the system only checks already-clamped values, unrealistic target issues may never be detected.
+
+Example:
+
+```text
+Raw Email ROAS target = 27.5
+Email benchmark max ROAS = 20.0
+Final Email ROAS target = 20.0
+```
+
+The raw value allows the GTM Alignment step to detect that the original target was too aggressive.
+
+---
+
+## 9. GTM Alignment Logic
+
+The `gtm_alignment` node checks two categories of issues.
+
+### 9.1 Target-level issues
+
+Target-level issues are handled inside the Metrics Agent through negotiation.
+
+Examples:
+
+```text
+ROAS target too aggressive
+CPA target too aggressive
+CTR target too aggressive
+CPM target too aggressive
+Conversion Rate target too aggressive
+```
+
+These issues are resolved by accepting benchmark-clamped target values.
+
+---
+
+### 9.2 Strategy-level issues
+
+Strategy-level issues are sent back to the parent campaign graph as feedback for the GTM Agent.
+
+Example:
+
+```text
+Email has strong benchmark potential but GTM assigned it low/medium weight.
+```
+
+The Metrics Agent may send feedback such as:
+
+```text
+Increase Email weight because Email has stronger expected ROAS than current priority suggests.
+```
+
+This enables the cross-agent loop:
+
+```text
+GTM Agent → Metrics Agent → Feedback → GTM Agent revision
+```
+
+---
+
+## 10. Negotiation Loop
+
+The Metrics Agent has an internal negotiation loop for target-level issues.
+
+```text
+channel_target
+   ↓
+gtm_alignment
+   ↓
+if target issue exists and rounds < 3:
+       negotiation
+       ↓
+       gtm_alignment again
+else:
+       final_decision
+```
+
+The maximum negotiation attempts are controlled by:
+
+```python
+MAX_NEGOTIATION_ROUNDS = 3
+```
+
+Negotiation does not change the GTM channel plan. It only adjusts KPI targets to realistic values.
+
+---
+
+## 11. Performance Feedback Loop
+
+After campaigns go live, the Metrics Agent can score live performance against planned targets.
+
+The `performance_feedback` node compares live results against targets:
+
+```text
+ROAS higher than target → positive score
+CPA lower than target → positive score
+CTR higher than target → positive score
+Conversion Rate higher than target → positive score
+```
+
+It classifies each channel as:
+
+| Status | Meaning |
+|---|---|
+| `winner` | Channel is beating targets |
+| `loser` | Channel is missing targets badly |
+| `learning` | Channel needs more data or is mixed |
+
+The feedback loop writes results back into memory, so future campaigns can learn from them.
+
+---
+
+## 12. LangGraph Nodes
+
+The Metrics Agent is built as a LangGraph subgraph.
+
+### Planning subgraph nodes
+
+```text
+START
+  ↓
+kpi_selector
+  ↓
+manual_target_setter
+  ↓
+historical_data_loader
+  ↓
+learning_target
+  ↓
+benchmark_checker
+  ↓
+channel_target
+  ↓
+gtm_alignment
+  ↓
+negotiation OR final_decision
+  ↓
+END
+```
+
+### Node responsibilities
+
+| Node | Responsibility |
+|---|---|
+| `kpi_selector` | Select primary and secondary KPIs based on objective |
+| `manual_target_setter` | Create initial targets from manual rules |
+| `historical_data_loader` | Fetch past campaign data from memory |
+| `learning_target` | Create learned global targets from history |
+| `benchmark_checker` | Load channel benchmark ranges |
+| `channel_target` | Create per-channel raw and final targets |
+| `gtm_alignment` | Detect target-level and strategy-level issues |
+| `negotiation` | Resolve target-level issues by accepting clamped targets |
+| `final_decision` | Set alignment status and feedback |
+
+---
+
+## 13. How to Run
+
+### Run deterministic Metrics Agent logic
+
+```bash
+python -m pytest test_flow.py -v
+```
+
+### Run full graph including LLM smoke test
+
+```bash
+RUN_LLM=1 python -m pytest test_flow.py -v
+```
+
+The LLM smoke test should only check loose invariants because GTM LLM output is non-deterministic.
+
+---
+
+## 14. Relationship with GTM Agent
+
+The GTM Agent creates the strategy pack and chooses channels with weights.
+
+The Metrics Agent consumes those channels and validates them against KPI logic.
+
+```text
+GTM Agent owns:
+- Product archetype
+- Positioning
+- Channel selection
+- Channel weights
+- Promo pricing
+
+Metrics Agent owns:
+- Primary KPI
+- Secondary KPIs
+- Channel targets
+- Benchmark checks
+- Historical learning
+- Alignment status
+- Feedback to GTM
+```
+
+The GTM Agent documentation states that the GTM Agent feeds into the Metrics Agent, Finance Agent, and Creative Agent. The Metrics Agent therefore depends on the GTM Agent's channel selection and strategy pack.
+
+---
+
+## 15. Current MVP vs Future Improvements
+
+### Current MVP
+
+```text
+- Static benchmark database
+- In-memory or injected memory store
+- Deterministic target setting
+- Internal target negotiation
+- Strategy feedback to GTM
+- Performance feedback scoring
+```
+
+### Future improvements
+
+```text
+- Replace in-memory store with PostgreSQL
+- Add richer channel-level historical data
+- Add confidence thresholds based on sample size
+- Add guardrails for maximum target movement per cycle
+- Add LangSmith tracing
+- Add dashboard visualization for graph state updates
+```
+
+---
+
+## 16. Important Notes
+
+- Benchmarks are not final targets; benchmarks are guardrails.
+- Manual targets are fallback defaults.
+- Historical data improves targets when available.
+- Raw targets are preserved so unrealistic assumptions can be detected.
+- Target-level issues are handled inside Metrics Agent.
+- Strategy-level issues are sent back to GTM Agent through parent graph feedback.
+- The performance feedback graph closes the learning loop by saving live results into memory.
