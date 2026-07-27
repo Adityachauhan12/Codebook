@@ -1,442 +1,384 @@
-# Metrics Agent Documentation
-
-> **This file is documentation, not a prompt.** Unlike `agents/gtm/skill.md`,
-> `agents/finance/skill.md` and `agents/creative/skill.md`, nothing loads this file into an
-> LLM — the Metrics Agent is fully deterministic and makes no model calls. It is named
-> `skill.md` only for symmetry with the other agent folders. Editing it changes no
-> behaviour; the logic lives in `agents/metrics/agent.py`. Consider renaming it to
-> `README.md` to stop it reading as a live prompt.
-
-## 1. Purpose
-
-The **Metrics Agent** is a LangGraph subgraph used in the Autonomous Marketing System to define campaign success metrics, set KPI targets, validate those targets against channel benchmarks, and align the output with the GTM Agent's recommended channel strategy.
+#!/usr/bin/env python3
+"""
+FastAPI server -- Autonomous Marketing System
+
+Endpoints:
+  GET  /health              Liveness check
+  POST /chat/message        Intake chat -- streams LLM questions, emits chat_ready with brief
+  POST /campaign/run        Run campaign pipeline -- streams SSE agent events
+  POST /campaign/refine     Amend brief and re-run campaign pipeline
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+# Quiet noisy libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from openai import AsyncAzureOpenAI
+from pydantic import BaseModel
+
+from graph.orchestrator import stream_campaign_events
+from core.memory import InMemoryStore
+import core.db as db
+import core.token_rotator as token_rotator
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.init_pool()
+    token_rotator.start()
+    yield
+    token_rotator.stop()
+    db.close_pool()
+
+
+app = FastAPI(title="Autonomous Marketing System API", version="1.0.0", lifespan=lifespan)
+
+_cors_env = os.getenv("CORS_ORIGINS", "")
+_cors_origins = (
+    [o.strip() for o in _cors_env.split(",") if o.strip()]
+    if _cors_env
+    else [
+        "http://localhost:3000", "http://localhost:5173", "http://localhost:5174",
+        "http://localhost:3001", "http://localhost:3002", "http://localhost:3003",
+        "http://localhost:3004",
+    ]
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+_memory = InMemoryStore()
+
+# In-memory chat history keyed by session_id. Replace with DB when ready.
+_sessions: dict[str, list[dict]] = {}
+
+
+INTAKE_SYSTEM_PROMPT = """\
+You are Aria, a friendly marketing planning assistant for IndiGo airlines.
+Your job is to gather campaign details from the user through natural conversation before generating a plan.
+
+REQUIRED fields (must collect all five before proceeding):
+1. product        -- what is being marketed (e.g. flights to Singapore, hotel getaway sale, IndiGo gift cards)
+2. offer          -- the specific promotion (e.g. "12% off base fare, promo code FLY12", "30% off hotel stays")
+3. objective      -- what success looks like (bookings, signups, awareness, revenue, sales)
+4. budget_inr     -- total campaign budget as a number in Indian Rupees
+5. creative_brief -- visual direction for the banner ads: what imagery to show, the mood, and any must-have or must-avoid elements (e.g. "show a family arriving at a beach house, not posing", "quiet and understated, close-up textures", "avoid stock-photo smiles")
+   When asking for this, ask about the FEELING and the SUBJECT, not the styling. Do not
+   suggest aircraft, runways, airports or terminals -- IndiGo banners sell the destination
+   and the ease of getting there, never the hardware, and the brand guardrails reject
+   aviation imagery. Do not ask about logos, fonts or exact colours either: those are
+   applied automatically downstream, so collecting them just creates conflicting
+   instructions.
+
+OPTIONAL fields (make sensible assumptions if not mentioned):
+- available_channels (Google Search, Meta, Email, YouTube, SMS, goindigo.in)
+- booking_window (how long the sale runs, e.g. "7-day sale window")
+- bluchip_eligible (whether to target BluChip loyalty members)
+
+RULES:
+- Acknowledge what the user has already shared and extract every detail from their first message
+- Ask exactly ONE focused question at a time, for the most important missing required field
+- Be warm, brief, and professional -- like a smart colleague, not a form
+- Do not list all questions at once
+- When you have all 5 required fields, write a 2--3 sentence confirmation in plain conversational prose -- no bullet points, no bold labels, no markdown. Weave together what the user told you and what you're assuming into a single natural paragraph, like you're confirming a plan with a colleague. For example: "Got it -- I'll build a bookings campaign for IndiGo flights to Singapore with a Rs8 lakh budget, running a 12% off fare promo across Google Search, Meta, and Email over a 7-day window. The banners will show families at the destination in a vibrant, aspirational style. Generating your plan now." Then on the very last line output:
+
+BRIEF_READY:{"grounded":{...},"assumed":{...}}
+
+"grounded" = only what the user explicitly told you (always include creative_brief here)
+"assumed"  = sensible defaults for an Indian airline for anything not mentioned
+
+Example assumed values: {"budget_inr":1500000,"objective":"bookings","existing_list":"BluChip base and opted-in email/SMS list exist","bluchip_eligible":true}
+Do NOT output BRIEF_READY until you truly have all 5 required fields confirmed by the user.\
+"""
+
+REFINE_SYSTEM_PROMPT = """\
+You are a JSON editor for a marketing campaign brief.
+The user wants to refine their existing campaign plan.
+Given the current brief and the user's request, return ONLY an updated JSON object with keys "grounded" and "assumed".
+Make minimal targeted changes -- only update what the user asked to change.
+Return valid JSON only, no markdown, no explanation.\
+"""
+
+
+def _llm() -> AsyncAzureOpenAI:
+    return AsyncAzureOpenAI(
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview"),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Request models
+# --------------------------------------------------------------------------- #
+class CampaignBrief(BaseModel):
+    grounded: dict
+    assumed: dict = {}
+
+
+class ChatMessageRequest(BaseModel):
+    session_id: str
+    message: str
+
+
+class RefineRequest(BaseModel):
+    session_id: str
+    message: str
+    current_brief: dict
+
+
+class CampaignSnapshotRequest(BaseModel):
+    campaign: dict
+
+
+# --------------------------------------------------------------------------- #
+# Endpoints
+# --------------------------------------------------------------------------- #
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.post("/chat/message")
+async def chat_message(req: ChatMessageRequest):
+    """
+    Intake chat endpoint. Streams the assistant reply word-by-word as SSE tokens.
+    When the LLM has collected all required fields it emits chat_ready with the
+    extracted brief so the frontend can immediately kick off /campaign/run.
+
+    SSE events:
+      {"event": "token",      "content": "..."}
+      {"event": "chat_done"}
+      {"event": "chat_ready", "brief": {"grounded": {...}, "assumed": {...}}}
+      {"event": "error",      "message": "..."}
+    """
+    if req.session_id not in _sessions:
+        _sessions[req.session_id] = []
+
+    history = _sessions[req.session_id]
+    history.append({"role": "user", "content": req.message})
+    messages = [{"role": "system", "content": INTAKE_SYSTEM_PROMPT}] + history
+
+    async def generate():
+        try:
+            client = _llm()
+            stream = await client.chat.completions.create(
+                model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1"),
+                messages=messages,
+                temperature=0.4,
+                max_completion_tokens=500,
+                stream=True,
+            )
+
+            collected = ""
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    collected += delta
+
+            # Strip BRIEF_READY marker from display text
+            brief = None
+            display_text = collected.strip()
+            marker_match = re.search(r'\nBRIEF_READY:(\{.+\})\s*$', collected, re.DOTALL)
+            if marker_match:
+                try:
+                    brief = json.loads(marker_match.group(1))
+                    display_text = collected[:marker_match.start()].strip()
+                except json.JSONDecodeError:
+                    pass
+
+            history.append({"role": "assistant", "content": display_text})
+
+            # Re-stream display text word-by-word for natural typing feel
+            words = display_text.split(' ')
+            for i, word in enumerate(words):
+                chunk_text = word if i == len(words) - 1 else word + ' '
+                yield f"data: {json.dumps({'event': 'token', 'content': chunk_text})}\n\n"
+                await asyncio.sleep(0.025)
+
+            if brief:
+                yield f"data: {json.dumps({'event': 'chat_ready', 'brief': brief})}\n\n"
+            else:
+                yield f"data: {json.dumps({'event': 'chat_done'})}\n\n"
+
+        except Exception as exc:
+            yield f"data: {json.dumps({'event': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+@app.post("/campaign/run")
+async def run_campaign(brief: CampaignBrief):
+    """
+    Run the full GTM -> Metrics -> Finance agent pipeline and stream SSE events.
+    """
+    brief_dict = {"grounded": brief.grounded, "assumed": brief.assumed}
+
+    def event_generator():
+        try:
+            for event in stream_campaign_events(brief_dict, memory=_memory):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'event': 'error', 'message': str(exc)})}\n\n"
+        finally:
+            yield f"data: {json.dumps({'event': 'stream_end'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+@app.post("/campaign/refine")
+async def refine_campaign(req: RefineRequest):
+    """
+    Merge user refinement feedback into the existing brief and re-run the pipeline.
+    Streams the same SSE events as /campaign/run.
+    """
+    client = _llm()
+    try:
+        resp = await client.chat.completions.create(
+            model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1"),
+            messages=[
+                {"role": "system", "content": REFINE_SYSTEM_PROMPT},
+                {"role": "user", "content": (
+                    f"Current brief:\n{json.dumps(req.current_brief, indent=2)}\n\n"
+                    f"User refinement request: {req.message}"
+                )},
+            ],
+            temperature=0.1,
+            max_completion_tokens=800,
+        )
+        raw = resp.choices[0].message.content or ""
+        json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+        updated_brief = json.loads(json_match.group()) if json_match else req.current_brief
+    except Exception:
+        updated_brief = req.current_brief
+
+    def event_generator():
+        try:
+            for event in stream_campaign_events(updated_brief, memory=_memory):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'event': 'error', 'message': str(exc)})}\n\n"
+        finally:
+            yield f"data: {json.dumps({'event': 'stream_end'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+logger = logging.getLogger(__name__)
+
+# --------------------------------------------------------------------------- #
+# Campaign history endpoints
+# --------------------------------------------------------------------------- #
+
+
+@app.get("/campaigns")
+async def list_campaigns():
+    try:
+        return db.list_campaign_snapshots()
+    except Exception as exc:
+        logger.error("[campaigns/list] %s", exc)
+        raise HTTPException(status_code=503, detail="Campaign database is unavailable") from exc
+
+
+@app.get("/campaigns/{campaign_id}")
+async def get_campaign(campaign_id: str):
+    try:
+        campaign = db.get_campaign_snapshot(campaign_id)
+    except Exception as exc:
+        logger.error("[campaigns/detail] campaign_id=%s %s", campaign_id, exc)
+        raise HTTPException(status_code=503, detail="Campaign database is unavailable") from exc
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
+@app.post("/campaigns/save")
+async def save_campaign(req: CampaignSnapshotRequest):
+    try:
+        return db.save_campaign_snapshot(req.campaign)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("[campaigns/save] %s", exc)
+        raise HTTPException(status_code=503, detail="Campaign could not be saved") from exc
+
+
+@app.delete("/campaigns/{campaign_id}")
+async def delete_campaign(campaign_id: str):
+    try:
+        deleted = db.delete_campaign_snapshot(campaign_id)
+    except Exception as exc:
+        logger.error("[campaigns/delete] campaign_id=%s %s", campaign_id, exc)
+        raise HTTPException(status_code=503, detail="Campaign database is unavailable") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Campaign not found or already deleted")
+    return {"deleted": True, "campaign_id": campaign_id}
+
+
+# -- Static files (production: frontend built into ./static) -------------------
+# Only mounted when the build output is present (i.e. inside Docker).
+# In local dev the Vite dev server runs separately on port 5173.
+if _STATIC_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        # Serve real files that exist (e.g. favicon, manifest); fall back to index.html
+        candidate = _STATIC_DIR / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_STATIC_DIR / "index.html")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="debug")
 
-The Metrics Agent operates after the GTM Agent has created a strategy plan. The GTM Agent selects channels and assigns weights, while the Metrics Agent decides what success means for those channels and whether the plan is realistic.
-
----
-
-## 2. Role in the Autonomous Marketing System
-
-The Metrics Agent is part of the strategy phase.
-
-```text
-Campaign Brief
-   ↓
-GTM Agent
-   ↓
-Channels + weights + positioning + pricing
-   ↓
-Metrics Agent
-   ↓
-Primary KPI + secondary KPIs + channel targets + alignment status
-```
 
-The Metrics Agent does **not** create ad copy, allocate budget, or publish campaigns. Its responsibility is KPI and target reasoning.
 
----
-
-## 3. Inputs
-
-The Metrics Agent expects campaign context from the shared campaign state.
-
-Typical inputs include:
-
-```python
-{
-    "product": "Flight Sale",
-    "objective": "bookings",
-    "total_budget": 100000,
-    "channels": [
-        {"name": "Google Search", "weight": 50, "priority": "high"},
-        {"name": "Meta", "weight": 25, "priority": "medium"},
-        {"name": "Email", "weight": 25, "priority": "medium"}
-    ],
-    "memory": InMemoryStore(),
-    "negotiation_round": 0,
-    "feedback": []
-}
-```
-
-### Key input fields
-
-| Field | Meaning |
-|---|---|
-| `product` | Campaign product, such as Flight Sale or Gift Card Sale |
-| `objective` | Campaign goal, such as bookings, revenue, sales, signups, leads, trials, awareness, or reach |
-| `total_budget` | Total available campaign budget |
-| `channels` | GTM-selected channels with weights and priority |
-| `memory` | Historical campaign memory store |
-| `negotiation_round` | Number of target negotiation attempts already completed |
-| `feedback` | Strategy-level feedback sent back to GTM when channel plan needs revision |
-
----
-
-## 4. Outputs
-
-The Metrics Agent writes KPI and alignment fields back into the shared campaign state.
-
-Main outputs:
-
-```python
-{
-    "primary_kpi": "ROAS",
-    "secondary_kpis": ["CPA", "CTR", "Conversion Rate"],
-    "manual_targets": {...},
-    "historical_performance": [...],
-    "learned_targets": {...},
-    "global_targets": {...},
-    "benchmark_data": {...},
-    "channel_targets": {...},
-    "metrics_issues": [...],
-    "alignment_status": "aligned",
-    "feedback": []
-}
-```
-
-### Final status values
-
-| Status | Meaning |
-|---|---|
-| `aligned` | Metrics targets and GTM strategy are compatible |
-| `warnings` | Strategy can proceed, but Metrics Agent found some concerns |
-| `halt` | Strategy has serious unresolved target issues |
-
----
-
-## 5. KPI Logic
-
-The Metrics Agent first maps the campaign objective to primary and secondary KPIs.
-
-### Objective-to-KPI examples
-
-| Objective | Primary KPI | Secondary KPIs |
-|---|---|---|
-| `bookings` | ROAS | CPA, CTR, Conversion Rate, Revenue, Conversions |
-| `revenue` | ROAS | CPA, CTR, Conversion Rate, Revenue |
-| `sales` | ROAS | CPA, CTR, Conversion Rate, Revenue |
-| `signups` | CPA | Conversions, CTR, CPC, Conversion Rate |
-| `leads` | CPA | Conversions, CTR, CPC, Conversion Rate |
-| `trials` | CPA | Trial Starts, CTR, CPC, Conversion Rate |
-| `awareness` | CPM | Impressions, Reach, CTR, Frequency |
-| `reach` | Reach | Impressions, CPM, Frequency, CTR |
-
-The objective-level KPI mapping is defined in `OBJECTIVE_KPI_CONFIG`.
-
----
-
-## 6. Benchmark Logic
-
-The Metrics Agent uses a static benchmark database as a cold-start prior.
-
-Benchmarks are stored per canonical channel name.
-
-Example:
-
-```python
-BENCHMARK_DB = {
-    "Google Search": {
-        "cpa_range": [250, 900],
-        "roas_range": [2.5, 6.0],
-        "ctr_range": [2.0, 7.0],
-        "conversion_rate_range": [1.5, 6.0],
-        "cpm_range": [80, 300]
-    }
-}
-```
-
-### Target vs benchmark
-
-| Concept | Meaning |
-|---|---|
-| Target | What the campaign wants to achieve |
-| Benchmark | What is considered realistic for the channel |
-
-Example:
-
-```text
-Target ROAS = 7.0
-Meta benchmark ROAS range = 2.0 to 5.0
-```
-
-The Metrics Agent should flag this as too aggressive.
-
----
-
-## 7. Historical Learning
-
-The Metrics Agent can use historical campaign memory.
-
-Historical data is loaded from:
-
-```python
-state["memory"].get_relevant_history(...)
-```
-
-The memory store may currently be an in-memory store, but later it can be replaced with PostgreSQL.
-
-Historical performance is used to improve targets.
-
-Example:
-
-```text
-Previous Email ROAS = 9.0
-Learned Email ROAS target = 9.0 × 1.10 = 9.9
-```
-
-The Metrics Agent marks targets as:
-
-| Confidence | Meaning |
-|---|---|
-| `prior` | Cold-start target based on benchmark/manual config |
-| `learned` | Target is based on historical campaign performance |
-
----
-
-## 8. Check-Before-Clamp Logic
-
-A key design point is **check-before-clamp**.
-
-The Metrics Agent stores both:
-
-```text
-raw target = target before benchmark correction
-final target = target after benchmark clamp
-```
-
-This matters because if the system only checks already-clamped values, unrealistic target issues may never be detected.
-
-Example:
-
-```text
-Raw Email ROAS target = 27.5
-Email benchmark max ROAS = 20.0
-Final Email ROAS target = 20.0
-```
-
-The raw value allows the GTM Alignment step to detect that the original target was too aggressive.
-
----
-
-## 9. GTM Alignment Logic
-
-The `gtm_alignment` node checks two categories of issues.
-
-### 9.1 Target-level issues
-
-Target-level issues are handled inside the Metrics Agent through negotiation.
-
-Examples:
-
-```text
-ROAS target too aggressive
-CPA target too aggressive
-CTR target too aggressive
-CPM target too aggressive
-Conversion Rate target too aggressive
-```
-
-These issues are resolved by accepting benchmark-clamped target values.
-
----
-
-### 9.2 Strategy-level issues
-
-Strategy-level issues are sent back to the parent campaign graph as feedback for the GTM Agent.
-
-Example:
-
-```text
-Email has strong benchmark potential but GTM assigned it low/medium weight.
-```
-
-The Metrics Agent may send feedback such as:
-
-```text
-Increase Email weight because Email has stronger expected ROAS than current priority suggests.
-```
-
-This enables the cross-agent loop:
-
-```text
-GTM Agent → Metrics Agent → Feedback → GTM Agent revision
-```
-
----
-
-## 10. Negotiation Loop
-
-The Metrics Agent has an internal negotiation loop for target-level issues.
-
-```text
-channel_target
-   ↓
-gtm_alignment
-   ↓
-if target issue exists and rounds < 3:
-       negotiation
-       ↓
-       gtm_alignment again
-else:
-       final_decision
-```
-
-The maximum negotiation attempts are controlled by:
-
-```python
-MAX_NEGOTIATION_ROUNDS = 3
-```
-
-Negotiation does not change the GTM channel plan. It only adjusts KPI targets to realistic values.
-
----
-
-## 11. Performance Feedback Loop
-
-After campaigns go live, the Metrics Agent can score live performance against planned targets.
-
-The `performance_feedback` node compares live results against targets:
-
-```text
-ROAS higher than target → positive score
-CPA lower than target → positive score
-CTR higher than target → positive score
-Conversion Rate higher than target → positive score
-```
-
-It classifies each channel as:
-
-| Status | Meaning |
-|---|---|
-| `winner` | Channel is beating targets |
-| `loser` | Channel is missing targets badly |
-| `learning` | Channel needs more data or is mixed |
-
-The feedback loop writes results back into memory, so future campaigns can learn from them.
-
----
-
-## 12. LangGraph Nodes
-
-The Metrics Agent is built as a LangGraph subgraph.
-
-### Planning subgraph nodes
-
-```text
-START
-  ↓
-kpi_selector
-  ↓
-manual_target_setter
-  ↓
-historical_data_loader
-  ↓
-learning_target
-  ↓
-benchmark_checker
-  ↓
-channel_target
-  ↓
-gtm_alignment
-  ↓
-negotiation OR final_decision
-  ↓
-END
-```
-
-### Node responsibilities
-
-| Node | Responsibility |
-|---|---|
-| `kpi_selector` | Select primary and secondary KPIs based on objective |
-| `manual_target_setter` | Create initial targets from manual rules |
-| `historical_data_loader` | Fetch past campaign data from memory |
-| `learning_target` | Create learned global targets from history |
-| `benchmark_checker` | Load channel benchmark ranges |
-| `channel_target` | Create per-channel raw and final targets |
-| `gtm_alignment` | Detect target-level and strategy-level issues |
-| `negotiation` | Resolve target-level issues by accepting clamped targets |
-| `final_decision` | Set alignment status and feedback |
-
----
-
-## 13. How to Run
-
-### Run deterministic Metrics Agent logic
-
-```bash
-python -m pytest test_flow.py -v
-```
-
-### Run full graph including LLM smoke test
-
-```bash
-RUN_LLM=1 python -m pytest test_flow.py -v
-```
-
-The LLM smoke test should only check loose invariants because GTM LLM output is non-deterministic.
-
----
-
-## 14. Relationship with GTM Agent
-
-The GTM Agent creates the strategy pack and chooses channels with weights.
-
-The Metrics Agent consumes those channels and validates them against KPI logic.
-
-```text
-GTM Agent owns:
-- Product archetype
-- Positioning
-- Channel selection
-- Channel weights
-- Promo pricing
-
-Metrics Agent owns:
-- Primary KPI
-- Secondary KPIs
-- Channel targets
-- Benchmark checks
-- Historical learning
-- Alignment status
-- Feedback to GTM
-```
-
-The GTM Agent documentation states that the GTM Agent feeds into the Metrics Agent, Finance Agent, and Creative Agent. The Metrics Agent therefore depends on the GTM Agent's channel selection and strategy pack.
-
----
-
-## 15. Current MVP vs Future Improvements
-
-### Current MVP
-
-```text
-- Static benchmark database
-- In-memory or injected memory store
-- Deterministic target setting
-- Internal target negotiation
-- Strategy feedback to GTM
-- Performance feedback scoring
-```
-
-### Future improvements
-
-```text
-- Replace in-memory store with PostgreSQL
-- Add richer channel-level historical data
-- Add confidence thresholds based on sample size
-- Add guardrails for maximum target movement per cycle
-- Add LangSmith tracing
-- Add dashboard visualization for graph state updates
-```
-
----
-
-## 16. Important Notes
-
-- Benchmarks are not final targets; benchmarks are guardrails.
-- Manual targets are fallback defaults.
-- Historical data improves targets when available.
-- Raw targets are preserved so unrealistic assumptions can be detected.
-- Target-level issues are handled inside Metrics Agent.
-- Strategy-level issues are sent back to GTM Agent through parent graph feedback.
-- The performance feedback graph closes the learning loop by saving live results into memory.
