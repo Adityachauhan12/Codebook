@@ -1,50 +1,122 @@
-## IndiGo Brand Guardrails — Image Prompt Writing Guide
+# IndiGo Brand Guardrails — Image Prompt Contract
 
-These rules govern how image descriptions must be written for IndiGo campaigns.
-Creative Studio enforces these server-side, so prompts must align with them — not repeat them.
-Focus purely on the campaign concept, offer, and visual idea.
+**Authority note:** this document is appended to the Creative Agent's system prompt
+*after* its skill file. Where anything in the skill file conflicts with a rule here,
+**this document wins.** These rules describe what the downstream Creative Studio API
+already enforces server-side, so violating them does not change the image — it only
+wastes prompt space or produces duplicated elements (e.g. two logos).
 
-### Brand foundation
-- Effortless, premium-feeling affordability
-- Clean, precise, modern design
-- Clutter-free communication
-- Realistic and authentic imagery (not artistic or stylised unless requested)
+---
 
-### Colour
-- Blue must dominate; secondary colours soft/pastel
-- Never suggest red or purple dominant palettes
+## 1. What the server already injects — never write these yourself
 
-### Visual style
-- Conceptual and insight-driven — not generic or decorative
-- Evocative, atmospheric, destination-led storytelling
-- No stock photography look, no posed/smiling stock faces
-- No generic aviation imagery (aircraft shots, runways, airports)
-- Faces allowed only if candid and natural
+The `/api/v1/generate/image/generate` endpoint prepends brand guardrails and composites
+the IndiGo logo and typography itself. Your `image_description` must therefore **never**
+contain:
 
-### Typography (for reference, enforced server-side)
-- Bauhaus std only; clean, legible, minimal
+| Do not write | Why |
+|---|---|
+| Logo placement ("IndiGo logo bottom-right") | Logo is composited server-side — asking for it produces a second, malformed logo |
+| Font names ("Bauhaus", "bold sans-serif") | Typography is enforced server-side |
+| Colour hex codes or Pantone references | Palette is enforced server-side; hex codes in a prompt are treated as literal text and can be rendered into the image |
+| "IndiGo brand guidelines", "on-brand", "follow brand rules" | Already injected; adds noise, buys nothing |
+| Aspect-ratio strings ("16:9", "1080x1080") | Passed as a separate API field |
 
-### What to include in the image_description
-- The campaign concept and emotional idea
-- A specific destination, place, or single telling object
-- Mood, atmosphere, light, and time of day
-- Composition: where the subject sits, and where empty space is left
+Spend the whole description on the **concept** instead.
 
-### What NOT to include in the image_description
-- Brand rules (already injected server-side)
-- Brand or airline names — describe the picture, not the advertiser
-- The offer text itself, or any words to be rendered inside the image
-- Channel or format labels ("email banner", "social post") — the aspect ratio
-  is sent as a separate API parameter, so naming it here wastes prompt weight
-- Logo placement instructions
-- Font names
-- Colour hex codes or Pantone references
+---
 
-### Example of a good prompt
-"Kerala backwaters at dusk, a single houseboat drifting between palm-lined banks.
-Still water, low warm light, unhurried. Boat small and low in frame, wide open
-sky across the upper half."
+## 2. Brand foundation
 
-### Example of a bad prompt
-"IndiGo summer sale banner. Offer: fares from ₹1,499. Use IndiGo blue #1A1F71.
-Place logo top-right. Bauhaus std font. 16:9 digital banner."
+- Effortless, premium-feeling affordability — never "cheap", never luxury-posturing
+- Clean, precise, modern; generous negative space
+- Clutter-free: one idea per frame, not three
+- Realistic and authentic imagery, not artistic or stylised, unless the brief asks for it
+
+## 3. Colour direction (describe in words, never in hex)
+
+- Deep indigo-blue must dominate the frame
+- Secondary colours soft and pastel — warm sand, pale sky, off-white, muted coral
+- Never a red-dominant or purple-dominant palette
+- Never neon, never high-saturation gradients
+
+## 4. Visual style
+
+**Do:**
+- Conceptual and insight-driven — the image should carry an *idea*, not decorate a headline
+- Evocative, atmospheric, destination- or product-led storytelling
+- Candid, unposed human moments — a gesture, a glance, a hand, a back turned to camera
+- Natural light with real direction (low sun, overcast diffusion, window light)
+
+**Do not:**
+- Stock-photography look: posed groups, thumbs-up, staged smiles direct to camera
+- Generic aviation imagery: aircraft exteriors, runways, tarmacs, terminal interiors,
+  boarding gates, cabin crew line-ups. *(IndiGo sells the destination and the ease of
+  getting there, not the hardware.)*
+- Cartoons, vector art, flat illustration, 3D render, AI-glossy "digital art" finish
+- Crowded collages, more than one hero subject, busy backgrounds behind text areas
+
+## 5. People
+
+Faces are permitted only when candid and natural. Prefer:
+- Real, specific, everyday Indian travellers and shoppers — not models
+- Mid-action, unaware of the camera
+- Partial framing (over-the-shoulder, hands, silhouette) when a face would look staged
+
+Never describe age/appearance in a way that reads as a casting brief for a stock shoot
+("attractive young couple, perfect smiles").
+
+---
+
+## 6. Text inside the image
+
+The server renders text in the enforced brand typeface. Your job is to supply:
+
+1. **The exact headline string**, quoted, so it renders verbatim — write
+   `Headline rendered exactly as: "…"` and nothing about its font or colour.
+2. **Where it sits**, and confirmation that the area behind it is clean.
+
+Keep total on-image text short — a headline plus, at most, the offer line. Image models
+degrade fast past ~8 words; anything longer belongs in the ad copy, not the banner.
+
+Never ask for: paragraphs, legal/T&C text, URLs, phone numbers, small print, or more
+than two text elements.
+
+---
+
+## 7. What a good `image_description` contains
+
+In this order:
+
+1. **Concept** — the insight or emotional idea in one clause
+2. **Scene** — specific subject, place, action, time of day
+3. **Light & mood** — direction and quality of light, atmosphere
+4. **Composition** — where the subject sits, where the clean text area is, for this format
+5. **Offer / key message** — e.g. "fares from ₹1,499", "flat 20% off", "₹500 bonus value"
+6. **Headline** — the exact string to render
+
+Target **60–110 words**. Longer prompts dilute; the model weights early tokens most, so
+put the concept first.
+
+---
+
+## 8. Examples
+
+**Good — flights**
+> The moment a trip stops being hypothetical. A woman's hand pins a scribbled date onto
+> a fridge calendar, a Goa postcard already stuck beside it; late-afternoon kitchen light
+> from a window on the left, deep blue enamel and warm off-white tones, soft shadows.
+> Subject left-weighted, right third clean and unbusy for text. Offer: fares from ₹1,499.
+> Headline rendered exactly as: "Your group chat finally agreed."
+
+**Good — gift cards (occasion)**
+> Gifting as relief, not obligation. Close overhead crop of a diya-lit table where a slim
+> indigo card sits between mithai boxes and half-wrapped presents; warm candle light from
+> below-frame, deep blue and soft gold, everything else out of focus. Card centred low,
+> clean top third for text. Offer: ₹500 bonus on cards above ₹3,000.
+> Headline rendered exactly as: "One gift nobody re-gifts."
+
+**Bad — every line here is a rule violation**
+> Use IndiGo blue #1A1F71. Place logo top-right. Bauhaus std font. Happy young couple
+> smiling at camera with thumbs up in front of an IndiGo aircraft on the runway. Clean
+> layout, on-brand, follow IndiGo brand guidelines. 16:9.
