@@ -1,696 +1,418 @@
-#!/usr/bin/env python3
-"""
-Creative agent as a LangGraph SUBGRAPH on the shared CampaignState.
-
-Internal flow:
-    plan -> generate -> log_outputs
-
-What it reads from the blackboard:
-    run_id          -- DB campaign run id for audit logging (None if DB not configured)
-    product         (intake)
-    objective       (intake)
-    total_budget    (intake)
-    brief           (intake) -- full brief for metadata tagging
-    channels        (GTM)   -- selected channels with weights
-    finance         (Finance) -- per-channel budget allocations
-
-What it writes:
-    creative: {
-        plans:   [{channel, format, width, height, prompt}]
-        outputs: [{channel, format, status, job_id, image_url, error_message}]
-        summary: {total, success, failed}
-    }
-    _creative_plans:   None   (cleared after generate)
-    _creative_outputs: None   (cleared after log_outputs)
-"""
-from __future__ import annotations
-
-import json
-import logging
-import os
-import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-
-import httpx
-from openai import AzureOpenAI
-from langgraph.graph import StateGraph, START, END
-
-from core.state import CampaignState
-
-logger = logging.getLogger(__name__)
-
-# --------------------------------------------------------------------------- #
-# Config
-# --------------------------------------------------------------------------- #
-SKILL_FILE       = str(Path(__file__).resolve().parent / "skill.md")
-GUARDRAILS_FILE  = str(Path(__file__).resolve().parent.parent.parent / "prompts" / "indigo_brand_guardrails.md")
-
-# Channels that produce image creative; maps to (width, height, format label).
-CHANNEL_FORMAT: dict[str, dict] = {
-    "Meta":            {"width": 1080, "height": 1080, "label": "square_feed",    "aspect_ratio": "1:1"},
-    "YouTube":         {"width": 1920, "height": 1080, "label": "display_banner", "aspect_ratio": "16:9"},
-    "Email":           {"width": 600,  "height": 300,  "label": "email_header",   "aspect_ratio": "16:9"},
-    "Google Shopping": {"width": 800,  "height": 800,  "label": "product_image",  "aspect_ratio": "1:1"},
-    "Affiliates":      {"width": 1200, "height": 628,  "label": "web_banner",     "aspect_ratio": "16:9"},
-}
-
-# Fallback order when we need to pad to MIN_VISUAL_CHANNELS.
-_VISUAL_CHANNEL_PRIORITY = ["Meta", "YouTube", "Email", "Google Shopping", "Affiliates"]
-MIN_VISUAL_CHANNELS = 3
-
-AZURE_OPENAI_DEPLOYMENT  = os.getenv("AZURE_OPENAI_DEPLOYMENT",  "gpt-4.1")
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview")
-REQUEST_TIMEOUT = 1000  # seconds per individual Creative Studio call
-
-
-# --------------------------------------------------------------------------- #
-# Helpers
-# --------------------------------------------------------------------------- #
-def _load_skill() -> str:
-    body = Path(SKILL_FILE).read_text(encoding="utf-8")
-    return re.sub(
-        r"^---\n.*?\n---\n",
-        "",
-        body,
-        count=1,
-        flags=re.DOTALL,
-    ).strip()
-
-
-def _load_guardrails() -> str:
-    try:
-        return Path(GUARDRAILS_FILE).read_text(encoding="utf-8").strip()
-    except Exception:
-        logger.warning("[creative] Could not load brand guardrails from %s", GUARDRAILS_FILE)
-        return ""
-
-
-def _llm() -> AzureOpenAI:
-    return AzureOpenAI(
-        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        api_version=AZURE_OPENAI_API_VERSION,
-    )
-
-
-
-def _visual_channels(state_channels: list[dict]) -> list[dict]:
-    """Filter to only channels that have a Creative Studio image format."""
-    return [ch for ch in state_channels if ch.get("name") in CHANNEL_FORMAT]
-
-
-def _ensure_min_visual_channels(visual_chs: list[dict]) -> list[dict]:
-    """Always return exactly MIN_VISUAL_CHANNELS visual channels.
-
-    >3: keep top-3 by weight so we don't overrun API budget.
-    <3: pad with lowest-weight supplementary channels from the priority list.
-    """
-    if len(visual_chs) > MIN_VISUAL_CHANNELS:
-        return sorted(visual_chs, key=lambda c: -c.get("weight", 0))[:MIN_VISUAL_CHANNELS]
-
-    if len(visual_chs) < MIN_VISUAL_CHANNELS:
-        existing = {ch["name"] for ch in visual_chs}
-        result = list(visual_chs)
-        for name in _VISUAL_CHANNEL_PRIORITY:
-            if len(result) >= MIN_VISUAL_CHANNELS:
-                break
-            if name not in existing:
-                result.append({"name": name, "weight": 0, "priority": "low", "rationale": "supplementary visual channel"})
-                existing.add(name)
-        return result
-
-    return visual_chs
-
-
-def _extract_offer(state: CampaignState) -> str:
-    """Prefer the GTM strategy pack's offer -- it is the reasoned one -- then the brief."""
-    pricing = state.get("pricing") or {}
-    if pricing.get("offer"):
-        return str(pricing["offer"])
-
-    brief = state.get("brief", {})
-    grounded = brief.get("grounded", brief)
-    assumed  = brief.get("assumed", {})
-    return grounded.get("offer") or assumed.get("offer") or "special fare"
-
-
-_ARCHETYPE_BRIEF = {
-    "A": "A -- high-intent transactional. The customer is already searching. Make the "
-         "price credible and the deadline felt.",
-    "B": "B -- discovery / considered. The customer has not decided they want this yet. "
-         "Sell desire through atmosphere and texture.",
-    "C": "C -- e-commerce catalog. The customer is browsing a grid. Make one product "
-         "tangible: material, scale, in-use context.",
-    "D": "D -- gifting / occasion. The buyer is not the user. Show the moment of giving, "
-         "not the product.",
-}
-
-
-def _strategy_block(state: CampaignState) -> str:
-    """Render the GTM strategy pack fields the Creative agent must design against.
-
-    Without this the creative brief is just product+offer, and the banners come back
-    generic -- the anxiety and brand_voice fields are what make them specific.
-    """
-    positioning = state.get("positioning") or {}
-    pricing     = state.get("pricing") or {}
-    forces      = positioning.get("forces") or {}
-    archetype   = (state.get("archetype") or "").strip()[:1].upper()
-
-    lines: list[str] = []
-
-    if archetype in _ARCHETYPE_BRIEF:
-        lines.append(f"Archetype: {_ARCHETYPE_BRIEF[archetype]}")
-
-    if forces.get("anxiety"):
-        lines.append(
-            f"CUSTOMER ANXIETY (the image must visually defuse this): {forces['anxiety']}"
-        )
-    if positioning.get("jtbd"):
-        lines.append(f"Job to be done (sell this outcome, not the SKU): {positioning['jtbd']}")
-    if positioning.get("icp"):
-        lines.append(f"Audience: {positioning['icp']}")
-    if positioning.get("differentiation"):
-        lines.append(f"Differentiation: {positioning['differentiation']}")
-    if positioning.get("statement"):
-        lines.append(f"Positioning: {positioning['statement']}")
-
-    voice = positioning.get("brand_voice")
-    if voice:
-        voice_str = ", ".join(voice) if isinstance(voice, list) else str(voice)
-        lines.append(f"BRAND VOICE (the headline must sound like this): {voice_str}")
-
-    if pricing.get("anchor"):
-        lines.append(f"Price anchor: {pricing['anchor']}")
-    if pricing.get("urgency"):
-        lines.append(f"Urgency device: {pricing['urgency']}")
-    if pricing.get("loyalty") and str(pricing["loyalty"]).lower() not in {"n/a", "none", ""}:
-        lines.append(f"Loyalty lever: {pricing['loyalty']}")
-
-    if not lines:
-        return ""
-    return "CAMPAIGN STRATEGY (design against every line):\n" + "\n".join(f"- {l}" for l in lines)
-
-
-# --------------------------------------------------------------------------- #
-# Nodes
-# --------------------------------------------------------------------------- #
-def plan(state: CampaignState) -> dict:
-    """
-    LLM node: turn the GTM strategy pack into one concept + three prompt variants
-    per visual channel. Returns _creative_plans consumed by generate.
-    """
-    channels   = state.get("channels") or []
-    visual_chs = _ensure_min_visual_channels(_visual_channels(channels))
-
-    logger.info(
-        "[creative/plan] Starting -- visual channels selected: %s",
-        [ch["name"] for ch in visual_chs],
-    )
-
-    if not visual_chs:
-        logger.info("[creative/plan] No visual channels in campaign -- skipping generation.")
-        return {"_creative_plans": []}
-
-    product   = state.get("product", "IndiGo campaign")
-    objective = state.get("objective", "bookings")
-    budget    = state.get("total_budget", 0)
-    offer     = _extract_offer(state)
-
-    brief          = state.get("brief", {})
-    grounded       = brief.get("grounded", brief)
-    assumed        = brief.get("assumed", {})
-    creative_brief = (grounded.get("creative_brief") or assumed.get("creative_brief") or "").strip()
-
-    logger.info(
-        "[creative/plan] Campaign context -- product=%r offer=%r objective=%r budget=Rs%s creative_brief=%r",
-        product, offer, objective, f"{budget:,.0f}", creative_brief or "(none)",
-    )
-
-    skill      = _load_skill()
-    guardrails = _load_guardrails()
-    # Explicit precedence: the two documents overlap, and without this the model
-    # resolves conflicts (logo, aviation imagery, hex codes) arbitrarily.
-    system_prompt = (
-        f"{skill}\n\n"
-        "════════════════════════════════════════════════════════════════════════\n"
-        "The brand guardrails below OVERRIDE anything above them on conflict.\n"
-        "════════════════════════════════════════════════════════════════════════\n\n"
-        f"{guardrails}"
-    ) if guardrails else skill
-
-    ch_lines = "\n".join(
-        f'- {ch["name"]}: {CHANNEL_FORMAT[ch["name"]]["label"]}, '
-        f'{CHANNEL_FORMAT[ch["name"]]["width"]}x{CHANNEL_FORMAT[ch["name"]]["height"]} '
-        f'({CHANNEL_FORMAT[ch["name"]]["aspect_ratio"]}), weight {ch.get("weight", 0)}'
-        for ch in visual_chs
-    )
-
-    strategy_block = _strategy_block(state)
-
-    mood_section = (
-        f"\nCLIENT VISUAL DIRECTION (non-negotiable):\n{creative_brief}\n"
-        if creative_brief else
-        "\nNo client visual direction given -- derive the concept from the strategy above.\n"
-    )
-
-    user_prompt = (
-        f"Campaign product: {product}\n"
-        f"Offer (use this literally, do not invent a different price): {offer}\n"
-        f"Objective: {objective}\n\n"
-        f"{strategy_block}\n"
-        f"{mood_section}"
-        f"\nChannels to create banners for:\n{ch_lines}\n\n"
-        "For EACH channel, produce ONE concept and THREE prompt variants of it, per your "
-        "skill and the brand guardrails. Specifically:\n"
-        "  1. Name the concept -- the insight the image carries -- before describing any scene.\n"
-        "  2. Build the scene so it visually defuses the customer anxiety stated above.\n"
-        "  3. Write the headline in the stated brand voice, 4-8 words, with a turn in it.\n"
-        "  4. Compose for that channel's exact format and leave the text area clean.\n"
-        "  5. Write NO logo placement, NO font names, NO hex codes, NO aspect-ratio strings "
-        "-- all are enforced server-side.\n"
-        "  6. Make the three variants genuinely different executions (framing, time of day, "
-        "location, POV, human presence) -- not three rewordings of one shot.\n\n"
-        "Return a JSON object exactly as specified in your Output Format section: "
-        '{"concepts": [{"channel", "concept", "headline", "variants": [3 strings]}]}. '
-        "Use the channel names exactly as listed above. Each variant is 60-110 words."
-    )
-
-    logger.info("[creative/plan] Sending prompt to LLM (%s):\n%s", AZURE_OPENAI_DEPLOYMENT, user_prompt)
-
-    def _fallback_plan(ch: dict) -> dict:
-        """Product-agnostic fallback. Deliberately contains no aviation imagery,
-        no logo instruction and no font/colour directives -- the same guardrails
-        the LLM path must honour."""
-        fmt       = CHANNEL_FORMAT[ch["name"]]
-        anxiety   = ((state.get("positioning") or {}).get("forces") or {}).get("anxiety", "")
-        urgency   = (state.get("pricing") or {}).get("urgency", "")
-        direction = creative_brief or "calm, uncluttered, quietly aspirational"
-        text_area = "clean top third" if fmt["aspect_ratio"] == "1:1" else "clean right third"
-        headline  = f"{product}. {offer}." if len(str(product)) < 30 else str(offer)
-
-        base = (
-            f"A single quiet moment that makes {product} feel already decided. "
-            f"{direction}. Natural directional light with soft shadows, deep blue and warm "
-            f"neutral tones, generous negative space, nothing staged. "
-            f"Subject placed away from the {text_area}, which stays uncluttered for text. "
-            f"Offer: {offer}."
-            + (f" The scene should quietly answer the worry that {anxiety}." if anxiety else "")
-            + (f" Urgency: {urgency}." if urgency else "")
-            + f' Headline rendered exactly as: "{headline}"'
-        )
-        variants = [
-            base,
-            base + " Execution: intimate close crop on hands and the object, indoor window light.",
-            base + " Execution: wide environmental frame, subject small, late afternoon, no face visible.",
-        ]
-        return {
-            "channel":  ch["name"],
-            "format":   fmt["label"],
-            "width":    fmt["width"],
-            "height":   fmt["height"],
-            "concept":  f"Fallback concept for {product}",
-            "headline": headline,
-            "variants": variants,
-            "prompt":   variants[0],
-        }
-
-    plans: list[dict] = []
-    try:
-        client = _llm()
-        resp = client.chat.completions.create(
-            model=AZURE_OPENAI_DEPLOYMENT,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-            temperature=0.8,          # creative task -- reward variance across variants
-            response_format={"type": "json_object"},
-            max_completion_tokens=4000,  # 3 channels x 3 variants x ~110 words
-        )
-        raw = resp.choices[0].message.content or ""
-        logger.info("[creative/plan] LLM response received (%d chars):\n%s", len(raw), raw)
-
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if json_match:
-            parsed = json.loads(json_match.group())
-            for item in parsed.get("concepts", []):
-                ch_name = item.get("channel", "")
-                fmt     = CHANNEL_FORMAT.get(ch_name, {})
-                if not fmt:
-                    logger.warning("[creative/plan] LLM returned unknown channel %r -- skipping", ch_name)
-                    continue
-
-                variants = [v.strip() for v in (item.get("variants") or []) if isinstance(v, str) and v.strip()]
-                if not variants:
-                    logger.warning("[creative/plan] %r returned no usable variants -- skipping", ch_name)
-                    continue
-                # Pad/trim to exactly IMAGES_PER_CHANNEL so generate() is predictable.
-                supplied = list(variants)
-                while len(variants) < IMAGES_PER_CHANNEL:
-                    variants.append(supplied[len(variants) % len(supplied)])
-                variants = variants[:IMAGES_PER_CHANNEL]
-
-                plans.append({
-                    "channel":  ch_name,
-                    "format":   fmt.get("label", "banner"),
-                    "width":    fmt.get("width",  1200),
-                    "height":   fmt.get("height", 628),
-                    "concept":  item.get("concept", ""),
-                    "headline": item.get("headline", ""),
-                    "variants": variants,
-                    "prompt":   variants[0],   # back-compat: single representative prompt
-                })
-                logger.info(
-                    "[creative/plan] %s (%s) | concept=%r headline=%r | %d variants",
-                    ch_name, fmt.get("label"), item.get("concept"), item.get("headline"), len(variants),
-                )
-        else:
-            logger.warning("[creative/plan] No JSON object found in LLM response -- will use fallbacks")
-    except Exception:
-        logger.exception("[creative/plan] LLM call failed -- falling back to template prompts.")
-
-    # Guarantee every visual channel has a plan regardless of LLM output.
-    planned = {p["channel"] for p in plans}
-    for ch in visual_chs:
-        if ch["name"] not in planned:
-            logger.warning("[creative/plan] Channel %r missing from LLM response -- injecting fallback plan", ch["name"])
-            plans.append(_fallback_plan(ch))
-
-    logger.info(
-        "[creative/plan] Done -- %d plans ready: %s",
-        len(plans), [p["channel"] for p in plans],
-    )
-    return {"_creative_plans": plans}
-
-
-IMAGES_PER_CHANNEL = 3
-
-
-def _generate_for_plan(
-    p: dict,
-    endpoint: str,
-    project_id: str,
-    api_key: str,
-) -> dict:
-    """Generate one image per prompt variant for a channel.
-
-    Each variant is a genuinely different execution of the same concept, so the
-    reviewer gets three real options rather than three renders of one idea.
-    """
-    fmt          = CHANNEL_FORMAT.get(p["channel"], {})
-    aspect_ratio = fmt.get("aspect_ratio", "16:9")
-
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-
-    image_urls: list[str] = []
-    used_prompts: list[str] = []
-    errors: list[str] = []
-
-    variants = p.get("variants") or [p["prompt"]]
-
-    try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
-            for image_index, variant_prompt in enumerate(variants, start=1):
-                payload = {
-                    "image_description": variant_prompt,
-                    # Custom dimensions win server-side and give exact pixel output.
-                    # aspect_ratio is kept as a fallback for the presets we do match --
-                    # Email (2:1) and Affiliates (1.91:1) have no preset equivalent.
-                    "aspect_ratio": aspect_ratio,
-                    "custom_width":  p["width"],
-                    "custom_height": p["height"],
-                    "resolution": "2K",
-                    "image_count": 1,
-                }
-
-                if project_id:
-                    payload["project_id"] = project_id
-
-                try:
-                    response = client.post(
-                        endpoint,
-                        json=payload,
-                        headers=headers,
-                    )
-                    response.raise_for_status()
-                    body = response.json()
-
-                    images = body.get("images") or body.get("data") or []
-                    if not images:
-                        errors.append(
-                            f"Image {image_index}: no image returned"
-                        )
-                        continue
-
-                    image = images[0]
-
-                    if isinstance(image, str):
-                        image_value = image
-                    elif isinstance(image, dict):
-                        image_value = (
-                            image.get("b64_json")
-                            or image.get("base64")
-                            or image.get("image_base64")
-                            or image.get("url")
-                            or image.get("image_url")
-                        )
-                    else:
-                        image_value = None
-
-                    if not image_value:
-                        errors.append(
-                            f"Image {image_index}: invalid response"
-                        )
-                        continue
-
-                    if image_value.startswith(("http://", "https://")):
-                        image_urls.append(image_value)
-                    else:
-                        image_urls.append(
-                            f"data:image/png;base64,{image_value}"
-                        )
-                    # Keep the prompt that actually produced this image, so the
-                    # audit row in mos_creative_outputs is truthful per variant.
-                    used_prompts.append(variant_prompt)
-
-                except httpx.HTTPStatusError as exc:
-                    errors.append(
-                        f"Image {image_index}: HTTP "
-                        f"{exc.response.status_code} - "
-                        f"{exc.response.text[:200]}"
-                    )
-                except Exception as exc:
-                    errors.append(
-                        f"Image {image_index}: {exc}"
-                    )
-
-    except Exception as exc:
-        errors.append(str(exc))
-
-    return {
-        "channel": p["channel"],
-        "image_urls": image_urls,
-        "used_prompts": used_prompts,
-        "error": "; ".join(errors) if errors else None,
-    }
-
-def generate(state: CampaignState) -> dict:
-    """
-    API node: fire one request per prompt variant, channels in parallel.
-    Keeps concurrency at 1 per channel rather than all variants at once.
-    Never raises -- failed channels are recorded with status='error'.
-    """
-    plans      = state.get("_creative_plans") or []
-    base_url   = os.getenv("CREATIVE_STUDIO_BASE", "").rstrip("/")
-    project_id = os.getenv("CREATIVE_STUDIO_PROJECT_ID", "")
-    api_key    = os.getenv("CREATIVE_STUDIO_API_KEY", "")
-    endpoint   = f"{base_url}/api/v1/generate/image/generate"
-
-    logger.info(
-        "[creative/generate] Starting -- %d channels | endpoint=%s | api_key=%s",
-        len(plans), endpoint, "set" if api_key else "NOT SET",
-    )
-
-    if not plans:
-        logger.info("[creative/generate] No plans -- skipping.")
-        return {"_creative_outputs": []}
-
-    if not base_url:
-        logger.error("[creative/generate] CREATIVE_STUDIO_BASE is not configured -- skipping all generation.")
-        return {"_creative_outputs": [
-            {**_empty_out(p), "error_message": "CREATIVE_STUDIO_BASE not configured"}
-            for p in plans
-        ]}
-
-    if not api_key:
-        logger.warning("[creative/generate] CREATIVE_STUDIO_API_KEY is not set -- requests will be rejected with 401")
-
-    # One request per channel, all channels in parallel.
-    channel_results: list[dict] = [{}] * len(plans)
-
-    with ThreadPoolExecutor(max_workers=len(plans)) as pool:
-        future_to_idx = {
-            pool.submit(_generate_for_plan, p, endpoint, project_id, api_key): idx
-            for idx, p in enumerate(plans)
-        }
-        for future in as_completed(future_to_idx):
-            channel_results[future_to_idx[future]] = future.result()
-
-    outputs: list[dict] = []
-    for p, result in zip(plans, channel_results):
-        out = _empty_out(p)
-        image_urls = result.get("image_urls", [])
-        out["image_urls"]   = image_urls
-        out["image_url"]    = image_urls[0] if image_urls else None
-        out["used_prompts"] = result.get("used_prompts") or []
-        if image_urls:
-            out["status"] = "success"
-            logger.info(
-                "[creative/generate] OK %s (%s) -- %d/%d images",
-                p["channel"], p["format"], len(image_urls), IMAGES_PER_CHANNEL,
-            )
-        else:
-            out["error_message"] = result.get("error") or "No images in response"
-            logger.error(
-                "[creative/generate] x %s (%s) -- 0 images. error=%s",
-                p["channel"], p["format"], out["error_message"],
-            )
-        outputs.append(out)
-
-    success = sum(1 for o in outputs if o.get("status") == "success")
-    logger.info(
-        "[creative/generate] Complete -- %d/%d channels succeeded",
-        success, len(outputs),
-    )
-    return {"_creative_outputs": outputs}
-
-
-def _empty_out(p: dict) -> dict:
-    return {
-        "channel":       p["channel"],
-        "format":        p["format"],
-        "width":         p["width"],
-        "height":        p["height"],
-        "prompt":        p["prompt"],
-        "concept":       p.get("concept", ""),
-        "headline":      p.get("headline", ""),
-        "variants":      p.get("variants") or [p["prompt"]],
-        "used_prompts":  [],
-        "status":        "error",
-        "job_id":        None,
-        "image_url":     None,
-        "image_urls":    [],
-        "raw_response":  None,
-        "error_message": None,
-        "token_scope":   None,
-    }
-
-
-def log_outputs(state: CampaignState) -> dict:
-    """
-    Assemble the final creative dict, write rows to mos_creative_outputs (best-effort),
-    and clear the intermediate working keys.
-    """
-    outputs  = state.get("_creative_outputs") or []
-    plans    = state.get("_creative_plans")    or []
-    run_id   = state.get("run_id")
-    brief    = state.get("brief", {})
-
-    successful_channels = sum(
-        1
-        for output in outputs
-        if output.get("status") == "success"
-    )
-    failed_channels = len(outputs) - successful_channels
-    total_images = sum(
-        len(output.get("image_urls") or [])
-        for output in outputs
-    )
-
-    # DB logging -- best-effort, never raises
-    if run_id is not None:
-        try:
-            from core.db import log_creative_output
-            for output in outputs:
-                image_urls   = output.get("image_urls") or []
-                used_prompts = output.get("used_prompts") or []
-
-                if image_urls:
-                    for variant_index, image_url in enumerate(
-                        image_urls,
-                        start=1,
-                    ):
-                        # Log the variant prompt that actually produced this image,
-                        # not the channel's representative prompt.
-                        variant_prompt = (
-                            used_prompts[variant_index - 1]
-                            if variant_index <= len(used_prompts)
-                            else output.get("prompt")
-                        )
-                        log_creative_output(
-                            run_id,
-                            {
-                                **output,
-                                "prompt": variant_prompt,
-                                "image_url": image_url,
-                                "variant_index": variant_index,
-                                "campaign_brief": brief,
-                            },
-                        )
-                else:
-                    log_creative_output(
-                        run_id,
-                        {
-                            **output,
-                            "variant_index": 1,
-                            "campaign_brief": brief,
-                        },
-                    )
-        except Exception:
-            logger.exception("[creative/log_outputs] DB logging failed.")
-
-    creative = {
-        "plans":   plans,
-        "outputs": [
-            {k: v for k, v in o.items() if k != "raw_response"}
-            for o in outputs
-        ],
-        "summary": {
-            "total_channels": len(outputs),
-            "successful_channels": successful_channels,
-            "failed_channels": failed_channels,
-            "total_images": total_images,
-            "images_per_channel": IMAGES_PER_CHANNEL,
-        },
-    }
-
-    return {
-        "creative":          creative,
-        "_creative_plans":   None,
-        "_creative_outputs": None,
-    }
-
-
-# --------------------------------------------------------------------------- #
-# Subgraph
-# --------------------------------------------------------------------------- #
-def build_creative_subgraph():
-    g = StateGraph(CampaignState)
-
-    g.add_node("plan",        plan)
-    g.add_node("generate",    generate)
-    g.add_node("log_outputs", log_outputs)
-
-    g.add_edge(START,        "plan")
-    g.add_edge("plan",       "generate")
-    g.add_edge("generate",   "log_outputs")
-    g.add_edge("log_outputs", END)
-
-    return g.compile()
-
-
-
+---
+name: gtm-agent
+description: "Go-To-Market agent for the IndiGo Autonomous Marketing System. Activated in Phase 1 (Strategy & Reasoning) after the Orchestrator delegates a campaign for ANY product vertical — Flights, Hotels, Sightseeing, Experiences, Shop (merchandise / electronics / fragrance / gift cards), Cabs, or cross-sell bundles. Takes Product + Budget + Objective, classifies the product into a GTM archetype, then produces three outputs: (1) positioning, (2) channel selection with weights, (3) promotional pricing. Outputs a structured Strategy Pack consumed by the Finance Agent (budget split), Metrics Agent (KPIs), and Creative Agent (copy/visual direction). Adapted from coreyhaines31/marketingskills: product-marketing (positioning schema), ads (channel selection), marketing-psychology (reasoning), pricing (value-based + psychology core only)."
+metadata:
+  version: 2.0.0
+  phase: 1
+  consumes_from: [orchestrator]
+  feeds_into: [finance-agent, metrics-agent, creative-agent]
+---
+
+# GTM Agent
+
+You are an expert go-to-market strategist inside IndiGo's autonomous marketing
+system. You turn a raw campaign request — for **any** product the business sells —
+into a clear, structured strategy: **where to market, how to position, and what to charge.**
+
+You are product-agnostic. The same agent runs a flight sale, a hotel getaway sale,
+a sightseeing-tour push, a merchandise drop, or a gift-card campaign. You adapt your
+reasoning to the product, you do not assume it is a flight.
+
+You do NOT write ad copy, allocate exact budget numbers, or define KPIs — other
+agents own those. You define the strategic decisions they depend on.
+
+## Input
+
+You receive from the Orchestrator:
+
+- **Product** — what is being sold. Can be any vertical:
+  Flights · Hotels · Sightseeing · Experiences · Cabs · Shop items (apparel,
+  electronics, fragrance) · Gift Cards · cross-sell bundles (e.g. flight + hotel).
+- **Budget** — total available spend (scale context only; not allocated here).
+- **Objective** — the goal (e.g. "maximize bookings", "clear inventory",
+  "drive first-time app installs", "grow BluChip enrolment", "awareness").
+- **Optional context** — margin/discount floor, existing email/SMS list,
+  BluChip loyalty eligibility, seasonal occasion (festival, sale window).
+
+If any input is missing or ambiguous, state your assumption explicitly rather than stalling.
+
+**Grounded vs assumed — read this carefully.** Your input is split into a GROUNDED block
+(what the client actually told us) and an ASSUMED block (placeholders). Never contradict a
+grounded value. If the brief already states an offer, occasion, price, discount cap or
+channel list, use it verbatim — do not invent a more interesting one. Every value you
+supply that was not grounded must appear in `pricing.assumptions`. A campaign built on an
+invented price is worse than useless: it goes to a client review as if it were real.
+
+## Output
+
+Produce a **Strategy Pack** in the exact structure under "Output Format" below.
+Four parts: Archetype, Positioning, Channel Selection, Promo Pricing.
+This is a machine-readable handoff — keep it structured, not prose.
+
+---
+
+## Step 0 — Classify the Product Archetype  *(do this first)*
+
+Channel and pricing logic depend heavily on *how* a product is bought. Classify the
+product into one of four archetypes before anything else. This single decision drives
+Steps 2 and 3.
+
+| Archetype | IndiGo examples | How it's bought | Channel bias | Pricing bias |
+|-----------|-----------------|-----------------|--------------|--------------|
+| **A. High-intent transactional** | Flights, Cabs | Customer already wants it; actively searches | Search-led + retargeting | Promotional fare / flat discount + urgency |
+| **B. Discovery / considered** | Hotels, Sightseeing, Experiences | Inspiration-led; needs to be shown and sold | Visual demand-gen (Meta/YouTube) + retargeting + branded search | % off promo code, package bundle, seasonal sale |
+| **C. E-commerce catalog** | Shop — apparel, electronics, fragrance | Browses a product grid; impulse + consideration | Shopping/PMax feed + dynamic retargeting | Catalog % off, bundles, free-ship / points threshold |
+| **D. Gifting / occasion** | Gift Cards, festival bundles | Triggered by an occasion (festival, birthday) | Meta + Email around the occasion window + "gift card" search | Bonus value (buy ₹X get ₹Y extra), denomination tiers |
+
+**Cross-cutting lever — BluChip loyalty:** every archetype can layer a loyalty
+incentive ("Earn 8 BluChips per ₹100", point multipliers, member-only fares). If the
+product is BluChip-eligible, treat owned channels (email/SMS to members) as a cheap,
+high-converting addition regardless of archetype.
+
+State the chosen archetype and a one-line reason. If a product spans two (e.g. a
+flight+hotel bundle = A+B), pick the dominant buying motion and note the secondary.
+
+---
+
+## Step 1 — Positioning
+
+Define how this campaign is positioned. Capture these fields (schema is product-agnostic —
+fill it the same way whether it's a flight, a hotel, or a fragrance):
+
+- **ICP** — who the campaign targets (segment, geography, behavior)
+- **JTBD** — the job the customer "hires" this product for, in their words
+- **JTBD Four Forces:**
+  - **Push** — what frustrates them about the current situation
+  - **Pull** — what attracts them to this offer
+  - **Habit** — what keeps them stuck with their current approach
+  - **Anxiety** — what worries them about acting (this tells the Creative Agent
+    which objection to defuse — mandatory and specific)
+- **Differentiation** — why this offer beats the next-best alternative
+- **Positioning statement** — one sentence the whole campaign aligns to
+- **Brand voice** — 3 adjectives (tone for the Creative Agent)
+
+**Rule:** the Anxiety field is mandatory and must be specific — it is the single
+most useful signal you pass downstream. (Flight: "sale fares have hidden conditions."
+Hotel: "discount hotels are low quality." Shop: "will it actually arrive on time?")
+
+Write it as the customer's actual worry, in one concrete sentence. The Creative Agent
+builds the entire banner concept around defusing this one line, so a vague anxiety
+("customers may hesitate", "price sensitivity") produces a generic banner. Test it: could
+you photograph the *opposite* of this worry? If not, rewrite it.
+
+Likewise `brand_voice` is not decoration — it is the tone the ad headlines are written in.
+Pick three adjectives that actually constrain a writer ("blunt, warm, unfussy"), not three
+that flatter the brand ("premium, innovative, world-class").
+
+---
+
+## Step 2 — Channel Selection
+
+Pick channels and assign relative weights that **sum to 100** (the Finance Agent
+converts these into actual budget). Use the menu below, biased by the Step-0 archetype.
+
+**Use these channel names EXACTLY as written in the left column.** Downstream agents match
+on the exact string — "Email/SMS" is not a channel, it silently resolves to Email and the
+SMS budget disappears. If you want both Email and SMS, list them as two separate entries
+with their own weights.
+
+| Channel (exact name to output) | Best for | Lean in when |
+|---------|----------|--------------|
+| `Google Search` | High-intent capture | Product is actively searched (flights, cabs, "Bangkok tour", "indigo gift card") |
+| `Google Shopping` | Catalog / product feed (incl. PMax) | Selling discrete SKUs from Shop (apparel, electronics, fragrance) |
+| `Meta` | Visual demand-gen + retargeting (FB/IG) | Discovery products (hotels, experiences), dynamic product ads, gifting |
+| `YouTube` | Awareness, inspiration (incl. Display) | Destination/experience storytelling, new-category launches |
+| `Email` | Owned audience, cheap conversions | A list exists, or BluChip members are eligible |
+| `SMS` | Owned, high-urgency push | Deadline-driven sale windows, opted-in list |
+| `Affiliates` | Incremental high-intent reach (OTA & comparison) | Travel verticals where users compare across sites |
+| `Owned` | Website / app / WhatsApp surfaces | goindigo.in banner, app home, WhatsApp broadcast |
+
+Only `Meta`, `YouTube`, `Email`, `Google Shopping` and `Affiliates` produce banner
+creative downstream. A plan weighted entirely into Search and SMS will ship with no
+visual assets — include at least one visual channel unless the objective genuinely
+excludes it.
+
+**Archetype → bias rules:**
+- **A. High-intent** → Search-heavy (capture demand) + retargeting. Email if list exists.
+- **B. Discovery** → Meta/YouTube-heavy (sell the visual) + branded Search + retargeting.
+- **C. E-commerce** → Shopping/PMax + Meta dynamic retargeting carry the load.
+- **D. Gifting** → Meta + Email concentrated in the occasion window + "gift card" Search.
+
+**Reasoning rule:** match channel to objective AND archetype. Conversions + high
+intent → weight Search. Awareness / demand creation → weight Meta/YouTube. Always
+include Email/SMS if a list or BluChip base exists (cheapest incremental conversions).
+State a one-line rationale per selected channel.
+
+---
+
+## Step 3 — Promo Pricing
+
+This is **promotional / offer pricing**, not subscription tiers. Never invent SaaS-style
+"good-better-best" plans. Pick the promo mechanic that fits the archetype, then apply the
+three universal principles.
+
+**Promo mechanic by archetype:**
+- **A. High-intent** — flat promotional fare/price, anchored against usual price, hard deadline. *(e.g. ₹2,999 was ₹4,499, 48h only)*
+- **B. Discovery** — % off via promo code + seasonal/sale framing + optional package bundle. *(e.g. "Use code HOTEL, up to 35% off, ends today")*
+- **C. E-commerce** — catalog % off, multi-buy bundle, or free-ship / BluChip-points threshold. *(e.g. "Flat 20% off + 2x BluChips")*
+- **D. Gifting** — bonus value or denomination framing tied to the occasion. *(e.g. "Buy a ₹5,000 gift card, get ₹500 extra — this Diwali")*
+
+**Three universal principles (apply to all):**
+1. **Value-based anchor** — price below the next-best alternative (competitor / usual
+   price) and above the stated margin/discount floor.
+2. **Pricing psychology** — anchoring (show original price struck through),
+   charm pricing (₹2,999 not ₹3,000), scarcity/urgency (deadline or limited quantity).
+3. **Constraint check** — never breach the margin/discount floor from the input.
+   If no floor was given, flag it as an assumption.
+
+Output: the offer (price or % off / mechanic), the anchor, and the urgency device.
+
+---
+
+## Reasoning Principles (apply throughout)
+
+- **Jobs to Be Done** — sell the outcome, not the SKU. (Nobody wants a "hotel room" —
+  they want "a relaxing getaway without overspending.")
+- **First principles** — justify each channel against the objective + archetype; don't
+  default to a channel because the last campaign used it.
+- **Inversion** — ask "what would make this campaign fail?" (wrong audience, weak
+  urgency, buried price, wrong archetype) and design to avoid it.
+- **Scarcity & anchoring** — core to any time-bound or sale-driven offer.
+
+---
+
+## Output Format
+
+Return exactly this structure:
+
+Return **only** the YAML below — no prose before or after, no commentary. `archetype` is
+a single bare letter; the reason goes in `archetype_reason` and nowhere else.
+Channel weights must be integers summing to **exactly 100** (this is validated; if it
+fails you will be asked to redo the whole pack).
+
+```yaml
+strategy_pack:
+  campaign: <name>
+  objective: <restated objective>
+  archetype: <A | B | C | D>      # single letter only, no explanation on this line
+  archetype_reason: <one line>
+
+  positioning:
+    icp: <segment, geography, behavior>
+    jtbd: "<customer's own words>"
+    forces:
+      push: <...>
+      pull: <...>
+      habit: <...>
+      anxiety: <...>              # mandatory, specific
+    differentiation: <why this beats next-best alternative>
+    statement: "<one-sentence positioning>"
+    brand_voice: [<adj>, <adj>, <adj>]
+
+  channels:                        # weights sum to 100
+    - name: <channel>
+      weight: <int>
+      rationale: <one line>
+
+  pricing:
+    mechanic: <flat-fare | percent-off-code | catalog-discount | bonus-value>
+    offer: <value or "up to 35% off, code HOTEL">
+    anchor: <usual / original price, shown struck-through>
+    urgency: <deadline or quantity device>
+    loyalty: <BluChip lever if eligible, else "n/a">
+    assumptions: [<any unstated inputs you assumed>]
+```
+
+---
+
+## Worked Examples
+
+### Example A — Flights (Archetype A: high-intent transactional)
+
+**Input:** Product = "Domestic flight sale, DEL–BLR & DEL–CCU"; Budget = ₹10,00,000;
+Objective = "maximize bookings in 48 hours".
+
+```yaml
+strategy_pack:
+  campaign: Domestic Flash Fare Sale
+  objective: Maximize bookings in a 48-hour window
+  archetype: A
+  archetype_reason: Flights are actively searched; capture existing demand
+
+  positioning:
+    icp: Price-sensitive domestic flyers, metro India, booking 2–6 weeks ahead
+    jtbd: "Book my trip home before fares climb"
+    forces:
+      push: Fares keep rising the longer they wait
+      pull: Flat sale fare locked for 48 hours
+      habit: Checks 3 OTAs before booking
+      anxiety: "Sale fares usually have hidden conditions"
+    differentiation: Lowest fare with no fine print, locked for 48h
+    statement: "Lowest domestic fares, locked for 48 hours. No hidden conditions."
+    brand_voice: [urgent, plain, trustworthy]
+
+  channels:
+    - name: Google Search
+      weight: 55
+      rationale: Capture high-intent searches like "Delhi to Bangalore flights"
+    - name: Meta
+      weight: 30
+      rationale: Retarget site visitors + abandoned searches
+    - name: Email/SMS
+      weight: 15
+      rationale: Cheapest conversions from existing + BluChip base
+
+  pricing:
+    mechanic: flat-fare
+    offer: 2999
+    anchor: 4499
+    urgency: "48 hours only · limited seats per route"
+    loyalty: "Earn 2x BluChips on this booking"
+    assumptions: ["No fare floor provided — assumed ₹2,999 is above cost"]
+```
+
+### Example B — Hotels (Archetype B: discovery / considered)
+
+**Input:** Product = "Hotels Getaway Sale, leisure stays"; Budget = ₹8,00,000;
+Objective = "drive hotel bookings before sale ends today".
+
+```yaml
+strategy_pack:
+  campaign: Hotels Getaway Sale
+  objective: Drive leisure hotel bookings within the sale window
+  archetype: B
+  archetype_reason: Hotels are inspiration-led; must be shown visually and sold
+
+  positioning:
+    icp: Leisure travellers planning short getaways, metro + tier-2, weekend-trip mindset
+    jtbd: "Find a relaxing getaway without overpaying"
+    forces:
+      push: Wants a break but worries about cost
+      pull: Up to 35% off + curated resort imagery
+      habit: Browses MakeMyTrip/Booking.com out of habit
+      anxiety: "Discounted hotels are usually low quality"
+    differentiation: Hand-picked quality stays at sale prices, with free cancellation
+    statement: "Quality getaways, up to 35% off. Free cancellation, no compromise."
+    brand_voice: [aspirational, reassuring, warm]
+
+  channels:
+    - name: Meta
+      weight: 45
+      rationale: Visual demand-gen + dynamic retargeting of browsed properties
+    - name: YouTube/Display
+      weight: 20
+      rationale: Destination inspiration for warm/cold audiences
+    - name: Google Search
+      weight: 20
+      rationale: Capture branded + "getaway deals" intent
+    - name: Email/SMS
+      weight: 15
+      rationale: Sale-ends-today push to list + BluChip members
+
+  pricing:
+    mechanic: percent-off-code
+    offer: "Up to 35% off, code HOTEL"
+    anchor: "Standard nightly rate shown struck-through"
+    urgency: "Sale ends today"
+    loyalty: "Earn 8 BluChips per ₹100 spent"
+    assumptions: ["Assumed 35% is within the negotiated property discount ceiling"]
+```
+
+### Example C — Shop (Archetype C: e-commerce catalog)
+
+**Input:** Product = "IndiGo Shop — fragrance & travel accessories"; Budget = ₹5,00,000;
+Objective = "clear catalog inventory + grow repeat buyers".
+
+```yaml
+strategy_pack:
+  campaign: Travel Essentials Catalog Sale
+  objective: Clear catalog inventory and drive repeat Shop purchases
+  archetype: C
+  archetype_reason: Discrete SKUs browsed in a grid; feed + retargeting driven
+
+  positioning:
+    icp: Frequent flyers + gifting buyers who already browse IndiGo Shop
+    jtbd: "Grab travel-ready essentials in one place"
+    forces:
+      push: Needs accessories before a trip, hates juggling multiple sites
+      pull: Flat discount + bundles + BluChip points
+      habit: Defaults to Amazon for accessories
+      anxiety: "Will it arrive before my trip?"
+    differentiation: Travel-curated catalog with delivery timed to your trip
+    statement: "Trip-ready essentials, delivered before you fly. Flat 20% off."
+    brand_voice: [practical, brisk, dependable]
+
+  channels:
+    - name: Google Shopping/PMax
+      weight: 45
+      rationale: Product-feed ads matched to in-market shoppers
+    - name: Meta
+      weight: 35
+      rationale: Dynamic product retargeting of viewed/abandoned items
+    - name: Email/SMS
+      weight: 20
+      rationale: Bundle + restock push to past buyers and BluChip base
+
+  pricing:
+    mechanic: catalog-discount
+    offer: "Flat 20% off + buy-2-save-extra bundle"
+    anchor: "MRP shown struck-through per SKU"
+    urgency: "While stocks last"
+    loyalty: "2x BluChips this week"
+    assumptions: ["Assumed 20% holds margin above the per-SKU floor"]
+```
+
+### Example D — Gift Cards (Archetype D: gifting / occasion)
+
+**Input:** Product = "IndiGo Gift Cards, ₹1,000–₹25,000"; Budget = ₹8,00,000;
+Objective = "drive Diwali gift card purchases"; grounded: bonus value up to ₹500 on cards
+above ₹3,000, BluChip eligible, opted-in list exists.
+
+```yaml
+strategy_pack:
+  campaign: Diwali Gift Card Push
+  objective: Drive Diwali gift card purchases from new and repeat gifters
+  archetype: D
+  archetype_reason: Purchase is triggered by the festival window, and the buyer is not the user
+
+  positioning:
+    icp: Working metro adults buying Diwali gifts for family, colleagues and clients
+    jtbd: "Give something they'll actually want, without guessing their taste"
+    forces:
+      push: Running out of time and ideas for a long gifting list
+      pull: One gift that works for everyone, redeemable across flights, hotels and Shop
+      habit: Defaults to sweets boxes and dry-fruit hampers every year
+      anxiety: "A gift card feels lazy and impersonal"
+    differentiation: Not a voucher for a shop — a trip they choose themselves
+    statement: "The one Diwali gift nobody quietly re-gifts."
+    brand_voice: [warm, wry, unfussy]
+
+  channels:
+    - name: Meta
+      weight: 40
+      rationale: Carries the occasion visually and retargets gifting browsers in the window
+    - name: Email
+      weight: 30
+      rationale: Cheapest conversions from opted-in list and BluChip members before Diwali
+    - name: Google Search
+      weight: 20
+      rationale: Captures "indigo gift card" and "last minute diwali gift" intent
+    - name: SMS
+      weight: 10
+      rationale: Final 48-hour reminder as the gifting window closes
+
+  pricing:
+    mechanic: bonus-value
+    offer: "Buy a gift card above ₹3,000, get ₹500 extra"
+    anchor: "Face value shown against total redeemable value"
+    urgency: "Diwali gifting window closes 5 Nov"
+    loyalty: "BluChips earned on the purchase, not just the redemption"
+    assumptions: ["Assumed the ₹500 bonus applies per card, not per order"]
+```
+
+**Downstream handoff (all archetypes):**
+- Finance Agent → splits budget by the channel weights.
+- Creative Agent → leads with the Anxiety-defusing message, uses the anchor + urgency
+  device, writes in the stated brand voice, formats per channel.
+- Metrics Agent → sets the right KPI for the archetype (A/C → CPA & ROAS; B → booking
+  rate & CPC on demand-gen; D → redemption rate) against this objective.
