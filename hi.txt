@@ -1,751 +1,179 @@
-#!/usr/bin/env python3
-"""
-Parent orchestrator graph: integrates the GTM and Metrics agents as SUBGRAPHS
-over one shared CampaignState blackboard, with a real cross-agent feedback loop.
+export type AgentName = 'orchestrator' | 'intake' | 'gtm' | 'metrics' | 'finance' | 'creative' | 'summary'
 
-Outer flow:
-    START -> intake -> gtm -> metrics -> route
-        route: "revise" -> revise -> gtm   (Metrics bounced strategy back to GTM)
-               "done"   -> END
+export type CreativeOutput = {
+  channel: string
+  format?: string
+  status: 'pending' | 'success' | 'error'
+  image_url?: string | null
+  image_urls?: string[]
+  /** Representative prompt for the channel (variant 1). */
+  prompt?: string | null
+  /** The prompt that actually produced each image, index-aligned with image_urls. */
+  used_prompts?: string[]
+  /** The creative idea behind the channel's images. */
+  concept?: string
+  /** Headline rendered into the images. */
+  headline?: string
+  error_message?: string | null
+  variant_index?: number
+}
+export type CreativeSummary = {
+  total_channels?: number
+  successful_channels?: number
+  failed_channels?: number
+  total_images?: number
+  images_per_channel?: number
 
-Two levels of loops:
-    * INNER  (inside each subgraph): the agent fixes ITSELF
-        - GTM:     strategize <-> validate
-        - Metrics: gtm_alignment <-> negotiation
-    * OUTER  (this graph): Metrics tells GTM to re-strategize when the channel
-        mix doesn't match the economics (bounded by MAX_REVISIONS).
+  // Backward compatibility for older campaigns
+  total?: number
+  success?: number
+  failed?: number
+}
 
-Future agents (Finance, Creative) drop in as new nodes after "metrics" with no
-rewrite -- they just read/write their own keys on the blackboard.
-"""
-from __future__ import annotations
-
-import argparse
-import json
-import logging
-import os
-import sys
-from pathlib import Path
-
-logger = logging.getLogger(__name__)
-
-from dotenv import load_dotenv
-load_dotenv()
-
-from langgraph.graph import StateGraph, START, END
-
-from core.state import CampaignState, objective_to_key
-from core.memory import InMemoryStore
-from agents.gtm.agent import build_gtm_subgraph, load_skill_prompt, SKILL_FILE
-from agents.metrics.agent import build_metrics_subgraph, build_performance_feedback_graph
-from agents.finance.agent import build_finance_subgraph
-from agents.creative.agent import build_creative_subgraph
-import core.db as db
-
-MAX_REVISIONS = 1
-
-
-# --------------------------------------------------------------------------- #
-# Parent nodes
-# --------------------------------------------------------------------------- #
-def make_intake(memory):
-    def intake(state: CampaignState) -> dict:
-        brief = state["brief"]
-        grounded = brief.get("grounded", brief)
-        assumed = brief.get("assumed", {})
-
-        obj_raw = grounded.get("objective") or assumed.get("objective") or ""
-        budget = (assumed.get("budget_inr") or grounded.get("budget_inr")
-                  or grounded.get("budget") or 0)
-        product = grounded.get("product") or "campaign"
-
-        logger.info(
-            "[orchestrator/intake] Campaign start -- product=%r objective=%r budget=Rs %s",
-            product, obj_raw, f"{float(budget):,.0f}",
-        )
-
-        return {
-            "objective_raw": obj_raw,
-            "objective": objective_to_key(obj_raw),
-            "total_budget": float(budget),
-            "product": product,
-            "system_prompt": load_skill_prompt(state.get("skill_path", SKILL_FILE)),
-            "memory": memory,
-            "gtm_attempts": 0,
-            "gtm_errors": [],
-            "negotiation_round": 0,
-            "revision_count": 0,
-            "feedback": [],
-        }
-    return intake
-
-
-def revise(state: CampaignState) -> dict:
-    """Cross-agent feedback node: bump the revision counter and reset GTM's
-    internal loop so it gets a fresh attempt budget."""
-    count = state.get("revision_count", 0) + 1
-    feedback = state.get("feedback", [])
-    logger.info(
-        "[orchestrator/revise] Revision #%d -- bouncing %d feedback item(s) back to GTM",
-        count, len(feedback),
-    )
-    for fb in feedback:
-        logger.info("[orchestrator/revise]   -> %s", fb)
-    return {
-        "revision_count": count,
-        "gtm_attempts": 0,
-        "gtm_errors": [],
-        "negotiation_round": 0,
+export type SSEEvent =
+  | { event: 'agent_start'; agent: AgentName | string }
+  | {
+      event: 'node_update'
+      agent: AgentName | string
+      node: string
+      step: number
+      summary: string
+      data: Record<string, unknown>
     }
+  | { event: 'agent_end'; agent: AgentName | string }
+  | { event: 'commentary_token'; agent: string; content: string }
+  | { event: 'commentary_done'; agent: string }
+  | { event: 'campaign_complete'; data: CampaignSummary }
+  | { event: 'error'; message: string }
+  | { event: 'stream_end' }
 
+export type ChatSSEEvent =
+  | { event: 'token'; content: string }
+  | { event: 'chat_done' }
+  | { event: 'chat_ready'; brief: Brief }
+  | { event: 'error'; message: string }
 
-def route_after_metrics(state: CampaignState) -> str:
-    feedback = state.get("feedback", [])
-    revision_count = state.get("revision_count", 0)
-    if feedback and revision_count < MAX_REVISIONS:
-        logger.info(
-            "[orchestrator/route_after_metrics] -> revise (feedback=%d, revision=%d/%d)",
-            len(feedback), revision_count, MAX_REVISIONS,
-        )
-        return "revise"
-    logger.info(
-        "[orchestrator/route_after_metrics] -> done (alignment_status=%s, revision=%d/%d)",
-        state.get("alignment_status"), revision_count, MAX_REVISIONS,
-    )
-    return "done"
-
-
-# --------------------------------------------------------------------------- #
-# Build
-# --------------------------------------------------------------------------- #
-def build_campaign_graph(memory, gtm_subgraph=None):
-    g = StateGraph(CampaignState)
-    g.add_node("intake", make_intake(memory))
-    g.add_node("gtm", gtm_subgraph or build_gtm_subgraph())
-    g.add_node("metrics", build_metrics_subgraph())
-    g.add_node("revise", revise)
-    g.add_node("finance", build_finance_subgraph())
-    g.add_node("creative", build_creative_subgraph())
-
-    g.add_edge(START, "intake")
-    g.add_edge("intake", "gtm")
-    g.add_edge("gtm", "metrics")
-    g.add_conditional_edges("metrics", route_after_metrics,
-                            {"revise": "revise", "done": "finance"})
-    g.add_edge("revise", "gtm")
-    g.add_edge("finance", "creative")
-    g.add_edge("creative", END)
-    return g.compile()
-
-
-def run(brief: dict, memory=None, skill_path: str = SKILL_FILE,
-        gtm_subgraph=None) -> CampaignState:
-    memory = memory or InMemoryStore()
-    app = build_campaign_graph(memory, gtm_subgraph=gtm_subgraph)
-    return app.invoke({"brief": brief, "skill_path": skill_path})
-
-
-def studio_graph():
-    """Factory for LangGraph Studio (`langgraph dev`). Referenced by langgraph.json."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
-    from seed_data import seeded_store
-    return build_campaign_graph(seeded_store())
-
-
-# --------------------------------------------------------------------------- #
-# Flow logging (via LangGraph streaming)
-# --------------------------------------------------------------------------- #
-def _trace_label(namespace: tuple, node: str) -> str:
-    if namespace:
-        parent = namespace[0].split(":")[0]
-        return f"{parent}/{node}"
-    return node
-
-
-def _trace_summary(node: str, d: dict) -> str:
-    """Human-readable one-liner per node, with real values injected."""
-    if not d:
-        return ""
-    if node == "intake":
-        budget = d.get("total_budget")
-        obj = d.get("objective", "")
-        budget_str = f"Rs {budget:,.0f}" if budget else "--"
-        return f"Brief received -- {obj} campaign, budget {budget_str}"
-    if node == "classify":
-        return f"Campaign type identified: Archetype {d.get('archetype', '')}"
-    if node == "strategize":
-        return "Building channel strategy and positioning"
-    if node == "validate" and d.get("finance"):
-        fin = d.get("finance") or {}
-        v = fin.get("validation") or {}
-        allocated = v.get("total_allocated") or 0
-        reserve = v.get("reserve") or 0
-        return f"Budget confirmed -- Rs {allocated:,.0f} deployed, Rs {reserve:,.0f} in reserve"
-    if node == "validate":
-        ok = d.get("gtm_valid")
-        errs = d.get("gtm_errors") or []
-        if ok:
-            return "Strategy structure validated"
-        return f"Strategy has {len(errs)} issue{'s' if len(errs) != 1 else ''}, refining"
-    if node == "parse":
-        chs = d.get("channels") or []
-        names = ", ".join(c["name"] for c in chs[:3])
-        extra = f" +{len(chs) - 3} more" if len(chs) > 3 else ""
-        return f"Channels confirmed: {names}{extra}"
-    if node == "kpi_selector":
-        return f"Primary KPI set to {d.get('primary_kpi', '')}"
-    if node == "manual_target_setter":
-        return "Industry benchmarks loaded as baseline targets"
-    if node == "historical_data_loader":
-        n = len(d.get("historical_performance") or [])
-        return f"Found {n} past campaigns to learn from" if n else "No campaign history yet -- using benchmarks"
-    if node == "learning_target":
-        learned = d.get("learned_targets") or {}
-        return "Learning from past performance" if learned else "Cold start -- relying on benchmarks"
-    if node == "benchmark_checker":
-        n = len(d.get("benchmark_data") or {})
-        return f"Benchmark data ready for {n} channel{'s' if n != 1 else ''}"
-    if node == "channel_target":
-        ct = d.get("channel_targets") or {}
-        learned = sum(1 for t in ct.values() if t.get("confidence") == "learned")
-        total = len(ct)
-        return f"Targets set for {total} channels -- {learned} from history, {total - learned} estimated"
-    if node == "gtm_alignment":
-        iss = d.get("metrics_issues") or []
-        n = len(iss)
-        return "Channel economics check passed" if n == 0 else f"Found {n} alignment issue{'s' if n != 1 else ''} to resolve"
-    if node == "negotiation":
-        return f"Negotiating targets, round {d.get('negotiation_round', 1)}"
-    if node == "final_decision":
-        status = d.get("alignment_status", "")
-        if status == "aligned":
-            return "Strategy and targets aligned"
-        return f"Proceeding -- {status}"
-    if node == "revise":
-        n = d.get("revision_count", 1)
-        return f"Refining strategy based on target feedback (pass {n})"
-    if node == "allocate":
-        allocs = d.get("_finance_allocs") or []
-        return f"Splitting budget across {len(allocs)} channel{'s' if len(allocs) != 1 else ''}"
-    if node == "reason":
-        allocs = d.get("_finance_allocs") or []
-        filled = sum(1 for a in allocs if a.get("reasoning"))
-        return f"Allocation rationale written for {filled}/{len(allocs)} channels"
-    if node == "plan":
-        plans = d.get("_creative_plans") or []
-        n = len(plans)
-        if n == 0:
-            return "No visual channels in this campaign -- skipping creative generation"
-        names = ", ".join({p["channel"] for p in plans})
-        return f"Creative briefs planned for {n} format{'s' if n != 1 else ''} across {names}"
-    if node == "generate":
-        outputs = d.get("_creative_outputs") or []
-        ok = sum(1 for o in outputs if o.get("status") == "success")
-        return f"{ok}/{len(outputs)} banner{'s' if len(outputs) != 1 else ''} generated successfully"
-    if node == "log_outputs":
-        creative = d.get("creative") or {}
-        summary = creative.get("summary") or {}
-        return (
-            f"Creative outputs logged -- "
-            f"{summary.get('total_images', 0)} images across "
-            f"{summary.get('successful_channels', 0)} successful channels, "
-            f"{summary.get('failed_channels', 0)} failed"
-        )
-    return ""
-
-
-def run_logged(brief: dict, memory=None, skill_path: str = SKILL_FILE,
-               gtm_subgraph=None, log=print) -> CampaignState:
-    """Run the full graph while logging every node as it fires."""
-    memory = memory or InMemoryStore()
-    app = build_campaign_graph(memory, gtm_subgraph=gtm_subgraph)
-    final: dict = {}
-    step = 0
-    for namespace, update in app.stream(
-        {"brief": brief, "skill_path": skill_path},
-        stream_mode="updates", subgraphs=True,
-    ):
-        for node, delta in update.items():
-            if not namespace and node in ("gtm", "metrics", "finance", "creative"):
-                if delta:
-                    final.update(delta)
-                continue
-            step += 1
-            log(f"  {step:>2}. {_trace_label(namespace, node):<26} {_trace_summary(node, delta)}")
-            if delta:
-                final.update(delta)
-    return final
-
-
-# --------------------------------------------------------------------------- #
-# Streaming events (SSE backbone)
-# --------------------------------------------------------------------------- #
-def _node_data(node: str, d: dict) -> dict:
-    """Extract only meaningful fields per node -- no raw YAML, no full state dumps."""
-    if not d:
-        return {}
-    if node == "intake":
-        return {"product": d.get("product"), "objective": d.get("objective"),
-                "total_budget": d.get("total_budget")}
-    if node == "classify":
-        return {"archetype": d.get("archetype"), "reason": d.get("archetype_reason")}
-    if node == "strategize":
-        return {"gtm_attempts": d.get("gtm_attempts")}
-    if node == "validate" and d.get("finance"):
-        fin = d.get("finance") or {}
-        return {
-            "validation": fin.get("validation", {}),
-            "channels": fin.get("channels", []),
-            "reserve_buffer": fin.get("reserve_buffer", {}),
+export type CampaignSummary = {
+  product?: string
+  objective?: string
+  total_budget?: number
+  archetype?: string
+  alignment_status?: string
+  revision_count?: number
+  primary_kpi?: string
+  channels?: Array<{ name?: string; weight?: number; priority?: string; [key: string]: unknown }>
+  channel_targets?: Record<string, {
+    target_roas?: number
+    target_cpa?: number
+    target_ctr?: number
+    target_vtr?: number
+    target_reach?: number
+    confidence?: string
+    [key: string]: unknown
+  }>
+  finance?: {
+    reserve_buffer?: number
+    channels?: Array<
+      | string
+      | {
+          channel?: string
+          name?: string
+          total_allocation?: number
+          daily_cap?: number
+          weekly_cap?: number
+          reasoning?: string
+          [key: string]: unknown
         }
-    if node == "validate":
-        return {"valid": d.get("gtm_valid"), "errors": d.get("gtm_errors", [])}
-    if node == "parse":
-        return {"channels": d.get("channels", [])}
-    if node == "kpi_selector":
-        return {"primary_kpi": d.get("primary_kpi"),
-                "secondary_kpis": d.get("secondary_kpis", [])}
-    if node == "manual_target_setter":
-        return {"manual_targets": d.get("manual_targets", {})}
-    if node == "historical_data_loader":
-        return {"matched_rows": len(d.get("historical_performance") or [])}
-    if node == "learning_target":
-        learned = d.get("learned_targets") or {}
-        return {"learned_targets": learned, "is_cold_start": not learned}
-    if node == "benchmark_checker":
-        return {"channels": list((d.get("benchmark_data") or {}).keys())}
-    if node == "channel_target":
-        ct = d.get("channel_targets") or {}
-        return {"channels": {
-            ch: {"confidence": t.get("confidence"),
-                 "target_roas": t.get("target_roas"),
-                 "target_cpa": t.get("target_cpa")}
-            for ch, t in ct.items()
-        }}
-    if node == "gtm_alignment":
-        issues = d.get("metrics_issues") or []
-        return {"strategy_issues": sum(1 for i in issues if i["level"] == "strategy"),
-                "target_issues":   sum(1 for i in issues if i["level"] == "target")}
-    if node == "negotiation":
-        return {"round": d.get("negotiation_round")}
-    if node == "final_decision":
-        return {"alignment_status": d.get("alignment_status"),
-                "feedback": d.get("feedback", [])}
-    if node == "revise":
-        return {"revision_count": d.get("revision_count")}
-    if node == "allocate":
-        return {"channels": [a["channel"] for a in (d.get("_finance_allocs") or [])]}
-    if node == "reason":
-        return {"reasoning": {a["channel"]: a.get("reasoning", "")
-                              for a in (d.get("_finance_allocs") or [])}}
-    if node == "plan":
-        plans = d.get("_creative_plans") or []
-        return {"channels": [p["channel"] for p in plans],
-                "formats":  [p["format"]  for p in plans]}
-    if node == "generate":
-        outputs = d.get("_creative_outputs") or []
-        return {
-            "outputs": [
-                {
-                    "channel": o.get("channel"),
-                    "format": o.get("format"),
-                    "status": o.get("status"),
-                    "image_url": o.get("image_url"),
-                    "image_urls": o.get("image_urls", []),
-                    "prompt": o.get("prompt"),
-                    # Per-image prompts, plus the concept/headline a reviewer judges on.
-                    "used_prompts": o.get("used_prompts", []),
-                    "concept": o.get("concept", ""),
-                    "headline": o.get("headline", ""),
-                    "error_message": o.get("error_message"),
-                }
-                for o in outputs
-            ]
-        }
-    if node == "log_outputs":
-        creative = d.get("creative") or {}
-        return {"summary": creative.get("summary"),
-                "outputs": creative.get("outputs", [])}
-    return {}
+    >
+    reallocation_rules?: string[]
+    validation?: { is_valid?: boolean; [key: string]: unknown } | null
+  } | null
+  creative?: {
+    summary?: CreativeSummary
+    outputs?: CreativeOutput[]
+  } | null
+}
 
+export type Brief = {
+  grounded: Record<string, unknown>
+  assumed: Record<string, unknown>
+}
 
-def _final_summary(final: dict) -> dict:
-    """Compact summary of the completed campaign for the campaign_complete event."""
-    ct       = final.get("channel_targets") or {}
-    fin      = final.get("finance") or {}
-    creative = final.get("creative") or {}
-    return {
-        "product":          final.get("product"),
-        "objective":        final.get("objective"),
-        "total_budget":     final.get("total_budget"),
-        "archetype":        final.get("archetype"),
-        "alignment_status": final.get("alignment_status"),
-        "revision_count":   final.get("revision_count"),
-        "primary_kpi":      final.get("primary_kpi"),
-        "channels":         final.get("channels", []),
-        "channel_targets":  {
-            ch: {"target_roas": t.get("target_roas"),
-                 "target_cpa":  t.get("target_cpa"),
-                 "confidence":  t.get("confidence")}
-            for ch, t in ct.items()
-        },
-        "finance": {
-            "reserve_buffer":     fin.get("reserve_buffer"),
-            "channels":           fin.get("channels", []),
-            "reallocation_rules": fin.get("reallocation_rules", []),
-            "validation":         fin.get("validation"),
-        } if fin else None,
-        "creative": {
-            "summary": creative.get("summary"),
-            "outputs": [
-                {
-                    "channel": o.get("channel"),
-                    "format": o.get("format"),
-                    "status": o.get("status"),
-                    "image_url": o.get("image_url"),
-                    "image_urls": o.get("image_urls", []),
-                    "prompt": o.get("prompt"),
-                    # Per-image prompts, plus the concept/headline a reviewer judges on.
-                    "used_prompts": o.get("used_prompts", []),
-                    "concept": o.get("concept", ""),
-                    "headline": o.get("headline", ""),
-                    "error_message": o.get("error_message"),
-                }
-                for o in (creative.get("outputs") or [])
-            ],
-        } if creative else None,
-    }
+export type ChatMessage = {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: string
+  label?: string
+  streaming?: boolean
+}
 
+export type AgentEvent = {
+  id: string
+  kind: 'start' | 'update' | 'end' | 'error' | 'complete'
+  agent?: string
+  node?: string
+  step?: number
+  summary?: string
+  data?: Record<string, unknown>
+  message?: string
+  timestamp: string
+}
 
-# --------------------------------------------------------------------------- #
-# Per-agent LLM commentary
-# --------------------------------------------------------------------------- #
-_COMMENTARY_SYSTEM = (
-    "You write short, clear campaign planning commentary for marketing stakeholders. "
-    "2-3 sentences maximum. No headers, no bullet points, no jargon. "
-    "Be specific -- use actual channel names, numbers, and product details from the context. "
-    "Sound like a smart colleague explaining a decision, not a bot."
-)
+export type PlanData = {
+  archetype?: string
+  archetype_reason?: string
+  primary_kpi?: string
+  channels?: Array<{ name: string; weight: number; priority: string }>
+  channel_targets?: Record<string, { target_roas?: number; target_cpa?: number; confidence?: string }>
+  finance?: {
+    channels: Array<{
+      channel: string
+      total_allocation: number
+      daily_cap: number
+      weekly_cap?: number
+      reasoning?: string
+    }>
+    reserve_buffer?: { amount: number; percent: number }
+    is_valid?: boolean
+  }
+  creative?: {
+    planning?: string[]
+    summary?: CreativeSummary
+    outputs?: CreativeOutput[]
+  }
+}
 
-_FINAL_SUMMARY_SYSTEM = (
-    "You write concise campaign plan summaries for marketing stakeholders. "
-    "4-5 sentences. Plain English, specific numbers and channel names. "
-    "Cover what we're doing, where the money goes, and what success looks like. "
-    "No bullet points, no headers."
-)
+export type ProcessingSnapshot = {
+  activeAgent: string | null
+  agentStatus: Record<string, 'idle' | 'running' | 'done' | 'error'>
+  events: AgentEvent[]
+  agentCommentary: Record<string, string>
+  finalSummary: CampaignSummary | null
+  planData: PlanData
+  error?: string | null
+}
 
+export type ChatPhase = 'intake' | 'running' | 'complete' | 'error'
 
-def _agent_commentary_prompt(agent: str, state: dict) -> str:
-    """Build a focused prompt for the per-agent LLM commentary."""
-    product = state.get("product", "this campaign")
-    objective = state.get("objective", "")
-    budget = state.get("total_budget", 0)
+export type ChatSession = {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  prompt: string
+  brief: Brief | null
+  messages: ChatMessage[]
+  status: 'draft' | 'running' | 'complete' | 'error'
+  summary?: CampaignSummary | null
+  processing?: ProcessingSnapshot | null
+}
 
-    _ARCHETYPE_LABELS = {
-        "A": "high-intent transactional (customers are actively searching and ready to buy)",
-        "B": "discovery-led (customers need to be inspired and convinced)",
-        "C": "e-commerce catalog (browse-and-impulse buying behaviour)",
-        "D": "gifting and occasion-driven (triggered by events or celebrations)",
-    }
-
-    if agent == "gtm":
-        channels = state.get("channels") or []
-        ch_summary = [(c["name"], c["weight"]) for c in channels]
-        archetype = state.get("archetype", "")
-        archetype_label = _ARCHETYPE_LABELS.get(archetype, archetype)
-        archetype_reason = state.get("archetype_reason", "")
-        return (
-            f"The strategy agent just finished planning a {product} campaign.\n"
-            f"Objective: {objective}, Budget: Rs {budget:,.0f}\n"
-            f"Campaign type: {archetype_label} -- {archetype_reason}\n"
-            f"Channels selected with weights: {ch_summary}\n\n"
-            "Write 2-3 sentences explaining the strategy in plain English for a marketing manager. "
-            "Do NOT mention archetype letters (A/B/C/D). Describe the buying behaviour and why this "
-            "channel mix makes sense for it. Use actual channel names and budget figures."
-        )
-
-    if agent == "metrics":
-        primary_kpi = state.get("primary_kpi", "")
-        ct = state.get("channel_targets") or {}
-        learned = [ch for ch, t in ct.items() if t.get("confidence") == "learned"]
-        estimated = [ch for ch, t in ct.items() if t.get("confidence") != "learned"]
-        targets_sample = {ch: {"roas": t.get("target_roas"), "cpa": t.get("target_cpa")}
-                          for ch, t in list(ct.items())[:3]}
-        return (
-            f"The performance targets agent just finished setting goals for {product}.\n"
-            f"Primary success metric: {primary_kpi}\n"
-            f"Channels with targets based on real past campaign data: {learned}\n"
-            f"Channels with targets based on industry estimates: {estimated}\n"
-            f"Sample targets: {targets_sample}\n\n"
-            "Write 2-3 sentences in plain English for a marketing manager. "
-            "Explain what we're optimising for, which channels have reliable targets vs estimates, "
-            "and what the key numbers mean in practical terms."
-        )
-
-    if agent == "finance":
-        fin = state.get("finance") or {}
-        fin_channels = fin.get("channels") or []
-        reserve = fin.get("reserve_buffer") or {}
-        validation = fin.get("validation") or {}
-        ch_allocs = [(c["channel"], c["total_allocation"], c["daily_cap"])
-                     for c in fin_channels[:4]]
-        return (
-            f"The Finance agent just finished allocating the budget for {product}.\n"
-            f"Total budget: Rs {budget:,.0f}\n"
-            f"Deployed: Rs {validation.get('total_allocated', 0):,.0f}, "
-            f"Reserve: Rs {reserve.get('amount', 0):,.0f} ({reserve.get('percent', 0)}%)\n"
-            f"Top channel allocations (channel, total, daily cap): {ch_allocs}\n\n"
-            "Write 2-3 sentences in plain English for a marketing manager. "
-            "Explain how the budget is split, which channels are getting the most spend and why, "
-            "and what the daily caps mean for campaign pacing."
-        )
-
-    if agent == "creative":
-        creative  = state.get("creative") or {}
-        outputs   = creative.get("outputs") or []
-        summary   = creative.get("summary") or {}
-        channels  = list({o["channel"] for o in outputs})
-        anxiety   = ((state.get("positioning") or {}).get("forces") or {}).get("anxiety", "")
-
-        # The concept and headline are what a marketer actually reviews -- counts alone
-        # tell them nothing about whether the work is any good.
-        concepts = [
-            f"{o['channel']}: \"{o.get('headline', '')}\" -- {o.get('concept', '')}"
-            for o in outputs
-            if o.get("status") == "success" and (o.get("headline") or o.get("concept"))
-        ]
-
-        return (
-            f"The Creative agent just finished generating banner assets for {product}.\n"
-            f"Channels covered: {channels}\n"
-            f"Creative concepts and headlines:\n" + ("\n".join(concepts) or "(none recorded)") + "\n"
-            f"Customer worry the visuals were built to defuse: {anxiety or '(not specified)'}\n"
-            f"Assets generated: {summary.get('total_images', 0)} images across "
-            f"{summary.get('successful_channels', 0)} successful channels, "
-            f"{summary.get('failed_channels', 0)} failed channels\n\n"
-            "Write 2-3 sentences in plain English for a marketing manager. "
-            "Lead with the creative idea and quote one headline, then say which channels "
-            "are ready. Mention failures only if there were any, and what that means."
-        )
-
-    return ""
-
-
-def _final_summary_prompt(state: dict) -> str:
-    channels = state.get("channels") or []
-    ct = state.get("channel_targets") or {}
-    fin = state.get("finance") or {}
-    validation = fin.get("validation") or {}
-    fin_channels = fin.get("channels") or []
-    reserve = fin.get("reserve_buffer") or {}
-
-    return (
-        f"Summarize this campaign plan in 4-5 plain-English sentences.\n\n"
-        f"Product: {state.get('product')}\n"
-        f"Objective: {state.get('objective')}\n"
-        f"Budget: Rs {state.get('total_budget', 0):,.0f}\n"
-        f"Archetype: {state.get('archetype')}\n"
-        f"Channels: {[c['name'] for c in channels]}\n"
-        f"Primary KPI: {state.get('primary_kpi')}\n"
-        f"Alignment: {state.get('alignment_status')}\n"
-        f"Deployed: Rs {validation.get('total_allocated', 0):,.0f}, "
-        f"Reserve: Rs {reserve.get('amount', 0):,.0f}\n"
-        f"Channel budgets: {[(c['channel'], c['total_allocation']) for c in fin_channels]}\n\n"
-        "Write a confident, specific summary covering what we're doing, "
-        "where the money goes, and what success looks like."
-    )
-
-
-def _yield_commentary(agent: str, state: dict):
-    """Stream per-agent LLM commentary tokens. Best-effort -- never raises."""
-    prompt = _agent_commentary_prompt(agent, state)
-    if not prompt:
-        return
-
-    from openai import AzureOpenAI
-    try:
-        client = AzureOpenAI(
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview"),
-        )
-        stream = client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1"),
-            messages=[
-                {"role": "system", "content": _COMMENTARY_SYSTEM},
-                {"role": "user",   "content": prompt},
-            ],
-            temperature=0.5,
-            max_completion_tokens=150,
-            stream=True,
-        )
-        for chunk in stream:
-            token = (chunk.choices[0].delta.content or "") if chunk.choices else ""
-            if token:
-                yield {"event": "commentary_token", "agent": agent, "content": token}
-        yield {"event": "commentary_done", "agent": agent}
-    except Exception as exc:
-        import logging
-        logging.exception(f"[commentary:{agent}] LLM call failed: {exc}")
-
-
-def _yield_final_commentary(state: dict):
-    """Stream the final campaign summary as commentary tokens."""
-    prompt = _final_summary_prompt(state)
-    from openai import AzureOpenAI
-    try:
-        client = AzureOpenAI(
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview"),
-        )
-        stream = client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1"),
-            messages=[
-                {"role": "system", "content": _FINAL_SUMMARY_SYSTEM},
-                {"role": "user",   "content": prompt},
-            ],
-            temperature=0.4,
-            max_completion_tokens=200,
-            stream=True,
-        )
-        for chunk in stream:
-            token = (chunk.choices[0].delta.content or "") if chunk.choices else ""
-            if token:
-                yield {"event": "commentary_token", "agent": "summary", "content": token}
-        yield {"event": "commentary_done", "agent": "summary"}
-    except Exception as exc:
-        import logging
-        logging.exception(f"[commentary:summary] LLM call failed: {exc}")
-
-
-def stream_campaign_events(brief: dict, memory=None, skill_path: str = SKILL_FILE):
-    """
-    Generator that yields structured dicts for every agent event in real time.
-    Backed by LangGraph's app.stream() -- each yield maps to one node completing.
-
-    Event shapes:
-        {"event": "agent_start",        "agent": "gtm"}
-        {"event": "node_update",        "agent": "gtm", "node": "classify",
-         "step": 2, "summary": "...",   "data": {...}}
-        {"event": "agent_end",          "agent": "gtm"}
-        {"event": "commentary_token",   "agent": "gtm", "content": "..."}
-        {"event": "commentary_done",    "agent": "gtm"}
-        {"event": "campaign_complete",  "data": {...}}
-        {"event": "error",              "message": "..."}
-    """
-    memory = memory or InMemoryStore()
-    app    = build_campaign_graph(memory)
-
-    # Create a campaign run row (best-effort -- no DB = no run_id)
-    run_id: int | None = None
-    try:
-        run_id = db.create_campaign_run(brief)
-    except Exception:
-        pass
-
-    logger.info("[orchestrator/stream] Starting campaign pipeline -- run_id=%s", run_id)
-
-    current_agent = None
-    step  = 0
-    final: dict = {}
-
-    try:
-        for namespace, update in app.stream(
-            {"brief": brief, "skill_path": skill_path, "run_id": run_id},
-            stream_mode="updates",
-            subgraphs=True,
-        ):
-            for node, delta in update.items():
-                # Skip top-level subgraph aggregate emissions.
-                if not namespace and node in ("gtm", "metrics", "finance", "creative"):
-                    if delta:
-                        final.update(delta)
-                    continue
-
-                agent = namespace[0].split(":")[0] if namespace else "orchestrator"
-
-                # Emit agent_start when we enter a new subgraph.
-                if agent != current_agent:
-                    if current_agent is not None:
-                        logger.info("[orchestrator/stream] <- Agent END: %s", current_agent)
-                        yield {"event": "agent_end", "agent": current_agent}
-                        yield from _yield_commentary(current_agent, final)
-                    logger.info("[orchestrator/stream] -> Agent START: %s", agent)
-                    yield {"event": "agent_start", "agent": agent}
-                    current_agent = agent
-
-                step += 1
-                summary = _trace_summary(node, delta)
-                logger.info("[orchestrator/stream]   step=%02d %-30s %s", step, f"{agent}/{node}", summary)
-                yield {
-                    "event":   "node_update",
-                    "agent":   agent,
-                    "node":    node,
-                    "step":    step,
-                    "summary": summary,
-                    "data":    _node_data(node, delta),
-                }
-
-                if delta:
-                    final.update(delta)
-
-        if current_agent:
-            logger.info("[orchestrator/stream] <- Agent END: %s", current_agent)
-            yield {"event": "agent_end", "agent": current_agent}
-            yield from _yield_commentary(current_agent, final)
-
-        # Final plan summary before campaign_complete
-        yield from _yield_final_commentary(final)
-
-        logger.info(
-            "[orchestrator/stream] Campaign complete in %d steps -- alignment=%s",
-            step, final.get("alignment_status"),
-        )
-        yield {"event": "campaign_complete", "data": _final_summary(final)}
-
-        try:
-            if run_id is not None:
-                db.update_campaign_run(run_id, "complete")
-        except Exception:
-            pass
-
-    except Exception as exc:
-        logger.exception("[orchestrator/stream] Pipeline error: %s", exc)
-        try:
-            if run_id is not None:
-                db.update_campaign_run(run_id, "error", str(exc))
-        except Exception:
-            pass
-        yield {"event": "error", "message": str(exc)}
-
-
-# --------------------------------------------------------------------------- #
-# CLI
-# --------------------------------------------------------------------------- #
-def _cli():
-    parser = argparse.ArgumentParser(description="Run a campaign through the full graph.")
-    parser.add_argument("brief_json", nargs="?", help="Path to brief JSON file")
-    args = parser.parse_args()
-
-    if args.brief_json:
-        with open(args.brief_json) as f:
-            brief = json.load(f)
-    else:
-        brief = {
-            "grounded": {"product": "IndiGo flights", "offer": "12% off, code FLY12"},
-            "assumed":  {"budget_inr": 1_500_000, "objective": "bookings"},
-        }
-
-    result = run_logged(brief)
-    print("\n=== FINAL STATE KEYS ===")
-    for k, v in result.items():
-        if k not in ("brief", "system_prompt", "memory"):
-            print(f"  {k}: {v!r}")
-
-
-if __name__ == "__main__":
-    _cli()
-
-
-
+export type CampaignRecord = {
+  id: string
+  chatId: string
+  prompt: string
+  createdAt: string
+  updatedAt: string
+  summary: CampaignSummary
+}
