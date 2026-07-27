@@ -1,179 +1,65 @@
-export type AgentName = 'orchestrator' | 'intake' | 'gtm' | 'metrics' | 'finance' | 'creative' | 'summary'
+import { useState } from 'react'
+import { ArrowRight } from 'lucide-react'
 
-export type CreativeOutput = {
-  channel: string
-  format?: string
-  status: 'pending' | 'success' | 'error'
-  image_url?: string | null
-  image_urls?: string[]
-  /** Representative prompt for the channel (variant 1). */
-  prompt?: string | null
-  /** The prompt that actually produced each image, index-aligned with image_urls. */
-  used_prompts?: string[]
-  /** The creative idea behind the channel's images. */
-  concept?: string
-  /** Headline rendered into the images. */
-  headline?: string
-  error_message?: string | null
-  variant_index?: number
-}
-export type CreativeSummary = {
-  total_channels?: number
-  successful_channels?: number
-  failed_channels?: number
-  total_images?: number
-  images_per_channel?: number
-
-  // Backward compatibility for older campaigns
-  total?: number
-  success?: number
-  failed?: number
+type Props = {
+  onSubmit: (value: string) => void
+  busy?: boolean
 }
 
-export type SSEEvent =
-  | { event: 'agent_start'; agent: AgentName | string }
-  | {
-      event: 'node_update'
-      agent: AgentName | string
-      node: string
-      step: number
-      summary: string
-      data: Record<string, unknown>
-    }
-  | { event: 'agent_end'; agent: AgentName | string }
-  | { event: 'commentary_token'; agent: string; content: string }
-  | { event: 'commentary_done'; agent: string }
-  | { event: 'campaign_complete'; data: CampaignSummary }
-  | { event: 'error'; message: string }
-  | { event: 'stream_end' }
+// Models all five fields the intake agent needs (product, offer, objective, budget,
+// visual direction) so the user's first message answers most of them up front instead
+// of being drawn out one question at a time. The visual direction deliberately shows
+// the brand constraint by example -- no airport or aircraft imagery.
+const EXAMPLE_BRIEF =
+  'Domestic flight sale for IndiGo, fares from ₹1,499, ₹8 lakh budget, ' +
+  'aiming to maximise bookings over a 48-hour window. ' +
+  'Visuals: the moment a trip stops being hypothetical — candid and uncluttered, no posed smiles.'
 
-export type ChatSSEEvent =
-  | { event: 'token'; content: string }
-  | { event: 'chat_done' }
-  | { event: 'chat_ready'; brief: Brief }
-  | { event: 'error'; message: string }
+export function CenteredComposer({ onSubmit, busy }: Props) {
+  const [value, setValue] = useState(EXAMPLE_BRIEF)
 
-export type CampaignSummary = {
-  product?: string
-  objective?: string
-  total_budget?: number
-  archetype?: string
-  alignment_status?: string
-  revision_count?: number
-  primary_kpi?: string
-  channels?: Array<{ name?: string; weight?: number; priority?: string; [key: string]: unknown }>
-  channel_targets?: Record<string, {
-    target_roas?: number
-    target_cpa?: number
-    target_ctr?: number
-    target_vtr?: number
-    target_reach?: number
-    confidence?: string
-    [key: string]: unknown
-  }>
-  finance?: {
-    reserve_buffer?: number
-    channels?: Array<
-      | string
-      | {
-          channel?: string
-          name?: string
-          total_allocation?: number
-          daily_cap?: number
-          weekly_cap?: number
-          reasoning?: string
-          [key: string]: unknown
-        }
-    >
-    reallocation_rules?: string[]
-    validation?: { is_valid?: boolean; [key: string]: unknown } | null
-  } | null
-  creative?: {
-    summary?: CreativeSummary
-    outputs?: CreativeOutput[]
-  } | null
-}
+  return (
+    <section className="hero-panel pt-4">
+      <div className="hero-panel__copy">
+        {/* <span className="eyebrow">Autonomous marketing platform</span> */}
+        <h1>Start with one prompt. The system turns it into an operating plan.</h1>
+        <p>
+          Enter a campaign brief and the platform will stream strategy, metrics, budget allocation,
+          and banner creative in real time.
+        </p>
+      </div>
 
-export type Brief = {
-  grounded: Record<string, unknown>
-  assumed: Record<string, unknown>
-}
-
-export type ChatMessage = {
-  id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  timestamp: string
-  label?: string
-  streaming?: boolean
-}
-
-export type AgentEvent = {
-  id: string
-  kind: 'start' | 'update' | 'end' | 'error' | 'complete'
-  agent?: string
-  node?: string
-  step?: number
-  summary?: string
-  data?: Record<string, unknown>
-  message?: string
-  timestamp: string
-}
-
-export type PlanData = {
-  archetype?: string
-  archetype_reason?: string
-  primary_kpi?: string
-  channels?: Array<{ name: string; weight: number; priority: string }>
-  channel_targets?: Record<string, { target_roas?: number; target_cpa?: number; confidence?: string }>
-  finance?: {
-    channels: Array<{
-      channel: string
-      total_allocation: number
-      daily_cap: number
-      weekly_cap?: number
-      reasoning?: string
-    }>
-    reserve_buffer?: { amount: number; percent: number }
-    is_valid?: boolean
-  }
-  creative?: {
-    planning?: string[]
-    summary?: CreativeSummary
-    outputs?: CreativeOutput[]
-  }
-}
-
-export type ProcessingSnapshot = {
-  activeAgent: string | null
-  agentStatus: Record<string, 'idle' | 'running' | 'done' | 'error'>
-  events: AgentEvent[]
-  agentCommentary: Record<string, string>
-  finalSummary: CampaignSummary | null
-  planData: PlanData
-  error?: string | null
-}
-
-export type ChatPhase = 'intake' | 'running' | 'complete' | 'error'
-
-export type ChatSession = {
-  id: string
-  title: string
-  createdAt: string
-  updatedAt: string
-  prompt: string
-  brief: Brief | null
-  messages: ChatMessage[]
-  status: 'draft' | 'running' | 'complete' | 'error'
-  summary?: CampaignSummary | null
-  processing?: ProcessingSnapshot | null
-}
-
-export type CampaignRecord = {
-  id: string
-  chatId: string
-  prompt: string
-  createdAt: string
-  updatedAt: string
-  summary: CampaignSummary
+      <form
+        className="composer composer--centered"
+        onSubmit={(event) => {
+          event.preventDefault()
+          onSubmit(value.trim())
+        }}
+      >
+        <textarea
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          rows={4}
+          placeholder="What are you selling, what's the offer, what does success look like, what's the budget, and how should the banners feel?"
+          onKeyDown={(event) => {
+            // Enter sends, Shift+Enter makes a new line.
+            // isComposing guards IME input, where Enter confirms a candidate
+            // and must not submit the message.
+            if (event.key !== 'Enter' || event.shiftKey) return
+            if (event.nativeEvent.isComposing) return
+            event.preventDefault()
+            if (busy || !value.trim()) return
+            event.currentTarget.form?.requestSubmit()
+          }}
+        />
+        <div className="composer__actions">
+          <span>Tip: include the product, the offer, your objective, the budget, and how the banners should feel.</span>
+          <button className="button button--primary" type="submit" disabled={busy || !value.trim()}>
+            <span>Start campaign</span>
+            <ArrowRight size={16} />
+          </button>
+        </div>
+      </form>
+    </section>
+  )
 }
