@@ -1,65 +1,98 @@
-import { useState } from 'react'
-import { ArrowRight } from 'lucide-react'
+import { SendHorizonal } from 'lucide-react'
+import { MessageBubble } from './MessageBubble'
+import { ProcessingPane } from './ProcessingPane'
+import type { ChatPhase, ChatSession, ProcessingSnapshot } from '../types'
 
 type Props = {
-  onSubmit: (value: string) => void
-  busy?: boolean
+  chat: ChatSession | null
+  processing: ProcessingSnapshot
+  phase: ChatPhase
+  onSend: (value: string) => void
+  initialPrompt?: string
 }
 
-// Models all five fields the intake agent needs (product, offer, objective, budget,
-// visual direction) so the user's first message answers most of them up front instead
-// of being drawn out one question at a time. The visual direction deliberately shows
-// the brand constraint by example -- no airport or aircraft imagery.
-const EXAMPLE_BRIEF =
-  'Domestic flight sale for IndiGo, fares from ₹1,499, ₹8 lakh budget, ' +
-  'aiming to maximise bookings over a 48-hour window. ' +
-  'Visuals: the moment a trip stops being hypothetical — candid and uncluttered, no posed smiles.'
+const composerPlaceholder: Record<ChatPhase, string> = {
+  intake:   'Answer the question or add more details...',
+  running:  'Generating your plan — please wait...',
+  complete: 'Ask to adjust budget, channels, or anything else...',
+  error:    'Something went wrong. Try again or start a new campaign.',
+}
 
-export function CenteredComposer({ onSubmit, busy }: Props) {
-  const [value, setValue] = useState(EXAMPLE_BRIEF)
+export function Workspace({ chat, processing, phase, onSend, initialPrompt }: Props) {
+  const messages = chat?.messages ?? []
+  const isRunning = phase === 'running'
 
   return (
-    <section className="hero-panel pt-4">
-      <div className="hero-panel__copy">
-        {/* <span className="eyebrow">Autonomous marketing platform</span> */}
-        <h1>Start with one prompt. The system turns it into an operating plan.</h1>
-        <p>
-          Enter a campaign brief and the platform will stream strategy, metrics, budget allocation,
-          and banner creative in real time.
-        </p>
-      </div>
-
-      <form
-        className="composer composer--centered"
-        onSubmit={(event) => {
-          event.preventDefault()
-          onSubmit(value.trim())
-        }}
-      >
-        <textarea
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-          rows={4}
-          placeholder="What are you selling, what's the offer, what does success look like, what's the budget, and how should the banners feel?"
-          onKeyDown={(event) => {
-            // Enter sends, Shift+Enter makes a new line.
-            // isComposing guards IME input, where Enter confirms a candidate
-            // and must not submit the message.
-            if (event.key !== 'Enter' || event.shiftKey) return
-            if (event.nativeEvent.isComposing) return
-            event.preventDefault()
-            if (busy || !value.trim()) return
-            event.currentTarget.form?.requestSubmit()
-          }}
-        />
-        <div className="composer__actions">
-          <span>Tip: include the product, the offer, your objective, the budget, and how the banners should feel.</span>
-          <button className="button button--primary" type="submit" disabled={busy || !value.trim()}>
-            <span>Start campaign</span>
-            <ArrowRight size={16} />
-          </button>
+    <div className="workspace-grid">
+      <section className="panel panel--chat">
+        <div className="panel__header">
+          <div>
+            <span className="eyebrow">Conversation</span>
+            <h2>{chat?.title ?? 'New campaign'}</h2>
+          </div>
+          <div className="status-pill">
+            <span>{phase}</span>
+          </div>
         </div>
-      </form>
-    </section>
+
+        <div className="chat-stream">
+          {initialPrompt && messages.length === 0 && (
+            <article className="message message--user">
+              <div className="message__meta">
+                <strong>User</strong>
+              </div>
+              <p>{initialPrompt}</p>
+            </article>
+          )}
+          {messages.length === 0 ? (
+            <div className="empty-state">
+              <p>Send a prompt to begin the campaign.</p>
+            </div>
+          ) : (
+            messages.map((message) => <MessageBubble key={message.id} message={message} />)
+          )}
+        </div>
+
+        <form
+          className="composer composer--bottom"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (isRunning) return
+            const formData = new FormData(event.currentTarget)
+            const value = String(formData.get('followup') ?? '').trim()
+            if (!value) return
+            onSend(value)
+            event.currentTarget.reset()
+          }}
+        >
+          <textarea
+            name="followup"
+            rows={2}
+            placeholder={composerPlaceholder[phase]}
+            disabled={isRunning}
+            onKeyDown={(event) => {
+              // Enter sends, Shift+Enter makes a new line.
+              // isComposing guards IME input, where Enter confirms a candidate
+              // and must not submit the message.
+              if (event.key !== 'Enter' || event.shiftKey) return
+              if (event.nativeEvent.isComposing) return
+              event.preventDefault()
+              if (isRunning) return
+              event.currentTarget.form?.requestSubmit()
+            }}
+          />
+          <button
+            className="button button--primary"
+            type="submit"
+            disabled={isRunning}
+          >
+            <SendHorizonal size={16} />
+            <span>Send</span>
+          </button>
+        </form>
+      </section>
+
+      <ProcessingPane processing={processing} />
+    </div>
   )
 }
