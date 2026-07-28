@@ -1,0 +1,182 @@
+export type AgentName = 'orchestrator' | 'intake' | 'gtm' | 'metrics' | 'finance' | 'creative' | 'summary'
+
+export type CreativeOutput = {
+  channel: string
+  format?: string
+  status: 'pending' | 'success' | 'error'
+  image_url?: string | null
+  image_urls?: string[]
+  /** Representative prompt for the channel (variant 1). */
+  prompt?: string | null
+  /** The prompt that actually produced each image, index-aligned with image_urls. */
+  used_prompts?: string[]
+  /** The creative idea behind the channel's images. */
+  concept?: string
+  /** Headline rendered into the images. */
+  headline?: string
+  /** Offer line rendered into the images, alongside the headline. */
+  offer_line?: string
+  error_message?: string | null
+  variant_index?: number
+}
+export type CreativeSummary = {
+  total_channels?: number
+  successful_channels?: number
+  failed_channels?: number
+  total_images?: number
+  images_per_channel?: number
+
+  // Backward compatibility for older campaigns
+  total?: number
+  success?: number
+  failed?: number
+}
+
+export type SSEEvent =
+  | { event: 'agent_start'; agent: AgentName | string }
+  | {
+      event: 'node_update'
+      agent: AgentName | string
+      node: string
+      step: number
+      summary: string
+      data: Record<string, unknown>
+    }
+  | { event: 'agent_end'; agent: AgentName | string }
+  | { event: 'commentary_token'; agent: string; content: string }
+  | { event: 'commentary_done'; agent: string }
+  | { event: 'campaign_complete'; data: CampaignSummary }
+  | { event: 'error'; message: string }
+  | { event: 'stream_end' }
+
+export type ChatSSEEvent =
+  | { event: 'token'; content: string }
+  | { event: 'chat_done' }
+  | { event: 'chat_ready'; brief: Brief }
+  | { event: 'error'; message: string }
+
+export type CampaignSummary = {
+  product?: string
+  objective?: string
+  total_budget?: number
+  archetype?: string
+  alignment_status?: string
+  revision_count?: number
+  primary_kpi?: string
+  channels?: Array<{ name?: string; weight?: number; priority?: string; [key: string]: unknown }>
+  channel_targets?: Record<string, {
+    target_roas?: number
+    target_cpa?: number
+    target_ctr?: number
+    target_vtr?: number
+    target_reach?: number
+    confidence?: string
+    [key: string]: unknown
+  }>
+  finance?: {
+    reserve_buffer?: number
+    channels?: Array<
+      | string
+      | {
+          channel?: string
+          name?: string
+          total_allocation?: number
+          daily_cap?: number
+          weekly_cap?: number
+          reasoning?: string
+          [key: string]: unknown
+        }
+    >
+    reallocation_rules?: string[]
+    validation?: { is_valid?: boolean; [key: string]: unknown } | null
+  } | null
+  creative?: {
+    summary?: CreativeSummary
+    outputs?: CreativeOutput[]
+  } | null
+}
+
+export type Brief = {
+  grounded: Record<string, unknown>
+  assumed: Record<string, unknown>
+}
+
+export type ChatMessage = {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: string
+  label?: string
+  streaming?: boolean
+}
+
+export type AgentEvent = {
+  id: string
+  kind: 'start' | 'update' | 'end' | 'error' | 'complete'
+  agent?: string
+  node?: string
+  step?: number
+  summary?: string
+  data?: Record<string, unknown>
+  message?: string
+  timestamp: string
+}
+
+export type PlanData = {
+  archetype?: string
+  archetype_reason?: string
+  primary_kpi?: string
+  channels?: Array<{ name: string; weight: number; priority: string }>
+  channel_targets?: Record<string, { target_roas?: number; target_cpa?: number; confidence?: string }>
+  finance?: {
+    channels: Array<{
+      channel: string
+      total_allocation: number
+      daily_cap: number
+      weekly_cap?: number
+      reasoning?: string
+    }>
+    reserve_buffer?: { amount: number; percent: number }
+    is_valid?: boolean
+  }
+  creative?: {
+    planning?: string[]
+    summary?: CreativeSummary
+    outputs?: CreativeOutput[]
+  }
+}
+
+export type ProcessingSnapshot = {
+  activeAgent: string | null
+  agentStatus: Record<string, 'idle' | 'running' | 'done' | 'error'>
+  events: AgentEvent[]
+  agentCommentary: Record<string, string>
+  finalSummary: CampaignSummary | null
+  planData: PlanData
+  error?: string | null
+}
+
+export type ChatPhase = 'intake' | 'running' | 'complete' | 'error'
+
+export type ChatSession = {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  prompt: string
+  brief: Brief | null
+  messages: ChatMessage[]
+  status: 'draft' | 'running' | 'complete' | 'error'
+  summary?: CampaignSummary | null
+  processing?: ProcessingSnapshot | null
+}
+
+export type CampaignRecord = {
+  id: string
+  /** Present on locally-created records. Server records have no chat association. */
+  chatId?: string
+  prompt: string
+  createdAt: string
+  updatedAt: string
+  summary: CampaignSummary
+}

@@ -1,0 +1,352 @@
+import type { CampaignRecord, CampaignSummary, ChatSession, CreativeOutput, PlanData, ProcessingSnapshot } from '../types'
+import { createIndexedImageRef, isIndexedImageRef, persistImageForRef } from './indexedStorage'
+import { saveCampaign } from './api'
+
+const CHAT_KEY = 'markos.chat.sessions'
+const CAMPAIGN_KEY = 'markos.campaign.records'
+const MAX_PERSISTED_IMAGE_URL_CHARS = 10_000
+
+function readChatsRaw() {
+  return readJSON<ChatSession[]>(CHAT_KEY, [])
+}
+
+function readCampaignsRaw() {
+  return readJSON<CampaignRecord[]>(CAMPAIGN_KEY, [])
+}
+
+function isQuotaExceeded(error: unknown): boolean {
+  return error instanceof DOMException
+    && (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED')
+}
+
+function compactOneUrl(url: string): string {
+  if (isIndexedImageRef(url)) return url
+  const isInlineImage = url.startsWith('data:')
+  const isTooLarge = url.length > MAX_PERSISTED_IMAGE_URL_CHARS
+  if (!isInlineImage && !isTooLarge) return url
+  const ref = createIndexedImageRef(url)
+  persistImageForRef(ref, url)
+  return ref
+}
+
+function compactCreativeOutput(output: CreativeOutput): CreativeOutput {
+  const imageUrl =
+    typeof output.image_url === 'string'
+      ? compactOneUrl(output.image_url)
+      : null
+
+  const imageUrls = (output.image_urls ?? [])
+    .filter((url): url is string => typeof url === 'string' && Boolean(url))
+    .map(compactOneUrl)
+
+  const finalImageUrl = imageUrl ?? imageUrls[0] ?? null
+
+  const unchanged =
+    finalImageUrl === (output.image_url ?? null) &&
+    JSON.stringify(imageUrls) ===
+      JSON.stringify(output.image_urls ?? [])
+
+  if (unchanged) return output
+
+  return {
+    ...output,
+    image_url: finalImageUrl,
+    image_urls: imageUrls,
+  }
+}
+
+function compactCreativeOutputs(outputs: CreativeOutput[]) {
+  let changed = false
+  const nextOutputs = outputs.map((output) => {
+    const compacted = compactCreativeOutput(output)
+    if (compacted !== output) changed = true
+    return compacted
+  })
+  return { outputs: nextOutputs, changed }
+}
+
+function compactPlanData(planData: PlanData): PlanData {
+  if (!planData.creative?.outputs) return planData
+  const { outputs, changed } = compactCreativeOutputs(planData.creative.outputs)
+  if (!changed) return planData
+  return {
+    ...planData,
+    creative: {
+      ...planData.creative,
+      outputs,
+    },
+  }
+}
+
+function compactProcessingSnapshot(processing: ProcessingSnapshot | null | undefined): ProcessingSnapshot | null | undefined {
+  if (!processing) return processing
+  const nextFinalSummary = compactSummary(processing.finalSummary)
+  const nextPlanData = compactPlanData(processing.planData)
+  if (nextFinalSummary === processing.finalSummary && nextPlanData === processing.planData) {
+    return processing
+  }
+  return {
+    ...processing,
+    finalSummary: nextFinalSummary ?? null,
+    planData: nextPlanData,
+  }
+}
+
+function compactSummary(summary: CampaignSummary | null | undefined): CampaignSummary | null | undefined {
+  if (!summary?.creative?.outputs) return summary
+  const { outputs, changed } = compactCreativeOutputs(summary.creative.outputs)
+  if (!changed) return summary
+  return {
+    ...summary,
+    creative: {
+      ...summary.creative,
+      outputs,
+    },
+  }
+}
+
+function compactChat(chat: ChatSession): ChatSession {
+  const nextSummary = compactSummary(chat.summary)
+  const nextProcessing = compactProcessingSnapshot(chat.processing)
+  if (nextSummary === chat.summary && nextProcessing === chat.processing) return chat
+  return {
+    ...chat,
+    summary: nextSummary,
+    processing: nextProcessing ?? null,
+  }
+}
+
+function compactCampaign(record: CampaignRecord): CampaignRecord {
+  return {
+    ...record,
+    summary: compactSummary(record.summary) ?? record.summary,
+  }
+}
+
+function campaignFromChat(chat: ChatSession, existing?: CampaignRecord): CampaignRecord | null {
+  if (!chat.summary) return null
+  const summary = compactSummary(chat.summary) ?? chat.summary
+  return {
+    id: existing?.id ?? `campaign-${chat.id}`,
+    chatId: chat.id,
+    prompt: chat.prompt,
+    createdAt: existing?.createdAt ?? chat.createdAt,
+    updatedAt: chat.updatedAt,
+    summary,
+  }
+}
+
+function sameCampaign(left: CampaignRecord, right: CampaignRecord) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function readJSON<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback
+  const value = window.localStorage.getItem(key)
+  if (!value) return fallback
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return fallback
+  }
+}
+
+function writeJSON<T>(key: string, value: T) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value))
+  } catch (error) {
+    if (isQuotaExceeded(error)) {
+      console.warn(`Storage quota exceeded while writing ${key}. Data was not persisted.`)
+      return
+    }
+    throw error
+  }
+}
+
+export function loadChats() {
+  const chats = readChatsRaw()
+  const campaigns = readCampaignsRaw().map(compactCampaign)
+  const campaignsByChatId = new Map(campaigns.map((campaign) => [campaign.chatId, campaign]))
+
+  let changed = false
+  const merged = chats.map((chat) => {
+    let nextChat = compactChat(chat)
+    if (nextChat !== chat) changed = true
+
+    const campaign = campaignsByChatId.get(nextChat.id)
+    if (!campaign) return nextChat
+
+    const nextStatus = nextChat.status === 'complete' ? nextChat.status : 'complete'
+    const nextSummary = nextChat.summary ?? campaign.summary
+    const nextUpdatedAt = nextChat.updatedAt > campaign.updatedAt ? nextChat.updatedAt : campaign.updatedAt
+
+    if (
+      nextStatus !== nextChat.status
+      || nextSummary !== nextChat.summary
+      || nextUpdatedAt !== nextChat.updatedAt
+    ) {
+      changed = true
+      nextChat = {
+        ...nextChat,
+        status: nextStatus,
+        summary: nextSummary,
+        updatedAt: nextUpdatedAt,
+      }
+    }
+
+    return nextChat
+  })
+
+  if (changed) {
+    writeJSON(CHAT_KEY, merged)
+  }
+
+  return merged
+}
+
+export function saveChats(chats: ChatSession[]) {
+  writeJSON(CHAT_KEY, chats.map(compactChat))
+}
+
+export function upsertChat(chat: ChatSession) {
+  const chats = loadChats()
+  const index = chats.findIndex((item) => item.id === chat.id)
+  if (index >= 0) {
+    chats[index] = chat
+  } else {
+    chats.unshift(chat)
+  }
+  saveChats(chats)
+}
+
+export function loadChat(id: string) {
+  return loadChats().find((chat) => chat.id === id) ?? null
+}
+
+export function loadCampaigns() {
+  const campaigns = readCampaignsRaw().map(compactCampaign)
+  const chats = readChatsRaw().map(compactChat)
+  const chatsById = new Map(chats.map((chat) => [chat.id, chat]))
+
+  let changed = false
+  const merged = campaigns.map((campaign) => {
+    const chat = chatsById.get(campaign.chatId)
+    if (!chat) return campaign
+
+    const normalized = campaignFromChat(chat, campaign)
+    if (!normalized) return campaign
+    if (!sameCampaign(normalized, campaign)) {
+      changed = true
+      return normalized
+    }
+    return campaign
+  })
+
+  const existingByChatId = new Map(merged.map((campaign) => [campaign.chatId, campaign]))
+  for (const chat of chats) {
+    if (!chat.summary) continue
+    if (existingByChatId.has(chat.id)) continue
+    const derived = campaignFromChat(chat)
+    if (!derived) continue
+    merged.unshift(derived)
+    changed = true
+  }
+
+  if (changed) {
+    writeJSON(CAMPAIGN_KEY, merged)
+  }
+
+  return merged
+}
+
+/**
+ * Merge the server's campaign list with anything held locally.
+ *
+ * The server is the source of truth for cross-machine visibility, but a run
+ * that finished while the backend was unreachable only exists in localStorage,
+ * so local-only records are kept rather than silently dropped.
+ */
+export function mergeCampaigns(
+  remote: CampaignRecord[],
+  local: CampaignRecord[],
+): CampaignRecord[] {
+  const byId = new Map<string, CampaignRecord>()
+
+  for (const record of local) {
+    if (record?.id) byId.set(record.id, compactCampaign(record))
+  }
+  // Remote wins on conflict -- it is the shared, canonical copy.
+  for (const record of remote) {
+    if (record?.id) byId.set(record.id, record)
+  }
+
+  return [...byId.values()].sort((a, b) =>
+    String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')),
+  )
+}
+
+export function saveCampaigns(campaigns: CampaignRecord[]) {
+  writeJSON(CAMPAIGN_KEY, campaigns.map(compactCampaign))
+}
+
+export function upsertCampaign(record: CampaignRecord) {
+  const campaigns = loadCampaigns()
+  const compactedRecord = compactCampaign(record)
+  const index = campaigns.findIndex((item) => item.id === compactedRecord.id || item.chatId === compactedRecord.chatId)
+  if (index >= 0) {
+    campaigns[index] = {
+      ...compactedRecord,
+      id: campaigns[index].id,
+    }
+  } else {
+    campaigns.unshift(compactedRecord)
+  }
+  saveCampaigns(campaigns)
+}
+
+/**
+ * Replace `idb://` image refs with null before a record leaves this browser.
+ *
+ * Those refs point at this machine's IndexedDB, so shipping them to the server
+ * would hand other machines dead pointers. A null image_url renders the
+ * "asset ready, no preview" state, which is honest; a dead ref renders a
+ * permanently broken tile.
+ */
+function stripLocalImageRefs(record: CampaignRecord): CampaignRecord {
+  const outputs = record.summary?.creative?.outputs
+  if (!outputs?.length) return record
+
+  let changed = false
+  const nextOutputs = outputs.map((output) => {
+    const imageUrl = isIndexedImageRef(output.image_url) ? null : output.image_url ?? null
+    const imageUrls = (output.image_urls ?? []).filter((url) => !isIndexedImageRef(url))
+    if (imageUrl === (output.image_url ?? null) && imageUrls.length === (output.image_urls ?? []).length) {
+      return output
+    }
+    changed = true
+    return { ...output, image_url: imageUrl, image_urls: imageUrls }
+  })
+
+  if (!changed) return record
+  return {
+    ...record,
+    summary: {
+      ...record.summary,
+      creative: { ...record.summary.creative, outputs: nextOutputs },
+    },
+  }
+}
+
+export function syncCampaignFromChat(chat: ChatSession) {
+  const record = campaignFromChat(chat)
+  if (!record) return
+  upsertCampaign(record)
+
+  // Also persist to the shared backend so the campaign is visible from any
+  // machine, not just the browser that ran it. Best-effort: localStorage above
+  // has already succeeded, so a server outage must not lose the run.
+  void saveCampaign(stripLocalImageRefs(record)).catch((error) => {
+    console.warn('Campaign saved locally but not to the server.', error)
+  })
+}

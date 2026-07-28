@@ -1,0 +1,743 @@
+import { useEffect, useRef, useState } from 'react'
+import { refineCampaign, sendChatMessage, streamCampaign } from '../lib/api'
+import { syncCampaignFromChat, upsertChat } from '../lib/storage'
+import type {
+  AgentEvent,
+  Brief,
+  ChatMessage,
+  ChatPhase,
+  ChatSession,
+  CreativeOutput,
+  PlanData,
+  ProcessingSnapshot,
+  SSEEvent,
+} from '../types'
+
+function now() {
+  return new Date().toISOString()
+}
+
+function mergeSummaryIntoPlanData(planData: PlanData, summary: NonNullable<ChatSession['summary']>): PlanData {
+  const nextPlanData = { ...planData }
+
+  if (!nextPlanData.channels && summary.channels) {
+    nextPlanData.channels = summary.channels as PlanData['channels']
+  }
+  if (!nextPlanData.primary_kpi && summary.primary_kpi) {
+    nextPlanData.primary_kpi = summary.primary_kpi
+  }
+  if (!nextPlanData.archetype && summary.archetype) {
+    nextPlanData.archetype = summary.archetype
+  }
+  if (!nextPlanData.channel_targets && summary.channel_targets) {
+    nextPlanData.channel_targets = summary.channel_targets as PlanData['channel_targets']
+  }
+  if (!nextPlanData.finance && summary.finance) {
+    nextPlanData.finance = {
+      channels: (summary.finance.channels ?? []).map((item, index) => {
+        if (typeof item === 'string') {
+          return {
+            channel: item,
+            total_allocation: 0,
+            daily_cap: 0,
+          }
+        }
+
+        return {
+          channel: String(item.channel ?? item.name ?? `Channel ${index + 1}`),
+          total_allocation: item.total_allocation ?? 0,
+          daily_cap: item.daily_cap ?? 0,
+          weekly_cap: item.weekly_cap,
+          reasoning: item.reasoning,
+        }
+      }),
+      reserve_buffer: summary.finance.reserve_buffer as NonNullable<PlanData['finance']>['reserve_buffer'],
+      is_valid: summary.finance.validation?.is_valid,
+    }
+  }
+  if ((!nextPlanData.creative?.outputs?.length && !nextPlanData.creative?.summary) && summary.creative) {
+    nextPlanData.creative = {
+      ...nextPlanData.creative,
+      summary: summary.creative.summary,
+      outputs: summary.creative.outputs,
+    }
+  }
+
+  return nextPlanData
+}
+
+const AGENT_LABELS: Record<string, string> = {
+  gtm:      'GTM Strategy Agent',
+  metrics:  'Performance Targets Agent',
+  finance:  'Budget Allocation Agent',
+  creative: 'Creative Agent',
+  summary:  'Campaign Summary',
+}
+
+function makeMessage(role: ChatMessage['role'], content: string): ChatMessage {
+  return { id: crypto.randomUUID(), role, content, timestamp: now() }
+}
+
+function setStreamingFlag(messages: ChatMessage[], messageId: string | null, streaming: boolean) {
+  if (!messageId) return messages
+  return messages.map((message) =>
+    message.id === messageId ? { ...message, streaming } : message,
+  )
+}
+
+function mergeCreativeOutputs(
+  finalOutputs: CreativeOutput[] = [],
+  liveOutputs: CreativeOutput[] = [],
+): CreativeOutput[] {
+  if (!finalOutputs.length) return liveOutputs
+
+  return finalOutputs.map((output) => {
+    const live = liveOutputs.find(
+      (item) =>
+        item.channel === output.channel &&
+        (item.format ?? null) === (output.format ?? null),
+    )
+
+    const imageUrls = output.image_urls?.length
+      ? output.image_urls
+      : live?.image_urls ?? []
+
+    return {
+      ...live,
+      ...output,
+      image_url:
+        output.image_url ??
+        live?.image_url ??
+        imageUrls[0] ??
+        null,
+      image_urls: imageUrls,
+      prompt: output.prompt ?? live?.prompt ?? null,
+    }
+  })
+}
+function updateProcessing(snapshot: ProcessingSnapshot, event: SSEEvent): ProcessingSnapshot {
+  const events = [...snapshot.events]
+  const planData = { ...snapshot.planData }
+
+  if (event.event === 'agent_start') {
+    const agent = String(event.agent)
+    events.push({ id: crypto.randomUUID(), kind: 'start', agent: event.agent, timestamp: now() })
+    return {
+      ...snapshot,
+      activeAgent: agent,
+      agentStatus: { ...snapshot.agentStatus, [agent]: 'running' },
+      events,
+      planData,
+    }
+  }
+
+  if (event.event === 'node_update') {
+    const update: AgentEvent = {
+      id: crypto.randomUUID(), kind: 'update', agent: event.agent,
+      node: event.node, step: event.step, summary: event.summary, data: event.data,
+      timestamp: now(),
+    }
+    events.push(update)
+
+    // Accumulate plan data as nodes complete
+    const d = event.data || {}
+    if (event.node === 'classify' && d.archetype) {
+      planData.archetype = d.archetype as string
+      if (d.reason) planData.archetype_reason = d.reason as string
+    }
+    if (event.node === 'kpi_selector' && d.primary_kpi) {
+      planData.primary_kpi = d.primary_kpi as string
+    }
+    if (event.node === 'parse' && d.channels) {
+      planData.channels = d.channels as PlanData['channels']
+    }
+    if (event.node === 'channel_target' && d.channels) {
+      planData.channel_targets = d.channels as PlanData['channel_targets']
+    }
+    if (event.node === 'validate' && (d.channels as unknown[])?.length) {
+      planData.finance = {
+        channels: d.channels as NonNullable<PlanData['finance']>['channels'],
+        reserve_buffer: d.reserve_buffer as NonNullable<PlanData['finance']>['reserve_buffer'],
+        is_valid: (d.validation as Record<string, unknown>)?.is_valid as boolean,
+      }
+    }
+    if (event.node === 'plan' && (d.channels as string[])?.length) {
+      planData.creative = {
+        ...planData.creative,
+        planning: d.channels as string[],
+      }
+    }
+    if (event.node === 'log_outputs') {
+      planData.creative = {
+        summary: d.summary as NonNullable<PlanData['creative']>['summary'],
+        outputs: d.outputs as NonNullable<PlanData['creative']>['outputs'],
+      }
+    }
+
+    return { ...snapshot, events, planData }
+  }
+
+  if (event.event === 'agent_end') {
+    const agent = String(event.agent)
+    events.push({ id: crypto.randomUUID(), kind: 'end', agent: event.agent, timestamp: now() })
+    return {
+      ...snapshot,
+      activeAgent: null,
+      agentStatus: { ...snapshot.agentStatus, [agent]: 'done' },
+      events,
+      planData,
+    }
+  }
+
+  if (event.event === 'campaign_complete') {
+    events.push({ id: crypto.randomUUID(), kind: 'complete', timestamp: now(), data: event.data as Record<string, unknown> })
+    // Populate any missing plan data from the final summary
+    const d = event.data
+    if (!planData.channels && d.channels) planData.channels = d.channels as PlanData['channels']
+    if (!planData.primary_kpi && d.primary_kpi) planData.primary_kpi = d.primary_kpi as string
+    if (!planData.archetype && d.archetype) planData.archetype = d.archetype as string
+    if (!planData.channel_targets && d.channel_targets) {
+      planData.channel_targets = d.channel_targets as PlanData['channel_targets']
+    }
+    if (!planData.finance && d.finance) {
+      const fin = d.finance as Record<string, unknown>
+      planData.finance = {
+        channels: (fin.channels ?? []) as NonNullable<PlanData['finance']>['channels'],
+        reserve_buffer: fin.reserve_buffer as NonNullable<PlanData['finance']>['reserve_buffer'],
+        is_valid: (fin.validation as Record<string, unknown>)?.is_valid as boolean,
+      }
+    }
+    if (!planData.creative && d.creative) {
+      const c = d.creative as Record<string, unknown>
+      planData.creative = {
+        summary: c.summary as NonNullable<PlanData['creative']>['summary'],
+        outputs: c.outputs as NonNullable<PlanData['creative']>['outputs'],
+      }
+    }
+    return { ...snapshot, finalSummary: event.data, events, planData }
+  }
+
+  if (event.event === 'error') {
+    events.push({ id: crypto.randomUUID(), kind: 'error', message: event.message, timestamp: now() })
+    return {
+      ...snapshot,
+      error: event.message,
+      events,
+      agentStatus: snapshot.activeAgent
+        ? { ...snapshot.agentStatus, [snapshot.activeAgent]: 'error' }
+        : snapshot.agentStatus,
+      planData,
+    }
+  }
+
+  return snapshot
+}
+
+const emptyProcessing = (): ProcessingSnapshot => ({
+  activeAgent: null,
+  agentStatus: {},
+  events: [],
+  agentCommentary: {},
+  finalSummary: null,
+  planData: {},
+  error: null,
+})
+
+function hydrateProcessing(session: ChatSession | null): ProcessingSnapshot {
+  const base = session?.processing
+    ? session.processing
+    : {
+        ...emptyProcessing(),
+        finalSummary: session?.summary ?? null,
+      }
+
+  if (!session?.summary) return base
+
+  const nextPlanData = mergeSummaryIntoPlanData(base.planData, session.summary)
+  const isComplete = session.status === 'complete'
+
+  return {
+    ...base,
+    activeAgent: isComplete ? null : base.activeAgent,
+    error: isComplete ? null : base.error,
+    finalSummary: base.finalSummary ?? session.summary,
+    planData: nextPlanData,
+  }
+}
+
+export function useCampaignStream(session: ChatSession | null) {
+  const abortRef = useRef<AbortController | null>(null)
+  const chatRef = useRef<ChatSession | null>(session)
+  const streamingMsgIdRef = useRef<string | null>(null)
+  const commentaryMsgIdRef = useRef<string | null>(null)
+  const campaignStartedRef = useRef(false)
+  const latestCreativeRef = useRef<PlanData['creative']>(
+    session?.processing?.planData.creative,
+  )
+
+  const [chat, setChat] = useState<ChatSession | null>(session)
+  const [phase, setPhase] = useState<ChatPhase>(() =>
+    session?.status === 'complete' ? 'complete'
+    : session?.status === 'error' ? 'error'
+    : 'intake'
+  )
+  const phaseRef = useRef(phase)
+  const [processing, setProcessing] = useState<ProcessingSnapshot>(() => ({
+    ...hydrateProcessing(session),
+  }))
+
+  useEffect(() => { chatRef.current = chat }, [chat])
+  useEffect(() => { phaseRef.current = phase }, [phase])
+
+  useEffect(() => {
+    const nextPhase =
+      session?.status === 'complete' ? 'complete'
+      : session?.status === 'error' ? 'error'
+      : 'intake'
+    // Sync refs immediately so any effects that fire in the same batch
+    // (e.g. auto-send in Chat.tsx) read the new values, not stale ones.
+    chatRef.current = session
+    phaseRef.current = nextPhase
+    // Use a functional update so that if the session ID hasn't changed (e.g.
+    // React Strict Mode double-invokes effects, or a parent re-render triggers
+    // this effect again), we don't wipe out messages that send() has already
+    // added to the chat state. Only replace the full session object when we are
+    // actually switching to a different session (navigation between chats).
+    setChat((current) => current?.id === session?.id ? current : session ?? null)
+    campaignStartedRef.current = false
+    streamingMsgIdRef.current = null
+    commentaryMsgIdRef.current = null
+    setPhase(nextPhase)
+    setProcessing(hydrateProcessing(session))
+  }, [session?.id])
+
+  // ------------------------------------------------------------------ #
+  // Internal: handle campaign SSE event (shared by run + refine)
+  // ------------------------------------------------------------------ #
+  const handleCampaignEvent = (event: SSEEvent) => {
+    if (
+      event.event === 'node_update' &&
+      event.node === 'log_outputs'
+    ) {
+      latestCreativeRef.current = {
+        summary: event.data.summary as NonNullable<
+          PlanData['creative']
+        >['summary'],
+        outputs: event.data.outputs as NonNullable<
+          PlanData['creative']
+        >['outputs'],
+      }
+    }
+    // Update processing pane for structural events
+    if (['agent_start', 'node_update', 'agent_end', 'campaign_complete', 'error'].includes(event.event)) {
+      setProcessing((current) => {
+        const nextProcessing = updateProcessing(current, event)
+        setChat((currentChat) => {
+          if (!currentChat) return currentChat
+          const nextChat = {
+            ...currentChat,
+            processing: nextProcessing,
+            updatedAt: now(),
+          }
+          upsertChat(nextChat)
+          return nextChat
+        })
+        return nextProcessing
+      })
+    }
+
+    // Commentary: stream into chat as labelled assistant messages
+    if (event.event === 'commentary_token') {
+      const agent = event.agent
+      if (!commentaryMsgIdRef.current) {
+        const id = crypto.randomUUID()
+        commentaryMsgIdRef.current = id
+        const label = AGENT_LABELS[agent] ?? agent
+        const msg: ChatMessage = { id, role: 'assistant', content: event.content, timestamp: now(), label, streaming: true }
+        setChat((current) => {
+          if (!current) return current
+          return { ...current, messages: [...current.messages, msg], updatedAt: now() }
+        })
+      } else {
+        const id = commentaryMsgIdRef.current
+        setChat((current) => {
+          if (!current) return current
+          const msgs = current.messages.map((m) =>
+            m.id === id ? { ...m, content: m.content + event.content } : m,
+          )
+          return { ...current, messages: msgs, updatedAt: now() }
+        })
+      }
+    }
+
+    if (event.event === 'commentary_done') {
+      setChat((current) => {
+        if (!current) return current
+        const next = {
+          ...current,
+          messages: setStreamingFlag(current.messages, commentaryMsgIdRef.current, false),
+          updatedAt: now(),
+        }
+        upsertChat(next)
+        return next
+      })
+      commentaryMsgIdRef.current = null
+    }
+
+    if (event.event === 'campaign_complete') {
+      const liveCreative = latestCreativeRef.current
+      const finalCreative = event.data.creative
+
+      const mergedSummary = {
+        ...event.data,
+        creative: finalCreative
+          ? {
+              ...finalCreative,
+              summary: finalCreative.summary ?? liveCreative?.summary,
+              outputs: mergeCreativeOutputs(
+                finalCreative.outputs ?? [],
+                liveCreative?.outputs ?? [],
+              ),
+            }
+          : liveCreative
+            ? {
+                summary: liveCreative.summary,
+                outputs: liveCreative.outputs,
+              }
+            : null,
+      }
+
+      commentaryMsgIdRef.current = null
+      setPhase('complete')
+
+      setChat((current) => {
+        if (!current) return current
+
+        const nextProcessing: ProcessingSnapshot = current.processing
+          ? {
+              ...current.processing,
+              finalSummary: mergedSummary,
+              planData: {
+                ...current.processing.planData,
+                creative:
+                  mergedSummary.creative ??
+                  current.processing.planData.creative,
+              },
+            }
+          : {
+              ...emptyProcessing(),
+              finalSummary: mergedSummary,
+              planData: {
+                creative: mergedSummary.creative ?? undefined,
+              },
+            }
+
+        const next: ChatSession = {
+          ...current,
+          status: 'complete',
+          updatedAt: now(),
+          summary: mergedSummary,
+          messages: setStreamingFlag(
+            current.messages,
+            commentaryMsgIdRef.current,
+            false,
+          ),
+          processing: nextProcessing,
+        }
+
+        upsertChat(next)
+        syncCampaignFromChat(next)
+        return next
+      })
+    }
+
+    if (event.event === 'error') {
+      setChat((current) => {
+        if (!current) return current
+        const next = {
+          ...current,
+          messages: setStreamingFlag(setStreamingFlag(current.messages, commentaryMsgIdRef.current, false), streamingMsgIdRef.current, false),
+          updatedAt: now(),
+        }
+        upsertChat(next)
+        return next
+      })
+      commentaryMsgIdRef.current = null
+      streamingMsgIdRef.current = null
+      setPhase('error')
+      setChat((current) => {
+        if (!current) return current
+        const next = { ...current, status: 'error' as const, updatedAt: now(), messages: [...current.messages, makeMessage('system', event.message)] }
+        upsertChat(next)
+        return next
+      })
+    }
+  }
+
+  // ------------------------------------------------------------------ #
+  // Internal: run the campaign pipeline with a known brief
+  // ------------------------------------------------------------------ #
+  const _runCampaign = async (brief: Brief) => {
+    if (campaignStartedRef.current) return
+    campaignStartedRef.current = true
+
+    abortRef.current?.abort()
+    abortRef.current = new AbortController()
+    latestCreativeRef.current = undefined
+
+    setPhase('running')
+    setProcessing(() => {
+      const nextProcessing = emptyProcessing()
+      setChat((current) => {
+        if (!current) return current
+        const next = { ...current, processing: nextProcessing, updatedAt: now() }
+        upsertChat(next)
+        return next
+      })
+      return nextProcessing
+    })
+    commentaryMsgIdRef.current = null
+
+    setChat((current) => {
+      if (!current) return current
+      const next = { ...current, brief, status: 'running' as const, updatedAt: now() }
+      upsertChat(next)
+      return next
+    })
+
+    try {
+      await streamCampaign(brief, { signal: abortRef.current.signal, onEvent: handleCampaignEvent })
+    } catch (error) {
+      // A user-initiated stop is not a failure -- stop() already set the phase
+      // and appended the notice, so leave the state it created alone.
+      if (error instanceof Error && error.name === 'AbortError') return
+      const message = error instanceof Error ? error.message : 'Campaign stream failed.'
+      setChat((current) => {
+        if (!current) return current
+        const next = {
+          ...current,
+          messages: setStreamingFlag(current.messages, commentaryMsgIdRef.current, false),
+          updatedAt: now(),
+        }
+        upsertChat(next)
+        return next
+      })
+      setPhase('error')
+      setProcessing((current) => ({ ...current, error: message }))
+      setChat((current) => {
+        if (!current) return current
+        const next = { ...current, status: 'error' as const, updatedAt: now(), messages: [...current.messages, makeMessage('system', message)] }
+        upsertChat(next)
+        return next
+      })
+    }
+  }
+
+  // ------------------------------------------------------------------ #
+  // Public: send a message (routes by phase)
+  // ------------------------------------------------------------------ #
+  const send = async (text: string) => {
+    const currentChat = chatRef.current
+    const currentPhase = phaseRef.current
+    if (!currentChat || currentPhase === 'running') return
+
+    const isFreshDraft =
+      currentPhase === 'intake' &&
+      currentChat.status === 'draft' &&
+      currentChat.messages.length === 0 &&
+      !!currentChat.brief
+
+    // ---- REFINE ----
+    if (currentPhase === 'complete') {
+      const brief = currentChat.brief
+      if (!brief) return
+
+      const userMsg = makeMessage('user', text)
+      setChat((current) => {
+        if (!current) return current
+        const next = { ...current, updatedAt: now(), messages: [...current.messages, userMsg] }
+        upsertChat(next)
+        return next
+      })
+
+      campaignStartedRef.current = false
+      commentaryMsgIdRef.current = null
+      latestCreativeRef.current = undefined
+      setPhase('running')
+      setProcessing(() => {
+        const nextProcessing = emptyProcessing()
+        setChat((current) => {
+          if (!current) return current
+          const next = { ...current, processing: nextProcessing, updatedAt: now() }
+          upsertChat(next)
+          return next
+        })
+        return nextProcessing
+      })
+      setChat((current) => {
+        if (!current) return current
+        const next = { ...current, status: 'running' as const, updatedAt: now() }
+        upsertChat(next)
+        return next
+      })
+
+      try {
+        abortRef.current?.abort()
+        abortRef.current = new AbortController()
+        await refineCampaign(currentChat.id, text, brief, {
+          signal: abortRef.current.signal,
+          onEvent: handleCampaignEvent,
+        })
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') return
+        const message = error instanceof Error ? error.message : 'Refinement failed.'
+        setPhase('error')
+        setChat((current) => {
+          if (!current) return current
+          const next = { ...current, status: 'error' as const, updatedAt: now(), messages: [...current.messages, makeMessage('system', message)] }
+          upsertChat(next)
+          return next
+        })
+      }
+      return
+    }
+
+    if (isFreshDraft && currentChat.brief) {
+      const userMsg = makeMessage('user', text)
+      setChat((current) => {
+        if (!current) return current
+        const next = { ...current, updatedAt: now(), messages: [...current.messages, userMsg] }
+        upsertChat(next)
+        return next
+      })
+
+      await _runCampaign(currentChat.brief)
+      return
+    }
+
+    // ---- INTAKE ----
+    const userMsg = makeMessage('user', text)
+    const assistantId = crypto.randomUUID()
+    streamingMsgIdRef.current = assistantId
+    const assistantMsg: ChatMessage = { id: assistantId, role: 'assistant', content: '', timestamp: now(), streaming: true }
+
+    setChat((current) => {
+      if (!current) return current
+      const next = { ...current, updatedAt: now(), messages: [...current.messages, userMsg, assistantMsg] }
+      upsertChat(next)
+      return next
+    })
+
+    abortRef.current?.abort()
+    abortRef.current = new AbortController()
+
+    try {
+      await sendChatMessage(currentChat.id, text, {
+        signal: abortRef.current.signal,
+        onEvent: (event) => {
+          if (event.event === 'token') {
+            setChat((current) => {
+              if (!current) return current
+              const msgs = current.messages.map((m) =>
+                m.id === assistantId ? { ...m, content: m.content + event.content } : m,
+              )
+              return { ...current, messages: msgs, updatedAt: now() }
+            })
+          }
+          if (event.event === 'chat_done') {
+            setChat((current) => {
+              if (!current) return current
+              const next = {
+                ...current,
+                messages: setStreamingFlag(current.messages, assistantId, false),
+                updatedAt: now(),
+              }
+              upsertChat(next)
+              return next
+            })
+            streamingMsgIdRef.current = null
+          }
+          if (event.event === 'chat_ready') {
+            setChat((current) => {
+              if (!current) return current
+              const next = { ...current, brief: event.brief, updatedAt: now() }
+              upsertChat(next)
+              return next
+            })
+            void _runCampaign(event.brief)
+          }
+          if (event.event === 'error') {
+            setChat((current) => {
+              if (!current) return current
+              const next = {
+                ...current,
+                messages: setStreamingFlag(current.messages, assistantId, false),
+                updatedAt: now(),
+              }
+              upsertChat(next)
+              return next
+            })
+            streamingMsgIdRef.current = null
+            setPhase('error')
+            setChat((current) => {
+              if (!current) return current
+              const next = { ...current, status: 'error' as const, updatedAt: now(), messages: [...current.messages, makeMessage('system', event.message)] }
+              upsertChat(next)
+              return next
+            })
+          }
+        },
+      })
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return
+      const message = error instanceof Error ? error.message : 'Chat failed.'
+      streamingMsgIdRef.current = null
+      setPhase('error')
+      setChat((current) => {
+        if (!current) return current
+        const next = { ...current, status: 'error' as const, updatedAt: now(), messages: [...current.messages, makeMessage('system', message)] }
+        upsertChat(next)
+        return next
+      })
+    }
+  }
+
+  /**
+   * Abort whatever request is in flight (intake, campaign run, or refine) and
+   * return the chat to a usable state. The backend keeps going -- SSE has no
+   * cancel channel -- but the UI stops consuming events, so a wrong run no
+   * longer blocks the composer until it finishes.
+   */
+  function stop() {
+    if (!abortRef.current) return
+
+    abortRef.current.abort()
+    abortRef.current = null
+
+    // Capture before clearing -- the setChat below needs it to close off the
+    // half-written streaming bubble.
+    const openBubbleId = streamingMsgIdRef.current ?? commentaryMsgIdRef.current
+    streamingMsgIdRef.current = null
+    commentaryMsgIdRef.current = null
+    campaignStartedRef.current = false
+
+    setProcessing((current) => ({ ...current, activeAgent: null }))
+    setPhase('intake')
+    setChat((current) => {
+      if (!current) return current
+      const next: ChatSession = {
+        ...current,
+        status: 'draft',
+        updatedAt: now(),
+        messages: [
+          ...setStreamingFlag(current.messages, openBubbleId, false),
+          makeMessage('system', 'Stopped. Send another message to continue.'),
+        ],
+      }
+      upsertChat(next)
+      return next
+    })
+  }
+
+  return { chat, processing, phase, send, stop }
+}
