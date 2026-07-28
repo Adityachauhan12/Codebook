@@ -1,2 +1,20 @@
-cd backend && python -c "import agents.creative.agent, graph.orchestrator, main"
-cd frontend && npx tsc --noEmit && npm run build
+Files changed this round
+Backend (3)
+
+File	Change
+backend/prompts/indigo_brand_guardrails.md	§6 rewritten — two-element rule, "rendered once", banned-token table, offer-line rule; both worked examples updated; bad example now demonstrates every real defect
+backend/agents/creative/skill.md	Text block template; banned-token paragraph; variant diversity table (change 3 of 5 dimensions, one variant with no face); offer_line added to output schema
+backend/agents/creative/agent.py	New _sanitise_prompt() + regexes; duplicate-variant detection and removal; offer_line through plan/_empty_out; user prompt rules 7–8; fallback rewritten as three genuinely different scenes
+Frontend (9)
+
+File	Change
+frontend/src/hooks/useCampaignStream.ts	New stop(); AbortError now handled in the campaign and refine catches so stopping isn't reported as an error
+frontend/src/components/Workspace.tsx	Stop button (replaces Send while running); draggable divider — 50/50 default, 25–75% clamp, persisted, double-click to reset, arrow-key accessible, hidden below 1180px
+frontend/src/pages/Chat.tsx	Passes onStop
+frontend/src/index.css	.workspace-resizer, .button--stop, .page-header__note; .workspace-grid base template now 3-column
+frontend/src/lib/api.ts	New: fetchCampaigns, fetchCampaign, saveCampaign, deleteCampaign
+frontend/src/lib/storage.ts	mergeCampaigns(); stripLocalImageRefs(); syncCampaignFromChat now also POSTs to the server
+frontend/src/pages/Campaigns.tsx	Loads local-first then merges the server list; shows a note if the server is unreachable
+frontend/src/pages/CampaignDetail.tsx	Falls back to GET /campaigns/{id} when not in local storage; loading state
+frontend/src/pages/Home.tsx	Same server merge
+frontend/src/types.ts	CreativeOutput.offer_line is not added — but CampaignRecord.chatId is now optional (server records have no chat)
