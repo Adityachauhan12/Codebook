@@ -1,275 +1,861 @@
----
-agent: creative
-version: 3.0
----
+#!/usr/bin/env python3
+"""
+Creative agent as a LangGraph SUBGRAPH on the shared CampaignState.
 
-You are IndiGo's creative director. You turn a finished campaign strategy into image
-generation prompts for banner assets — one concept per channel, three distinct visual
-executions of that concept per channel.
+Internal flow:
+    plan -> generate -> log_outputs
 
-You are **product-agnostic**. The same job runs a flight sale, a hotel getaway, a
-sightseeing push, a fragrance drop, a cab offer, or a Diwali gift card campaign. Never
-assume the product is a flight. Never default to airports or aircraft.
+What it reads from the blackboard:
+    run_id          -- DB campaign run id for audit logging (None if DB not configured)
+    product         (intake)
+    objective       (intake)
+    total_budget    (intake)
+    brief           (intake) -- full brief for metadata tagging
+    channels        (GTM)   -- selected channels with weights
+    finance         (Finance) -- per-channel budget allocations
 
-The brand guardrails appended below this skill are the **final authority**. If anything
-here appears to conflict with them, follow the guardrails.
-
----
-
-## What you are given
-
-A strategy pack produced upstream. Use every field — it exists because you need it.
-
-| Field | How you use it |
-|---|---|
-| `product`, `offer` | The literal thing being sold and the promotion. Never invent a different offer or price. `offer` becomes the offer line. |
-| `archetype` | Sets what the image has to do (see below) |
-| `positioning.jtbd` | The outcome the customer actually wants — the image sells *this*, not the SKU |
-| `positioning.forces.anxiety` | **The most important field.** The image must visually defuse this specific worry |
-| `positioning.differentiation` | The reason to pick IndiGo — the visual angle |
-| `positioning.brand_voice` | Three adjectives. The headline's tone must match them |
-| `pricing.anchor`, `pricing.urgency` | **Concept input only — never rendered.** They tell you the offer is a saving and that it closes soon, so the scene can feel like a decision being made. The anchor price and the deadline must not appear as text (see below). |
-| `creative_brief` | Client-mandated visual direction. Non-negotiable when present |
-
-If a field is empty, reason from the ones you do have. Do not stall, and do not fill the
-gap with generic travel imagery.
-
-### Archetype → what the image must do
-
-- **A — High-intent transactional** (Flights, Cabs): the customer is already searching.
-  The image's job is to make the *price* credible — one clean number on a calm frame,
-  nothing that looks like fine print. Urgency comes from the scene (a moment of deciding),
-  never from a rendered date. Concrete, plain. Destination over hardware.
-- **B — Discovery / considered** (Hotels, Sightseeing, Experiences): the customer has not
-  decided they want this yet. The image's job is *desire*. Atmosphere, texture, a place
-  you can feel the temperature of.
-- **C — E-commerce catalog** (Shop — apparel, electronics, fragrance): the customer is
-  browsing a grid. The image's job is to make one product *tangible* — material, scale,
-  in-use context. Clean, product-forward, minimal set.
-- **D — Gifting / occasion** (Gift cards, festival bundles): the buyer is not the user.
-  The image's job is the *moment of giving* — the reaction, the ritual, the occasion's
-  visual language. Never a card floating on a gradient.
-
----
-
-## The rule that matters most: defuse the anxiety
-
-Every campaign carries one specific worry, given to you in `positioning.forces.anxiety`.
-A banner that ignores it is decoration. Show the opposite of the worry.
-
-| Anxiety | Weak image | Image that defuses it |
-|---|---|---|
-| "Sale fares have hidden conditions" | Smiling traveller, big % badge | A single clean price on an otherwise empty frame — nothing else competing, nothing in small print |
-| "Discounted hotels are low quality" | Generic pool at sunset | A close, tactile detail — heavy linen, real morning light on a real balcony |
-| "Will it arrive before my trip?" | Product on white | The product half-packed into an open suitcase by the door |
-| "Gift cards feel impersonal" | Card on a gradient | The card in the middle of a real Diwali table, mid-ritual |
-
-State the connection implicitly through the scene. Never write the anxiety as text.
-
----
-
-## The brand's own strategy — the frame under every concept
-
-> Though people use air travel to go from point A to point B, **their sentiment is to
-> create memories**. Hence it is not just about affordability, but the experience of the
-> journey. → To make low-cost air travel accessible **without it ever feeling cheap**.
-
-So: the banner sells the *memory*, not the seat. And nothing in it may look budget.
-The brand's register is *fun, fresh, smart — always simple, often cheeky*: give the
-reader a wink, never a hard sell, and never let them feel like a common person.
-
----
-
-## Choosing the art direction
-
-Decide this before you write the scene, and say it in the first clause.
-The Brand Book: *"We let the content dictate the style."*
-
-- **Photograph** — the default for a destination or fare banner. Real place, real light.
-- **Destination illustration** — when the city has a strong visual signature worth
-  stylising (trams, blossom, a skyline at dusk).
-- **Silhouette vector with colour blocking** — the brand's stated style for **tactical
-  offer communication**. Strong choice for a hard fare deal.
-- **3D** — playful and object-led. This is the *one* case where the brand says to use as
-  much blue as possible.
-
-Commit to one. Never blend photographic and vector language in the same prompt — that
-produces the half-rendered look. And never a stock-vector or clip-art finish: the Brand
-Book bans it by name.
-
----
-
-## Building one concept per channel
-
-Write the **concept first**, in one clause — the insight the image carries. Then build the
-scene around it. A prompt that opens with a scene and no idea produces a stock photo.
-
-Then specify, in this order:
-
-1. **Concept** — the insight, one clause
-2. **Scene** — specific place, object, angle, time of day. Hyper-specific beats evocative-vague.
-   **The destination or the product is the hero — default to no people in frame.**
-   - Weak: "traveller enjoying a destination"
-   - Weak: "a woman's bare feet on tea-estate steps, chai glass in both hands" *(a person is
-     doing the work the place should be doing, and a stock face is one prompt away)*
-   - Strong: "Munnar at 6am from above the ridge — tea terraces in stepped contour lines,
-     mist sitting in the valleys, one tin roof catching the first sun"
-3. **Light & mood** — direction and quality. "Low sun raking from frame left, long soft shadows, mist not yet burned off."
-4. **Composition for this exact format** (see channel table)
-5. **The text block**, written exactly like this and nothing more:
-
-```
-Exactly two text elements, each appearing once, in the <position>, at one size:
-Headline rendered exactly as: "<headline>"
-Offer line rendered exactly as: "<offer line>"
-No other text anywhere in the frame.
-```
-
-**Never include:** logo placement, font names, hex codes, brand-rule restatements,
-aspect-ratio strings. All of these are enforced server-side; writing them corrupts the
-output. (See guardrails §1.)
-
-**Never include, because they visibly wreck the image** (guardrails §6): markdown of any
-kind (`~~`, `~`, `**`, `*`), the words "struck through" / "strikethrough" / "crossed out",
-an anchor or was/now price pair, promo codes, "T&C apply", asterisks, URLs, or any
-currency symbol other than ₹. The pricing anchor and urgency you were given are context
-for the *concept* — they tell you what the campaign is about. They do not go on the banner.
-
-Target 60–110 words per prompt.
-
----
-
-## Channel formats
-
-Two rules apply to **every** format, from the Brand Book's digital grid:
-
-- **Keep the top-right corner clear.** The IndiGo wordmark and dotted arrow-plane are
-  composited there on every asset. Any subject, horizon or bright detail you put in that
-  corner will collide with the logo.
-- **Leave roughly 10% clear margin on all four sides.** Nothing important touches an edge.
-
-| Channel | Format | Composition |
-|---|---|---|
-| **Meta** | 1:1 square feed | Subject held to the lower two-thirds. Clean upper-left for the headline, top-right clear for the logo. Reads at thumbnail size — one shape, high contrast, no fine detail. |
-| **YouTube** | 16:9 display banner | Wide, cinematic, environmental. Landscape or skyline weighted to the lower half or the right. Upper-left open for headline + offer. |
-| **Email** | 2:1 header strip, short | Very shallow band. Horizon-led — a skyline, a coastline, a ridge. Detail low in the strip, sky or flat tone across the top for text. No detail that dies when cropped. |
-| **Google Shopping** | 1:1 product image | The product is the hero, filling the frame, in a real context — not on white, not floating. Minimal set dressing. Keep the headline at the short end of the 4–8 word range so the product stays dominant. |
-| **Affiliates** | 1.91:1 web banner | Wide, strong figure-ground contrast, one focal point. Reads in under a second beside unrelated content. |
-
-A solid-colour panel carrying a pattern or one illustrated element is a legitimate
-alternative to a photograph on any of these — the brand uses both.
-
----
-
-## Headlines
-
-One per channel. **4–8 words.** IndiGo's house style is *fun, fresh, smart — always
-simple, often cheeky*. The headline should give the reader a wink, not a sales pitch.
-
-### The mechanic: play on the destination or the occasion
-
-Almost every IndiGo headline is a pun, an idiom bent to fit, or a phrase in the language
-of the place being sold. This is the brand's single strongest device. From its own work:
-
-| Headline | Why it works |
-|---|---|
-| `Taj tak!` | Hindi "tak" (up to) + the Taj — two words, whole idea |
-| `Padharo mhare desh` | Rajasthani welcome, used for Jaipur |
-| `Guwahatiloi nimikhate` | Assamese, for Guwahati |
-| `Tussi jaa rahe ho?` | Punjabi, for Sharjah |
-| `Bangla dekh` | Bengali wordplay, for Dhaka |
-| `HK? OK.` | Compression as the joke |
-| `Talk Turkey to me` | English idiom bent to the destination |
-| `Temple run` | Borrowed phrase, for Shirdi |
-| `Your palace or mine?` | Innuendo, for Jodhpur |
-| `There is no palace like Udaipur` | "No place like home" bent one letter |
-| `Vietnam toh suna hoga` | Conversational Hindi |
-
-**"Speak their language" is an explicit brand rule.** Where the campaign has a clear
-geography, reach for the local language or a phrase that region owns — transliterated in
-Latin script, never translated flat. Where it does not, bend a familiar English idiom.
-
-- Weak (generic, could be any airline): "Book flights to Goa now" · "Great deals await"
-  · "Unbeatable prices" · "Your dream holiday awaits"
-- Strong: "There is no palace like Udaipur" · "Your group chat finally agreed"
-  · "One gift nobody re-gifts" · "Goa in two hours. Your boss doesn't need to know."
-
-### Copy rules — mechanical, no exceptions
-
-1. **Sentence case, never title case.** `Ek, do, teen, Charminar!` not `Ek, Do, Teen, Charminar!`
-2. **Punctuation with punctuation, or none.** Mid-phrase punctuation ⇒ must end with `.` `?`
-   or `!`. No mid-phrase punctuation ⇒ **no end punctuation at all**.
-   `There is no palace like Udaipur` (no full stop) · `Hi, tech!` (comma, so it needs the `!`)
-3. **British spellings** — colour, favourite, personalised.
-4. **Never make anyone feel like they're flying cheap.** "Cheap", "bargain", "budget",
-   "lowest ever" are banned. Affordable, never cheap — that is the whole brand.
-5. Never over-promise, never sound arrogant, never use an airline cliché.
-
-**The deadline does not go on the banner.** `pricing.urgency` tells you how the *scene*
-should feel — a moment of deciding, something about to close — but a date line is a third
-text element and it will crowd the frame. The deadline lives in the ad copy.
-
-Re-read the headline against `brand_voice` before you commit. A headline written in the wrong
-voice is worse than a plain one.
-
----
-
-## Three variants per channel
-
-You return **three** prompts per channel. They share the concept, headline and offer line,
-and differ in *execution*.
-
-**Each variant must open with a different opening sentence and describe a different
-physical scene.** Not the same scene reworded — a different place, a different subject, a
-different moment. If two variants could plausibly be the same photograph, you have
-failed the task and wasted a third of the generation budget.
-
-Change at least **three** of these five between every pair of variants:
-
-| Dimension | Options |
-|---|---|
-| Framing | aerial · wide landscape · architectural mid shot · tight macro detail |
-| Time of day | dawn · midday · golden hour · dusk · night, lit |
-| Subject | landscape · architecture · water · street detail · craft or cultural object · the product itself |
-| Point of view | eye level · from above · looking up · flat-lay |
-| Weather & light | clear · haze · monsoon wet · mist · hard shadow |
-
-**None of the three should contain a recognisable face.** If a human presence genuinely
-serves the idea in one variant, keep it unidentifiable — a silhouette, a distant figure,
-hands only. The other two should have no people at all.
-
-Example, one concept, three genuinely different executions:
-- `variant 1` — aerial at dawn, the whole bay in mist, no people
-- `variant 2` — architectural detail at golden hour, looking up at carved stone, hard shadow
-- `variant 3` — night, the same city as reflected light on wet street stone, flat-lay of a
-  local object in the foreground
-
----
-
-## Output format
-
-Return **valid JSON only** — a single object, no markdown fences, no commentary.
-
-```
-{
-  "concepts": [
-    {
-      "channel": "<exact channel name as given to you>",
-      "concept": "<the insight, one clause>",
-      "headline": "<4-8 words, exact string that will be rendered>",
-      "offer_line": "<one clause, one number, ₹ only>",
-      "variants": ["<prompt 1>", "<prompt 2>", "<prompt 3>"]
+What it writes:
+    creative: {
+        plans:   [{channel, format, width, height, prompt}]
+        outputs: [{channel, format, status, job_id, image_url, error_message}]
+        summary: {total, success, failed}
     }
-  ]
-}
-```
+    _creative_plans:   None   (cleared after generate)
+    _creative_outputs: None   (cleared after log_outputs)
+"""
+from __future__ import annotations
 
-- One object per channel you were given. No extra channels, no omissions.
-- `variants` must contain exactly three strings, each 60–110 words, each describing a
-  visibly different scene.
-- `channel` must match the channel name exactly as supplied. Do not rename or merge.
-- `headline` and `offer_line` must each appear inside every variant prompt, inside the
-  text block shown above, and must be **byte-identical** across all three variants.
-- Neither `headline` nor `offer_line` may contain `~`, `*`, `_`, backticks, an anchor
-  price, a promo code, "T&C", or any currency symbol other than ₹.
+import json
+import logging
+import os
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+import httpx
+from openai import AzureOpenAI
+from langgraph.graph import StateGraph, START, END
+
+from core.state import CampaignState
+
+logger = logging.getLogger(__name__)
+
+# --------------------------------------------------------------------------- #
+# Config
+# --------------------------------------------------------------------------- #
+SKILL_FILE       = str(Path(__file__).resolve().parent / "skill.md")
+GUARDRAILS_FILE  = str(Path(__file__).resolve().parent.parent.parent / "prompts" / "indigo_brand_guardrails.md")
+
+# Channels that produce image creative; maps to (width, height, format label).
+CHANNEL_FORMAT: dict[str, dict] = {
+    "Meta":            {"width": 1080, "height": 1080, "label": "square_feed",    "aspect_ratio": "1:1"},
+    "YouTube":         {"width": 1920, "height": 1080, "label": "display_banner", "aspect_ratio": "16:9"},
+    "Email":           {"width": 600,  "height": 300,  "label": "email_header",   "aspect_ratio": "16:9"},
+    "Google Shopping": {"width": 800,  "height": 800,  "label": "product_image",  "aspect_ratio": "1:1"},
+    "Affiliates":      {"width": 1200, "height": 628,  "label": "web_banner",     "aspect_ratio": "16:9"},
+}
+
+# Fallback order when we need to pad to MIN_VISUAL_CHANNELS.
+_VISUAL_CHANNEL_PRIORITY = ["Meta", "YouTube", "Email", "Google Shopping", "Affiliates"]
+MIN_VISUAL_CHANNELS = 3
+
+AZURE_OPENAI_DEPLOYMENT  = os.getenv("AZURE_OPENAI_DEPLOYMENT",  "gpt-4.1")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview")
+REQUEST_TIMEOUT = 1000  # seconds per individual Creative Studio call
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def _load_skill() -> str:
+    body = Path(SKILL_FILE).read_text(encoding="utf-8")
+    return re.sub(
+        r"^---\n.*?\n---\n",
+        "",
+        body,
+        count=1,
+        flags=re.DOTALL,
+    ).strip()
+
+
+def _load_guardrails() -> str:
+    try:
+        return Path(GUARDRAILS_FILE).read_text(encoding="utf-8").strip()
+    except Exception:
+        logger.warning("[creative] Could not load brand guardrails from %s", GUARDRAILS_FILE)
+        return ""
+
+
+def _llm() -> AzureOpenAI:
+    return AzureOpenAI(
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        api_version=AZURE_OPENAI_API_VERSION,
+    )
+
+
+
+def _visual_channels(state_channels: list[dict]) -> list[dict]:
+    """Filter to only channels that have a Creative Studio image format."""
+    return [ch for ch in state_channels if ch.get("name") in CHANNEL_FORMAT]
+
+
+def _ensure_min_visual_channels(visual_chs: list[dict]) -> list[dict]:
+    """Always return exactly MIN_VISUAL_CHANNELS visual channels.
+
+    >3: keep top-3 by weight so we don't overrun API budget.
+    <3: pad with lowest-weight supplementary channels from the priority list.
+    """
+    if len(visual_chs) > MIN_VISUAL_CHANNELS:
+        return sorted(visual_chs, key=lambda c: -c.get("weight", 0))[:MIN_VISUAL_CHANNELS]
+
+    if len(visual_chs) < MIN_VISUAL_CHANNELS:
+        existing = {ch["name"] for ch in visual_chs}
+        result = list(visual_chs)
+        for name in _VISUAL_CHANNEL_PRIORITY:
+            if len(result) >= MIN_VISUAL_CHANNELS:
+                break
+            if name not in existing:
+                result.append({"name": name, "weight": 0, "priority": "low", "rationale": "supplementary visual channel"})
+                existing.add(name)
+        return result
+
+    return visual_chs
+
+
+def _extract_offer(state: CampaignState) -> str:
+    """Prefer the GTM strategy pack's offer -- it is the reasoned one -- then the brief."""
+    pricing = state.get("pricing") or {}
+    if pricing.get("offer"):
+        return str(pricing["offer"])
+
+    brief = state.get("brief", {})
+    grounded = brief.get("grounded", brief)
+    assumed  = brief.get("assumed", {})
+    return grounded.get("offer") or assumed.get("offer") or "special fare"
+
+
+# Tokens that image models render as literal visible glyphs, or that reliably produce
+# a red strikethrough / duplicated price. The prompt forbids these, but the LLM still
+# emits them occasionally, and one leaked "~~" ruins the banner -- so strip them here too.
+_MARKDOWN_NOISE = re.compile(r"(~~|~|\*\*|\*|`|_{2,})")
+_STRIKE_PHRASES = re.compile(
+    r"\b(struck[- ]through|strike[- ]?through|strikethrough|crossed[- ]out|"
+    r"slashed(?: price)?|cross(?:ed)? through)\b",
+    re.IGNORECASE,
+)
+# A whole foreign-currency AMOUNT: "$4,190", "USD 4190", "S$120", "€99".
+# Deliberately removed rather than converted to a rupee symbol -- swapping "$4,190"
+# for "₹4,190" would put a plausible but completely wrong price on a customer-facing
+# banner, which is worse than dropping the token.
+_FOREIGN_AMOUNT = re.compile(
+    r"(?:\b(?:USD|SGD|EUR|GBP|S\$)\s?|(?<![A-Za-z0-9])[$€£])\s?\d[\d,.]*",
+    re.IGNORECASE,
+)
+
+
+def _sanitise_prompt(text: str) -> str:
+    """Strip the tokens that visibly corrupt a generated banner.
+
+    Every rule here corresponds to a defect seen in real output: markdown
+    rendered as literal tildes/asterisks, red strike-through lines, and dollar
+    amounts in a rupee campaign.
+
+    This is a safety net, not the primary control -- the prompt forbids all of
+    it. Removing a strike-through phrase does not remove the anchor price it
+    referred to, so the prompt rules still have to do the real work.
+    """
+    if not text:
+        return text
+
+    cleaned = _MARKDOWN_NOISE.sub("", text)
+    cleaned = _STRIKE_PHRASES.sub("", cleaned)
+    cleaned = _FOREIGN_AMOUNT.sub("", cleaned)
+    # Collapse whitespace and orphaned punctuation left behind by the removals.
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:])", r"\1", cleaned)
+    cleaned = re.sub(r"([,;:])\s*(?=[,.;:])", "", cleaned)
+
+    if cleaned != text:
+        logger.info("[creative] Sanitised banned tokens from prompt text")
+    return cleaned.strip()
+
+
+# Brand Book, Tone of voice: "Make people feel like they're flying cheap" is an
+# explicit Don't. Affordable is the brand; cheap is not.
+_CHEAP_WORDS = re.compile(r"\b(cheap(?:est|ly)?|bargain|dirt[- ]cheap|budget|lowest ever)\b", re.IGNORECASE)
+
+# Punctuation that counts as "mid-phrase" for the copy rule. Apostrophes and hyphens
+# do not -- "Your boss doesn't need to know" has no mid-phrase punctuation.
+_MID_PUNCT = re.compile(r"[,;:.?!—–]")
+
+
+def _apply_copy_rules(headline: str) -> str:
+    """Enforce the Brand Book's headline punctuation rule.
+
+    "Punctuation with punctuation, or no punctuation." A phrase with a punctuation
+    mark in the middle must close with one; a phrase without takes none.
+
+    Applied conservatively: only a stray full stop is removed. A question mark or
+    exclamation carries meaning and grammar outranks the rule -- the brand's own
+    "Your palace or mine?" and "Tussi jaa rahe ho?" have no mid-phrase punctuation
+    and quite correctly keep their question marks.
+    """
+    text = (headline or "").strip()
+    if not text:
+        return text
+
+    body = text.rstrip(".?!").rstrip()
+    trailing = text[len(body):].strip()
+    if not body:
+        return text
+
+    has_mid_punct = bool(_MID_PUNCT.search(body))
+
+    if has_mid_punct and not trailing:
+        result = f"{body}."
+    elif not has_mid_punct and trailing == ".":
+        result = body
+    else:
+        result = text
+
+    if result != text:
+        logger.info("[creative] Copy rule applied to headline: %r -> %r", text, result)
+
+    if _CHEAP_WORDS.search(result):
+        logger.warning(
+            "[creative] Headline uses a banned 'cheap' word (Brand Book Don't): %r", result
+        )
+
+    return result
+
+
+def _short_product_label(product: str) -> str:
+    """A few words that can safely be rendered on a banner.
+
+    Product strings arrive long and technical -- "IndiGo Gift Cards -- digital and
+    physical, denominations Rs1,000 to Rs25,000". Slicing that to a character
+    budget leaves a truncated word and a half-written price on the artwork, so cut
+    at the first clause boundary and then at a word boundary instead.
+    """
+    text = _sanitise_prompt(product or "").strip()
+    if not text:
+        return ""
+    # First clause only: stop at an em/en dash, comma, colon, semicolon or bracket.
+    clause = re.split(r"\s*[—–,;:(]\s*", text, maxsplit=1)[0].strip()
+    words = clause.split()
+    return " ".join(words[:6]).rstrip(".,;:-")
+
+
+_ARCHETYPE_BRIEF = {
+    "A": "A -- high-intent transactional. The customer is already searching. Make the "
+         "price credible and the deadline felt.",
+    "B": "B -- discovery / considered. The customer has not decided they want this yet. "
+         "Sell desire through atmosphere and texture.",
+    "C": "C -- e-commerce catalog. The customer is browsing a grid. Make one product "
+         "tangible: material, scale, in-use context.",
+    "D": "D -- gifting / occasion. The buyer is not the user. Show the moment of giving, "
+         "not the product.",
+}
+
+
+def _strategy_block(state: CampaignState) -> str:
+    """Render the GTM strategy pack fields the Creative agent must design against.
+
+    Without this the creative brief is just product+offer, and the banners come back
+    generic -- the anxiety and brand_voice fields are what make them specific.
+    """
+    positioning = state.get("positioning") or {}
+    pricing     = state.get("pricing") or {}
+    forces      = positioning.get("forces") or {}
+    archetype   = (state.get("archetype") or "").strip()[:1].upper()
+
+    lines: list[str] = []
+
+    if archetype in _ARCHETYPE_BRIEF:
+        lines.append(f"Archetype: {_ARCHETYPE_BRIEF[archetype]}")
+
+    if forces.get("anxiety"):
+        lines.append(
+            f"CUSTOMER ANXIETY (the image must visually defuse this): {forces['anxiety']}"
+        )
+    if positioning.get("jtbd"):
+        lines.append(f"Job to be done (sell this outcome, not the SKU): {positioning['jtbd']}")
+    if positioning.get("icp"):
+        lines.append(f"Audience: {positioning['icp']}")
+    if positioning.get("differentiation"):
+        lines.append(f"Differentiation: {positioning['differentiation']}")
+    if positioning.get("statement"):
+        lines.append(f"Positioning: {positioning['statement']}")
+
+    voice = positioning.get("brand_voice")
+    if voice:
+        voice_str = ", ".join(voice) if isinstance(voice, list) else str(voice)
+        lines.append(f"BRAND VOICE (the headline must sound like this): {voice_str}")
+
+    if pricing.get("anchor"):
+        lines.append(f"Price anchor: {pricing['anchor']}")
+    if pricing.get("urgency"):
+        lines.append(f"Urgency device: {pricing['urgency']}")
+    if pricing.get("loyalty") and str(pricing["loyalty"]).lower() not in {"n/a", "none", ""}:
+        lines.append(f"Loyalty lever: {pricing['loyalty']}")
+
+    if not lines:
+        return ""
+    return "CAMPAIGN STRATEGY (design against every line):\n" + "\n".join(f"- {l}" for l in lines)
+
+
+# --------------------------------------------------------------------------- #
+# Nodes
+# --------------------------------------------------------------------------- #
+def plan(state: CampaignState) -> dict:
+    """
+    LLM node: turn the GTM strategy pack into one concept + three prompt variants
+    per visual channel. Returns _creative_plans consumed by generate.
+    """
+    channels   = state.get("channels") or []
+    visual_chs = _ensure_min_visual_channels(_visual_channels(channels))
+
+    logger.info(
+        "[creative/plan] Starting -- visual channels selected: %s",
+        [ch["name"] for ch in visual_chs],
+    )
+
+    if not visual_chs:
+        logger.info("[creative/plan] No visual channels in campaign -- skipping generation.")
+        return {"_creative_plans": []}
+
+    product   = state.get("product", "IndiGo campaign")
+    objective = state.get("objective", "bookings")
+    budget    = state.get("total_budget", 0)
+    offer     = _extract_offer(state)
+
+    brief          = state.get("brief", {})
+    grounded       = brief.get("grounded", brief)
+    assumed        = brief.get("assumed", {})
+    creative_brief = (grounded.get("creative_brief") or assumed.get("creative_brief") or "").strip()
+
+    logger.info(
+        "[creative/plan] Campaign context -- product=%r offer=%r objective=%r budget=Rs%s creative_brief=%r",
+        product, offer, objective, f"{budget:,.0f}", creative_brief or "(none)",
+    )
+
+    skill      = _load_skill()
+    guardrails = _load_guardrails()
+    # Explicit precedence: the two documents overlap, and without this the model
+    # resolves conflicts (logo, aviation imagery, hex codes) arbitrarily.
+    system_prompt = (
+        f"{skill}\n\n"
+        "════════════════════════════════════════════════════════════════════════\n"
+        "The brand guardrails below OVERRIDE anything above them on conflict.\n"
+        "════════════════════════════════════════════════════════════════════════\n\n"
+        f"{guardrails}"
+    ) if guardrails else skill
+
+    ch_lines = "\n".join(
+        f'- {ch["name"]}: {CHANNEL_FORMAT[ch["name"]]["label"]}, '
+        f'{CHANNEL_FORMAT[ch["name"]]["width"]}x{CHANNEL_FORMAT[ch["name"]]["height"]} '
+        f'({CHANNEL_FORMAT[ch["name"]]["aspect_ratio"]}), weight {ch.get("weight", 0)}'
+        for ch in visual_chs
+    )
+
+    strategy_block = _strategy_block(state)
+
+    mood_section = (
+        f"\nCLIENT VISUAL DIRECTION (non-negotiable):\n{creative_brief}\n"
+        if creative_brief else
+        "\nNo client visual direction given -- derive the concept from the strategy above.\n"
+    )
+
+    user_prompt = (
+        f"Campaign product: {product}\n"
+        f"Offer (use this literally, do not invent a different price): {offer}\n"
+        f"Objective: {objective}\n\n"
+        f"{strategy_block}\n"
+        f"{mood_section}"
+        f"\nChannels to create banners for:\n{ch_lines}\n\n"
+        "For EACH channel, produce ONE concept and THREE prompt variants of it, per your "
+        "skill and the brand guardrails. Specifically:\n"
+        "  0. Choose the art direction first and name it in the opening clause: photograph "
+        "(the default), destination illustration, silhouette vector with colour blocking "
+        "(the brand's style for tactical offers), or 3D (the only case where blue dominates). "
+        "Commit to one -- never blend photographic and vector language.\n"
+        "  1. Name the concept -- the insight the image carries -- before describing any scene. "
+        "The banner sells the MEMORY, not the seat, and nothing in it may look budget.\n"
+        "  2. Build the scene so it visually defuses the customer anxiety stated above. "
+        "The DESTINATION or the PRODUCT is the hero -- default to no people in frame, and "
+        "never a recognisable face. Let the place carry its own real colours; do not tint "
+        "the scene blue.\n"
+        "  3. Write the headline in the stated brand voice, 4-8 words, with a turn in it -- "
+        "a pun on the destination, a bent idiom, or a phrase in the local language "
+        "transliterated. Sentence case. Mid-phrase punctuation means it must close with "
+        "one; no mid-phrase punctuation means no full stop at the end. Never the words "
+        "cheap, bargain or budget.\n"
+        "  4. Compose for that channel's exact format and leave the text area clean.\n"
+        "  5. Write NO logo placement, NO font names, NO hex codes, NO aspect-ratio strings "
+        "-- all are enforced server-side.\n"
+        "  6. Make the three variants genuinely different executions. Change at least three "
+        "of: framing, time of day, location, POV, human presence. At least one variant must "
+        "show no visible face. Two variants that could be the same photograph is a failure.\n"
+        "  7. Put EXACTLY TWO text elements in each prompt -- the headline and the offer "
+        "line -- each rendered once, in one place, at one size, using the exact block from "
+        "your skill file. State 'No other text anywhere in the frame.'\n"
+        "  8. Absolutely no markdown (~~ ~ ** * `), no 'struck through' or 'crossed out', "
+        "no anchor or was/now price pair, no promo code, no 'T&C', no asterisks, and no "
+        "currency symbol except the rupee sign. These render as literal broken glyphs.\n\n"
+        "Return a JSON object exactly as specified in your Output Format section: "
+        '{"concepts": [{"channel", "concept", "headline", "offer_line", "variants": [3 strings]}]}. '
+        "Use the channel names exactly as listed above. Each variant is 60-110 words."
+    )
+
+    logger.info("[creative/plan] Sending prompt to LLM (%s):\n%s", AZURE_OPENAI_DEPLOYMENT, user_prompt)
+
+    def _fallback_plan(ch: dict) -> dict:
+        """Product-agnostic fallback. Deliberately contains no aviation imagery,
+        no logo instruction and no font/colour directives -- the same guardrails
+        the LLM path must honour."""
+        fmt       = CHANNEL_FORMAT[ch["name"]]
+        anxiety   = ((state.get("positioning") or {}).get("forces") or {}).get("anxiety", "")
+        direction = creative_brief or "calm, uncluttered, quietly aspirational"
+        position  = "top third" if fmt["aspect_ratio"] == "1:1" else "right third"
+        headline = _short_product_label(str(product)) or "Somewhere worth going."
+        # The offer is left whole -- "Buy a gift card above Rs3,000, get Rs500 extra"
+        # loses its meaning if clipped at the comma.
+        offer_line = _sanitise_prompt(str(offer))
+
+        def _build(scene: str) -> str:
+            return _sanitise_prompt(
+                f"{scene} {direction}. Natural directional light with soft shadows, deep blue "
+                f"and warm neutral tones, generous negative space, nothing staged. "
+                f"Subject placed away from the {position}, which stays clean and uncluttered."
+                + (f" The scene should quietly answer the worry that {anxiety}." if anxiety else "")
+                + f" Exactly two text elements, each appearing once, in the {position}, at one size: "
+                + f'Headline rendered exactly as: "{headline}" '
+                + f'Offer line rendered exactly as: "{offer_line}" '
+                + "No other text anywhere in the frame."
+            )
+
+        # Three deliberately different scenes, not one scene reworded.
+        # Destination-led and unpeopled, per the Brand Book: "We let our destinations
+        # speak for themselves" and "We don't use stock images that feature people's faces."
+        variants = [
+            _build(f"The place behind {product}, seen the way nobody photographs it. "
+                   "Wide aerial at dawn, mist still sitting in the low ground, no people in frame."),
+            _build(f"One telling architectural detail of the place behind {product}. "
+                   "Mid shot looking up at worn stone and carved edges in hard golden-hour light, "
+                   "no people in frame."),
+            _build(f"The texture of the place behind {product} after dark. "
+                   "Reflected light on wet street stone at night, a single local object in the "
+                   "foreground, no people in frame."),
+        ]
+        return {
+            "channel":    ch["name"],
+            "format":     fmt["label"],
+            "width":      fmt["width"],
+            "height":     fmt["height"],
+            "concept":    f"Fallback concept for {product}",
+            "headline":   headline,
+            "offer_line": offer_line,
+            "variants":   variants,
+            "prompt":     variants[0],
+        }
+
+    plans: list[dict] = []
+    try:
+        client = _llm()
+        resp = client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            temperature=0.8,          # creative task -- reward variance across variants
+            response_format={"type": "json_object"},
+            max_completion_tokens=4000,  # 3 channels x 3 variants x ~110 words
+        )
+        raw = resp.choices[0].message.content or ""
+        logger.info("[creative/plan] LLM response received (%d chars):\n%s", len(raw), raw)
+
+        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if json_match:
+            parsed = json.loads(json_match.group())
+            for item in parsed.get("concepts", []):
+                ch_name = item.get("channel", "")
+                fmt     = CHANNEL_FORMAT.get(ch_name, {})
+                if not fmt:
+                    logger.warning("[creative/plan] LLM returned unknown channel %r -- skipping", ch_name)
+                    continue
+
+                variants = [
+                    _sanitise_prompt(v)
+                    for v in (item.get("variants") or [])
+                    if isinstance(v, str) and v.strip()
+                ]
+                variants = [v for v in variants if v]
+                if not variants:
+                    logger.warning("[creative/plan] %r returned no usable variants -- skipping", ch_name)
+                    continue
+
+                # Identical variants waste generation budget and give the reviewer
+                # nothing to choose between -- drop duplicates before padding.
+                deduped: list[str] = []
+                for v in variants:
+                    if v not in deduped:
+                        deduped.append(v)
+                if len(deduped) < len(variants):
+                    logger.warning(
+                        "[creative/plan] %s returned %d duplicate variant(s)",
+                        ch_name, len(variants) - len(deduped),
+                    )
+                variants = deduped
+
+                # Pad/trim to exactly IMAGES_PER_CHANNEL so generate() is predictable.
+                supplied = list(variants)
+                while len(variants) < IMAGES_PER_CHANNEL:
+                    variants.append(supplied[len(variants) % len(supplied)])
+                variants = variants[:IMAGES_PER_CHANNEL]
+
+                plans.append({
+                    "channel":    ch_name,
+                    "format":     fmt.get("label", "banner"),
+                    "width":      fmt.get("width",  1200),
+                    "height":     fmt.get("height", 628),
+                    "concept":    item.get("concept", ""),
+                    "headline":   _apply_copy_rules(_sanitise_prompt(item.get("headline", ""))),
+                    "offer_line": _sanitise_prompt(item.get("offer_line", "")),
+                    "variants":   variants,
+                    "prompt":     variants[0],   # back-compat: single representative prompt
+                })
+                logger.info(
+                    "[creative/plan] %s (%s) | concept=%r headline=%r | %d variants",
+                    ch_name, fmt.get("label"), item.get("concept"), item.get("headline"), len(variants),
+                )
+        else:
+            logger.warning("[creative/plan] No JSON object found in LLM response -- will use fallbacks")
+    except Exception:
+        logger.exception("[creative/plan] LLM call failed -- falling back to template prompts.")
+
+    # Guarantee every visual channel has a plan regardless of LLM output.
+    planned = {p["channel"] for p in plans}
+    for ch in visual_chs:
+        if ch["name"] not in planned:
+            logger.warning("[creative/plan] Channel %r missing from LLM response -- injecting fallback plan", ch["name"])
+            plans.append(_fallback_plan(ch))
+
+    logger.info(
+        "[creative/plan] Done -- %d plans ready: %s",
+        len(plans), [p["channel"] for p in plans],
+    )
+    return {"_creative_plans": plans}
+
+
+IMAGES_PER_CHANNEL = 3
+
+
+def _generate_for_plan(
+    p: dict,
+    endpoint: str,
+    project_id: str,
+    api_key: str,
+) -> dict:
+    """Generate one image per prompt variant for a channel.
+
+    Each variant is a genuinely different execution of the same concept, so the
+    reviewer gets three real options rather than three renders of one idea.
+    """
+    fmt          = CHANNEL_FORMAT.get(p["channel"], {})
+    aspect_ratio = fmt.get("aspect_ratio", "16:9")
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    image_urls: list[str] = []
+    used_prompts: list[str] = []
+    errors: list[str] = []
+
+    variants = p.get("variants") or [p["prompt"]]
+
+    try:
+        with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
+            for image_index, variant_prompt in enumerate(variants, start=1):
+                payload = {
+                    "image_description": variant_prompt,
+                    # Custom dimensions win server-side and give exact pixel output.
+                    # aspect_ratio is kept as a fallback for the presets we do match --
+                    # Email (2:1) and Affiliates (1.91:1) have no preset equivalent.
+                    "aspect_ratio": aspect_ratio,
+                    "custom_width":  p["width"],
+                    "custom_height": p["height"],
+                    "resolution": "2K",
+                    "image_count": 1,
+                }
+
+                if project_id:
+                    payload["project_id"] = project_id
+
+                try:
+                    response = client.post(
+                        endpoint,
+                        json=payload,
+                        headers=headers,
+                    )
+                    response.raise_for_status()
+                    body = response.json()
+
+                    images = body.get("images") or body.get("data") or []
+                    if not images:
+                        errors.append(
+                            f"Image {image_index}: no image returned"
+                        )
+                        continue
+
+                    image = images[0]
+
+                    if isinstance(image, str):
+                        image_value = image
+                    elif isinstance(image, dict):
+                        image_value = (
+                            image.get("b64_json")
+                            or image.get("base64")
+                            or image.get("image_base64")
+                            or image.get("url")
+                            or image.get("image_url")
+                        )
+                    else:
+                        image_value = None
+
+                    if not image_value:
+                        errors.append(
+                            f"Image {image_index}: invalid response"
+                        )
+                        continue
+
+                    if image_value.startswith(("http://", "https://")):
+                        image_urls.append(image_value)
+                    else:
+                        image_urls.append(
+                            f"data:image/png;base64,{image_value}"
+                        )
+                    # Keep the prompt that actually produced this image, so the
+                    # audit row in mos_creative_outputs is truthful per variant.
+                    used_prompts.append(variant_prompt)
+
+                except httpx.HTTPStatusError as exc:
+                    errors.append(
+                        f"Image {image_index}: HTTP "
+                        f"{exc.response.status_code} - "
+                        f"{exc.response.text[:200]}"
+                    )
+                except Exception as exc:
+                    errors.append(
+                        f"Image {image_index}: {exc}"
+                    )
+
+    except Exception as exc:
+        errors.append(str(exc))
+
+    return {
+        "channel": p["channel"],
+        "image_urls": image_urls,
+        "used_prompts": used_prompts,
+        "error": "; ".join(errors) if errors else None,
+    }
+
+def generate(state: CampaignState) -> dict:
+    """
+    API node: fire one request per prompt variant, channels in parallel.
+    Keeps concurrency at 1 per channel rather than all variants at once.
+    Never raises -- failed channels are recorded with status='error'.
+    """
+    plans      = state.get("_creative_plans") or []
+    base_url   = os.getenv("CREATIVE_STUDIO_BASE", "").rstrip("/")
+    project_id = os.getenv("CREATIVE_STUDIO_PROJECT_ID", "")
+    api_key    = os.getenv("CREATIVE_STUDIO_API_KEY", "")
+    endpoint   = f"{base_url}/api/v1/generate/image/generate"
+
+    logger.info(
+        "[creative/generate] Starting -- %d channels | endpoint=%s | api_key=%s",
+        len(plans), endpoint, "set" if api_key else "NOT SET",
+    )
+
+    if not plans:
+        logger.info("[creative/generate] No plans -- skipping.")
+        return {"_creative_outputs": []}
+
+    if not base_url:
+        logger.error("[creative/generate] CREATIVE_STUDIO_BASE is not configured -- skipping all generation.")
+        return {"_creative_outputs": [
+            {**_empty_out(p), "error_message": "CREATIVE_STUDIO_BASE not configured"}
+            for p in plans
+        ]}
+
+    if not api_key:
+        logger.warning("[creative/generate] CREATIVE_STUDIO_API_KEY is not set -- requests will be rejected with 401")
+
+    # One request per channel, all channels in parallel.
+    channel_results: list[dict] = [{}] * len(plans)
+
+    with ThreadPoolExecutor(max_workers=len(plans)) as pool:
+        future_to_idx = {
+            pool.submit(_generate_for_plan, p, endpoint, project_id, api_key): idx
+            for idx, p in enumerate(plans)
+        }
+        for future in as_completed(future_to_idx):
+            channel_results[future_to_idx[future]] = future.result()
+
+    outputs: list[dict] = []
+    for p, result in zip(plans, channel_results):
+        out = _empty_out(p)
+        image_urls = result.get("image_urls", [])
+        out["image_urls"]   = image_urls
+        out["image_url"]    = image_urls[0] if image_urls else None
+        out["used_prompts"] = result.get("used_prompts") or []
+        if image_urls:
+            out["status"] = "success"
+            logger.info(
+                "[creative/generate] OK %s (%s) -- %d/%d images",
+                p["channel"], p["format"], len(image_urls), IMAGES_PER_CHANNEL,
+            )
+        else:
+            out["error_message"] = result.get("error") or "No images in response"
+            logger.error(
+                "[creative/generate] x %s (%s) -- 0 images. error=%s",
+                p["channel"], p["format"], out["error_message"],
+            )
+        outputs.append(out)
+
+    success = sum(1 for o in outputs if o.get("status") == "success")
+    logger.info(
+        "[creative/generate] Complete -- %d/%d channels succeeded",
+        success, len(outputs),
+    )
+    return {"_creative_outputs": outputs}
+
+
+def _empty_out(p: dict) -> dict:
+    return {
+        "channel":       p["channel"],
+        "format":        p["format"],
+        "width":         p["width"],
+        "height":        p["height"],
+        "prompt":        p["prompt"],
+        "concept":       p.get("concept", ""),
+        "headline":      p.get("headline", ""),
+        "offer_line":    p.get("offer_line", ""),
+        "variants":      p.get("variants") or [p["prompt"]],
+        "used_prompts":  [],
+        "status":        "error",
+        "job_id":        None,
+        "image_url":     None,
+        "image_urls":    [],
+        "raw_response":  None,
+        "error_message": None,
+        "token_scope":   None,
+    }
+
+
+def log_outputs(state: CampaignState) -> dict:
+    """
+    Assemble the final creative dict, write rows to mos_creative_outputs (best-effort),
+    and clear the intermediate working keys.
+    """
+    outputs  = state.get("_creative_outputs") or []
+    plans    = state.get("_creative_plans")    or []
+    run_id   = state.get("run_id")
+    brief    = state.get("brief", {})
+
+    successful_channels = sum(
+        1
+        for output in outputs
+        if output.get("status") == "success"
+    )
+    failed_channels = len(outputs) - successful_channels
+    total_images = sum(
+        len(output.get("image_urls") or [])
+        for output in outputs
+    )
+
+    # DB logging -- best-effort, never raises
+    if run_id is not None:
+        try:
+            from core.db import log_creative_output
+            for output in outputs:
+                image_urls   = output.get("image_urls") or []
+                used_prompts = output.get("used_prompts") or []
+
+                if image_urls:
+                    for variant_index, image_url in enumerate(
+                        image_urls,
+                        start=1,
+                    ):
+                        # Log the variant prompt that actually produced this image,
+                        # not the channel's representative prompt.
+                        variant_prompt = (
+                            used_prompts[variant_index - 1]
+                            if variant_index <= len(used_prompts)
+                            else output.get("prompt")
+                        )
+                        log_creative_output(
+                            run_id,
+                            {
+                                **output,
+                                "prompt": variant_prompt,
+                                "image_url": image_url,
+                                "variant_index": variant_index,
+                                "campaign_brief": brief,
+                            },
+                        )
+                else:
+                    log_creative_output(
+                        run_id,
+                        {
+                            **output,
+                            "variant_index": 1,
+                            "campaign_brief": brief,
+                        },
+                    )
+        except Exception:
+            logger.exception("[creative/log_outputs] DB logging failed.")
+
+    creative = {
+        "plans":   plans,
+        "outputs": [
+            {k: v for k, v in o.items() if k != "raw_response"}
+            for o in outputs
+        ],
+        "summary": {
+            "total_channels": len(outputs),
+            "successful_channels": successful_channels,
+            "failed_channels": failed_channels,
+            "total_images": total_images,
+            "images_per_channel": IMAGES_PER_CHANNEL,
+        },
+    }
+
+    return {
+        "creative":          creative,
+        "_creative_plans":   None,
+        "_creative_outputs": None,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Subgraph
+# --------------------------------------------------------------------------- #
+def build_creative_subgraph():
+    g = StateGraph(CampaignState)
+
+    g.add_node("plan",        plan)
+    g.add_node("generate",    generate)
+    g.add_node("log_outputs", log_outputs)
+
+    g.add_edge(START,        "plan")
+    g.add_edge("plan",       "generate")
+    g.add_edge("generate",   "log_outputs")
+    g.add_edge("log_outputs", END)
+
+    return g.compile()
+
+
 
