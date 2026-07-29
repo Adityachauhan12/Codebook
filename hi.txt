@@ -1,26 +1,21 @@
-{
-  "_comment": "Test input for IndiGo Gift Card Diwali campaign — Archetype D (gifting/occasion).",
+Warm and understated, not loud festival stock. The feeling is the quiet
+moment of handing something over that turns out to matter — a gift that
+becomes a trip, not a voucher.
 
-  "grounded": {
-    "product": "IndiGo Gift Cards — digital and physical, denominations ₹1,000 to ₹25,000",
-    "occasion": "Diwali 2026 (gifting window: 15 Oct – 5 Nov 2026)",
-    "redemption": "Redeemable on flights, hotels, IndiGo Shop, and experiences on goindigo.in",
-    "bluchip_eligible": true,
-    "available_channels": ["goindigo.in website", "IndiGo mobile app", "Email", "SMS", "Meta (FB/IG)", "Google Search"]
-  },
+Show a real Diwali evening at home: someone lighting a row of diyas seen
+from behind, hands passing a wrapped gift across a table, a family
+gathered at the doorway shot from the courtyard so nobody faces camera.
+Mithai boxes, marigold, worn brass, a slim card among the presents.
+Warm candlelight from below, deep shadow at the edges.
 
-  "assumed": {
-    "budget_inr": 800000,
-    "objective": "Drive Diwali gift card purchases — grow both new buyers and gifting repeat rate",
-    "margin_floor_note": "Bonus value mechanic allowed: up to ₹500 bonus on cards above ₹3,000",
-    "existing_list": "Opted-in email/SMS list and BluChip member base exist"
-  }
-}
+People should be in it and doing something real — never posed, never
+looking at the camera, never a close-up portrait or a staged smile.
 
-assistant
-29 Jul, 03:48 pm
-Thanks for sharing the details so far! I understand we're focusing on IndiGo Gift Cards for Diwali 2026, targeting both digital and physical cards with denominations from ₹1,000 to ₹25,000, and aiming to drive gift card purchases among new and repeat gifters. The campaign will run across goindigo.in, the app, Email, SMS, Meta, and Google Search, with BluChip members eligible and a budget of ₹8 lakh.
+Let the real Diwali colours carry it — amber, marigold orange, gold, deep
+shadow. Do not wash the scene in blue.
 
-To complete your campaign brief, could you describe the feeling and subject you want the banner ads to convey? For example, what should people feel when they see the ad, and who or what should be pictured? This will help us ensure the creative direction is just right for Diwali gifting.
+No aircraft, airports or runways. Clutter-free, generous empty space in
+the top third for text, top-right corner clear.
 
-
+Tone for the line: cheeky and warm, a wink rather than a sentimental
+Diwali greeting.
