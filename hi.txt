@@ -1,1 +1,1 @@
-QA-015	Copywriting 	Copywriting text generation	1. click on a project.2. click on copywriting tab. 3. fill the required details and submit
+Promote IndiGo's Monsoon Getaway Sale. Domestic flights starting ₹1,499. Target audience: budget-conscious leisure travelers, ages 25-40. Tone: cheerful, energetic, urgent. Highlight on-time performance and limited-time offer. Include a clear call-to-action to book on goindigo.in.
