@@ -1,25 +1,8 @@
-For UAT sign-off, you usually prepare a test case document like this:
-Test Case ID	Scenario	Steps	Expected Result	Actual Result	Status
-UAT-001	Login with valid credentials	Enter valid username and password, click Login	User is redirected to Dashboard	Dashboard displayed	Pass
-UAT-002	Login with invalid password	Enter valid username and wrong password	Error message displayed	Error displayed	Pass
-UAT-003	Create a new record	Fill form and click Save	Record is created successfully	Record created	Pass
-
-
-Hi Team,
-This is to formally provide the Conditional QA Sign Off for the following IFS application modules:
-Modules 	QA Start Date 	QA End Date	Defect Identified	High	Medium	Low
-Document Expiry	16 March 2026	 27 March 2026	20	6	7	7
-
-Defects Identified: 20 
-•	High Severity: 6 (Closed)
-•	Medium Severity: 7 (Closed)
-•	Low Severity: 7 (Open -planned for subsequent fixes)
-Defects Closed: 14 
-Open Defects: 6 (Low severity only)
-The QA team has completed functional testing for the above module. All critical workflows, validations and user scenarios were covered as part of the test cycle.
-Test Summary
-•	All critical and high severity issues have been resolved
-•	The open defects are of low severity and the team is actively working on the fixes.
-Based on the test results and successful completion of all planned QA activities, we confirm that the above module meet the required quality standards.
-QA hereby provides a Conditional Sign Off for the completed modules.
-Please proceed with the next phase of the release.
+QA-004	QA-005	QA-006	QA-007	QA-008		
+QA-005	Social Campaign	Whatsapp campaign copywriting generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	copywriting text will show in whatsapp tab		
+QA-006	Social Campaign	Instagram campaign image generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	social image of instagram will show the creative in instagram tab		
+QA-007	Social Campaign	Instagram campaign copywriting generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	copywriting text will show in instagram tab		
+QA-008	Social Campaign	Facebook campaign copywriting generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	copywriting text will show in facebook tab		
+QA-009	Social Campaign	Facebook campaign creative generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	social image of facebook will show the creative in facebook tab		
+QA-010	Social Campaign	Twitter campaign creative generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	social image of whatsapp will show the creative in whatsapp tab		
+	Social Campaign	Twitter campaign copywriting generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	copywriting text will show in facebook tab		
