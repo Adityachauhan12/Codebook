@@ -1,1 +1,12 @@
-https://6ecreativestudio-uat.goindigo.in/
+Subject: Creative Studio – QA Testing Completed
+
+Hi Vishnu Sir,
+
+I have completed functional testing of the Creative Studio application across all major modules — Authentication, Projects, Social Campaigns, Copywriting, Banner, Image Edit, Explore, and 6E-Creatives.
+
+The tested scenarios are working as expected and in line with the BRD. I've attached the detailed test cases covering the steps, expected vs. actual results, and status for your reference.
+
+Please let me know if any further testing is required.
+
+Thanks & regards,
+Aditya
