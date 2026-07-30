@@ -1,8 +1,5 @@
-QA-004	QA-005	QA-006	QA-007	QA-008		
-QA-005	Social Campaign	Whatsapp campaign copywriting generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	copywriting text will show in whatsapp tab		
-QA-006	Social Campaign	Instagram campaign image generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	social image of instagram will show the creative in instagram tab		
-QA-007	Social Campaign	Instagram campaign copywriting generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	copywriting text will show in instagram tab		
-QA-008	Social Campaign	Facebook campaign copywriting generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	copywriting text will show in facebook tab		
-QA-009	Social Campaign	Facebook campaign creative generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	social image of facebook will show the creative in facebook tab		
-QA-010	Social Campaign	Twitter campaign creative generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	social image of whatsapp will show the creative in whatsapp tab		
-	Social Campaign	Twitter campaign copywriting generation	1. click on a project card 2. click on social tab 3. fill the required details and submit	copywriting text will show in facebook tab		
+Message 1 — Offer drop
+✈️ Bags packed, plans set? IndiGo's Monsoon Sale is here!
+Fares from ₹1,499* on 100+ routes across India.
+Book by Sunday. Fly on time, every time. 6E ka wada.
+👉 Book now: goindigo.in
