@@ -1,5 +1,1 @@
-Message 1 — Offer drop
-✈️ Bags packed, plans set? IndiGo's Monsoon Sale is here!
-Fares from ₹1,499* on 100+ routes across India.
-Book by Sunday. Fly on time, every time. 6E ka wada.
-👉 Book now: goindigo.in
+QA-015	Copywriting 	Copywriting text generation	1. click on a project.2. click on copywriting tab. 3. fill the required details and submit
