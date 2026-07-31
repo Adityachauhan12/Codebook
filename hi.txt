@@ -1,12 +1,41 @@
-Subject: Creative Studio – QA Testing Completed
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git status
+On branch dev_aditya
+Your branch is up to date with 'origin/dev_aditya'.
 
-Hi Vishnu Sir,
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+        modified:   backend/agents/creative/agent.py
+        modified:   backend/agents/creative/skill.md
+        modified:   backend/prompts/indigo_brand_guardrails.md
+        new file:   frontend/dist/assets/index-Djz169Pn.js
+        modified:   frontend/src/components/Workspace.tsx
+        modified:   frontend/src/hooks/useCampaignStream.ts
+        modified:   frontend/src/index.css
+        modified:   frontend/src/lib/api.ts
+        modified:   frontend/src/lib/storage.ts
+        modified:   frontend/src/pages/Campaigns.tsx
+        modified:   frontend/src/pages/Chat.tsx
+        modified:   frontend/src/pages/Home.tsx
+        modified:   frontend/src/types.ts
 
-I have completed functional testing of the Creative Studio application across all major modules — Authentication, Projects, Social Campaigns, Copywriting, Banner, Image Edit, Explore, and 6E-Creatives.
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   backend/agents/creative/agent.py
+        modified:   backend/agents/creative/skill.md
+        modified:   backend/prompts/indigo_brand_guardrails.md
+        deleted:    frontend/dist/assets/index-CzDRGmO8.css
+        deleted:    frontend/dist/assets/index-Djz169Pn.js
+        deleted:    frontend/dist/assets/index-Kb7d26uV.js
+        modified:   frontend/dist/index.html
+        modified:   frontend/src/index.css
+        modified:   frontend/src/lib/storage.ts
 
-The tested scenarios are working as expected and in line with the BRD. I've attached the detailed test cases covering the steps, expected vs. actual results, and status for your reference.
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        frontend/dist/assets/index-BJeYSPX7.js
+        frontend/dist/assets/index-C3_6XVAB.css
+        image.png
 
-Please let me know if any further testing is required.
 
-Thanks & regards,
-Aditya
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>    
