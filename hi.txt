@@ -1,202 +1,89 @@
-import type { Brief, CampaignRecord, ChatSSEEvent, SSEEvent } from '../types'
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>npm run build
 
-// Empty by default: the backend serves this bundle from its own origin
-// (Dockerfile copies frontend/dist into backend/static), so relative URLs
-// hit the right API in production, staging, or behind any custom domain.
-//
-// VITE_API_BASE exists only for local dev, where Vite (5173) and the API
-// (8000) are different origins. Keep it in .env.development, NOT .env --
-// Vite loads .env in every mode, so a localhost value there gets compiled
-// into the production bundle and the deployed site calls the user's machine.
-const API_BASE = import.meta.env.VITE_API_BASE ?? ''
+> frontend@0.0.0 build
+> tsc -b && vite build
 
-async function readSSEStream<T>(
-  response: Response,
-  onEvent: (event: T) => void,
-) {
-  if (!response.ok || !response.body) {
-    throw new Error(`Request failed (${response.status})`)
-  }
+vite v8.1.1 building client environment for production...
+✓ 67 modules transformed.
+computing gzip size...
+dist/index.html                                                     0.76 kB │ gzip:  0.41 kB
+dist/assets/ibm-plex-mono-vietnamese-400-normal-DDuiU_S-.woff       5.62 kB
+dist/assets/ibm-plex-mono-cyrillic-ext-400-normal-DMdlQ8Kv.woff     5.82 kB
+dist/assets/ibm-plex-mono-vietnamese-400-normal-BulugwFq.woff2      5.86 kB
+dist/assets/ibm-plex-mono-cyrillic-ext-400-normal-xuaO2J-f.woff2    6.91 kB
+dist/assets/ibm-plex-mono-cyrillic-400-normal-CEL4l2ZJ.woff         7.20 kB
+dist/assets/ibm-plex-mono-cyrillic-400-normal-BSMlKf0J.woff2        8.35 kB
+dist/assets/ibm-plex-mono-latin-ext-400-normal-D3D2R8hC.woff       11.76 kB
+dist/assets/ibm-plex-mono-latin-400-normal-CvHOgSBP.woff           13.14 kB
+dist/assets/ibm-plex-mono-latin-ext-400-normal-BmRBH3aV.woff2      13.34 kB
+dist/assets/ibm-plex-mono-latin-400-normal-DMJ8VG8y.woff2          14.70 kB
+dist/assets/index-BAQgJS8t.css                                     27.18 kB │ gzip:  6.22 kB
+dist/assets/index-zMuIstEQ.js                                     299.81 kB │ gzip: 92.31 kB
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
+✓ built in 1.90s
+npm notice
+npm notice New major version of npm available! 10.9.2 -> 12.0.2
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.0.2
+npm notice To update run: npm install -g npm@12.0.2
+npm notice
 
-  const flush = (raw: string) => {
-    const payload = raw
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith('data:'))
-      .map((l) => l.slice(5).trim())
-      .join('')
-    if (!payload) return
-    onEvent(JSON.parse(payload) as T)
-  }
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>findstr /C:"localhost:8000" dist\assets\*.js
 
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let idx = buffer.indexOf('\n\n')
-    while (idx >= 0) {
-      flush(buffer.slice(0, idx))
-      buffer = buffer.slice(idx + 2)
-      idx = buffer.indexOf('\n\n')
-    }
-  }
-  if (buffer.trim()) flush(buffer)
-}
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>git status
+On branch dev_aditya
+Your branch is up to date with 'origin/dev_aditya'.
 
-export async function sendChatMessage(
-  sessionId: string,
-  message: string,
-  options: {
-    signal?: AbortSignal
-    onEvent: (event: ChatSSEEvent) => void
-  },
-) {
-  const response = await fetch(`${API_BASE}/chat/message`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify({ session_id: sessionId, message }),
-    signal: options.signal,
-  })
-  await readSSEStream<ChatSSEEvent>(response, options.onEvent)
-}
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        deleted:    dist/assets/index-BJeYSPX7.js
+        deleted:    dist/assets/index-C3_6XVAB.css
+        modified:   dist/index.html
+        modified:   src/components/Sidebar.tsx
+        modified:   src/lib/api.ts
 
-export async function streamCampaign(
-  brief: Brief,
-  options: {
-    signal?: AbortSignal
-    onEvent: (event: SSEEvent) => void
-  },
-) {
-  const response = await fetch(`${API_BASE}/campaign/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify(brief),
-    signal: options.signal,
-  })
-  await readSSEStream<SSEEvent>(response, options.onEvent)
-}
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        dist/assets/index-BAQgJS8t.css
+        dist/assets/index-zMuIstEQ.js
 
-export async function refineCampaign(
-  sessionId: string,
-  message: string,
-  currentBrief: Brief,
-  options: {
-    signal?: AbortSignal
-    onEvent: (event: SSEEvent) => void
-  },
-) {
-  const response = await fetch(`${API_BASE}/campaign/refine`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify({ session_id: sessionId, message, current_brief: currentBrief }),
-    signal: options.signal,
-  })
-  await readSSEStream<SSEEvent>(response, options.onEvent)
-}
+no changes added to commit (use "git add" and/or "git commit -a")
 
-/* -------------------------------------------------------------------------- */
-/* Campaign history — server-backed, so every machine sees the same list.      */
-/* The backend has always exposed these; the app previously read only          */
-/* localStorage, which is why each browser showed a different set.             */
-/* -------------------------------------------------------------------------- */
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>git add .
+warning: in the working copy of 'frontend/dist/assets/index-BAQgJS8t.css', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/dist/assets/index-zMuIstEQ.js', LF will be replaced by CRLF the next time Git touches it
 
-export async function fetchCampaigns(signal?: AbortSignal): Promise<CampaignRecord[]> {
-  const response = await fetch(`${API_BASE}/campaigns`, {
-    headers: { Accept: 'application/json' },
-    signal,
-  })
-  if (!response.ok) throw new Error(`Could not load campaigns (${response.status})`)
-  const data = await response.json()
-  return Array.isArray(data) ? (data as CampaignRecord[]) : []
-}
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>git commit -m "Frontend build fix"
+[dev_aditya cba7b926] Frontend build fix
+ 5 files changed, 14 insertions(+), 6 deletions(-)
+ rename frontend/dist/assets/{index-C3_6XVAB.css => index-BAQgJS8t.css} (79%)
+ rename frontend/dist/assets/{index-BJeYSPX7.js => index-zMuIstEQ.js} (98%)
 
-export async function fetchCampaign(
-  campaignId: string,
-  signal?: AbortSignal,
-): Promise<CampaignRecord | null> {
-  const response = await fetch(`${API_BASE}/campaigns/${encodeURIComponent(campaignId)}`, {
-    headers: { Accept: 'application/json' },
-    signal,
-  })
-  if (response.status === 404) return null
-  if (!response.ok) throw new Error(`Could not load campaign (${response.status})`)
-  return (await response.json()) as CampaignRecord
-}
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>git git status
+git: 'git' is not a git command. See 'git --help'.
 
-export async function saveCampaign(campaign: CampaignRecord): Promise<void> {
-  const response = await fetch(`${API_BASE}/campaigns/save`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ campaign }),
-  })
-  if (!response.ok) throw new Error(`Could not save campaign (${response.status})`)
-}
+The most similar command is
+        init
 
-export async function deleteCampaign(campaignId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/campaigns/${encodeURIComponent(campaignId)}`, {
-    method: 'DELETE',
-  })
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`Could not delete campaign (${response.status})`)
-  }
-}
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>ggit status
+'ggit' is not recognized as an internal or external command,
+operable program or batch file.
 
---------------------------------------------------------
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>git status
+On branch dev_aditya
+Your branch is ahead of 'origin/dev_aditya' by 1 commit.
+  (use "git push" to publish your local commits)
 
-import { Link, NavLink } from 'react-router-dom'
-import { BarChart3, CalendarDays, LayoutDashboard, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+nothing to commit, working tree clean
 
-type SidebarProps = {
-  collapsed: boolean
-  onToggle: () => void
-}
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>git push
+To https://github.com/6E-Lab37/marketing-os.git
+ ! [rejected]          dev_aditya -> dev_aditya (fetch first)
+error: failed to push some refs to 'https://github.com/6E-Lab37/marketing-os.git'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
 
-const items = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/history', label: 'History', icon: CalendarDays },
-  { to: '/campaigns', label: 'Campaigns', icon: BarChart3 },
-]
-
-export function Sidebar({ collapsed, onToggle }: SidebarProps) {
-  return (
-    <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}>
-      <div className="sidebar__brand">
-        <Link to="/" className="sidebar__brand-link">
-          {!collapsed && (
-            <span className="sidebar__badge">M</span>
-          )}
-          {!collapsed && (
-            <span>
-              <strong>Marketing OS</strong>
-              <small>Autonomous campaign studio</small>
-            </span>
-          )}
-        </Link>
-        <button className="icon-button" type="button" onClick={onToggle} aria-label="Toggle sidebar">
-          {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-        </button>
-      </div>
-
-      <nav className="sidebar__nav" aria-label="Primary">
-        {items.map((item) => {
-          const Icon = item.icon
-          return (
-            <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav-item ${isActive ? 'is-active' : ''}`}>
-              <Icon size={18} />
-              {!collapsed && <span>{item.label}</span>}
-            </NavLink>
-          )
-        })}
-      </nav>
-
-      <div className="sidebar__foot">
-        {!collapsed && <p>Live SSE campaign pipeline</p>}
-      </div>
-    </aside>
-  )
-}
-----------------------
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>
