@@ -1,2 +1,55 @@
-findstr /N /C:"workspace-resizer" /C:"button--stop" /C:"onStop" frontend\src\components\Workspace.tsx
-findstr /N /C:"workspace-resizer" frontend\src\index.css
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git rebase --continue
+[detached HEAD 9733316d] Frontend build fix
+ 10 files changed, 30 insertions(+), 75 deletions(-)
+ delete mode 100644 frontend/dist/assets/index-BJeYSPX7.js
+ delete mode 100644 frontend/dist/assets/index-BS4QtdXY.js
+ create mode 100644 frontend/dist/assets/index-ByTPmtKo.js
+ delete mode 100644 frontend/dist/assets/index-C3_6XVAB.css
+ create mode 100644 frontend/dist/assets/index-CgZl1oZx.css
+ delete mode 100644 frontend/dist/assets/index-O7uy3o23.css
+Successfully rebased and updated refs/heads/dev_aditya.
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>findstr /C:"localhost:8000" frontend\dist\assets\*.js
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git status
+On branch dev_aditya
+Your branch is ahead of 'origin/dev_aditya' by 1 commit.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git push
+Enumerating objects: 27, done.
+Counting objects: 100% (27/27), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (14/14), done.
+Writing objects: 100% (15/15), 97.17 KiB | 1.45 MiB/s, done.
+Total 15 (delta 10), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (10/10), completed with 10 local objects.
+remote: 
+remote: GitHub found 44 vulnerabilities on 6E-Lab37/marketing-os's default branch (1 critical, 17 high, 20 moderate, 6 low). To find out more, visit:
+remote:      https://github.com/6E-Lab37/marketing-os/security/dependabot
+remote: 
+To https://github.com/6E-Lab37/marketing-os.git
+   469d0e9a..9733316d  dev_aditya -> dev_aditya
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>findstr /N /C:"workspace-resizer" /C:"button--stop" /C:"onStop" frontend\src\components\Workspace.tsx
+16:  onStop?: () => void
+42:export function Workspace({ chat, processing, phase, onSend, onStop, initialPrompt }: Props) {
+201:          {isRunning && onStop ? (
+203:              className="button button--stop"
+205:              onClick={onStop}
+226:          className="workspace-resizer"
+254:          <span className="workspace-resizer__grip" />
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>findstr /N /C:"workspace-resizer" frontend\src\index.css
+450:.workspace-resizer {
+462:.workspace-resizer__grip {
+470:.workspace-resizer:hover .workspace-resizer__grip,
+471:.workspace-resizer:focus-visible .workspace-resizer__grip,
+472:.workspace-grid--dragging .workspace-resizer__grip {
+477:.workspace-resizer:focus-visible {
+487:.workspace-grid--dragging > *:not(.workspace-resizer) {
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>
