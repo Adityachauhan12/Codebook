@@ -1,1 +1,27 @@
-findstr /C:"localhost:8000" frontend\dist\assets\*.js
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>cd ..
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git add -A -- frontend/src frontend/dist
+warning: in the working copy of 'frontend/dist/assets/index-ByTPmtKo.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/dist/assets/index-CgZl1oZx.css', LF will be replaced by CRLF the next time Git touches it
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git rebase --continue
+[detached HEAD 9733316d] Frontend build fix
+ 10 files changed, 30 insertions(+), 75 deletions(-)
+ delete mode 100644 frontend/dist/assets/index-BJeYSPX7.js
+ delete mode 100644 frontend/dist/assets/index-BS4QtdXY.js
+ create mode 100644 frontend/dist/assets/index-ByTPmtKo.js
+ delete mode 100644 frontend/dist/assets/index-C3_6XVAB.css
+ create mode 100644 frontend/dist/assets/index-CgZl1oZx.css
+ delete mode 100644 frontend/dist/assets/index-O7uy3o23.css
+Successfully rebased and updated refs/heads/dev_aditya.
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>findstr /C:"localhost:8000" frontend\dist\assets\*.js
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git status
+On branch dev_aditya
+Your branch is ahead of 'origin/dev_aditya' by 1 commit.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>
