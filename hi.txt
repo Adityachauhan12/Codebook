@@ -1,21 +1,9 @@
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os\frontend>cd ..
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git status                           
+On branch dev_aditya
+Your branch and 'origin/dev_aditya' have diverged,
+and have 1 and 6 different commits each, respectively.
+  (use "git pull" if you want to integrate the remote branch with yours)
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git fetch origin
-remote: Enumerating objects: 22, done.
-remote: Counting objects: 100% (22/22), done.
-remote: Compressing objects: 100% (21/21), done.
-remote: Total 22 (delta 0), reused 0 (delta 0), pack-reused 0 (from 0)
-Unpacking objects: 100% (22/22), 35.61 KiB | 128.00 KiB/s, done.
-From https://github.com/6E-Lab37/marketing-os
-   ff2128ec..469d0e9a  dev_aditya -> origin/dev_aditya
-   8b712943..bc3d9507  dev        -> origin/dev
+nothing to commit, working tree clean
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git log --oneline HEAD..origin/dev_aditya
-469d0e9a (origin/dev_aditya) Merge branch 'dev' into dev_aditya
-8b712943 Merge pull request #31 from 6E-Lab37/dev_suryansh
-e31a2da9 (origin/dev_suryansh) Add campaign cancellation and resizable workspace
-49a2a66a Merge pull request #30 from 6E-Lab37/dev_aditya
-2a17d304 Merge pull request #28 from 6E-Lab37/dev_prompts
-1da6e250 Merge pull request #27 from 6E-Lab37/dev_prompts
-
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git pull --rebase  
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>
