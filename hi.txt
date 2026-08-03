@@ -1,55 +1,1100 @@
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git rebase --continue
-[detached HEAD 9733316d] Frontend build fix
- 10 files changed, 30 insertions(+), 75 deletions(-)
- delete mode 100644 frontend/dist/assets/index-BJeYSPX7.js
- delete mode 100644 frontend/dist/assets/index-BS4QtdXY.js
- create mode 100644 frontend/dist/assets/index-ByTPmtKo.js
- delete mode 100644 frontend/dist/assets/index-C3_6XVAB.css
- create mode 100644 frontend/dist/assets/index-CgZl1oZx.css
- delete mode 100644 frontend/dist/assets/index-O7uy3o23.css
-Successfully rebased and updated refs/heads/dev_aditya.
+import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { X } from 'lucide-react'
+import { Link, useParams } from 'react-router-dom'
+import { loadCampaigns } from '../lib/storage'
+import { fetchCampaign } from '../lib/api'
+import { isIndexedImageRef, resolveIndexedImageRef } from '../lib/indexedStorage'
+import type { CampaignRecord, CreativeOutput } from '../types'
+import { formatCurrency, formatDate } from '../lib/utils'
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>findstr /C:"localhost:8000" frontend\dist\assets\*.js
+function getAlignmentTone(status: string | undefined) {
+  if (status === 'aligned') return 'aligned'
+  if (status === 'warnings') return 'warnings'
+  return 'pending'
+}
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git status
-On branch dev_aditya
-Your branch is ahead of 'origin/dev_aditya' by 1 commit.
-  (use "git push" to publish your local commits)
+function formatMetricKey(key: string) {
+  const cleaned = key.replace(/^target_/, '').replace(/_/g, ' ')
+  if (cleaned.toLowerCase() === 'roas') return 'ROAS'
+  if (cleaned.toLowerCase() === 'cpa') return 'CPA'
+  if (cleaned.toLowerCase() === 'ctr') return 'CTR'
+  if (cleaned.toLowerCase() === 'vtr') return 'VTR'
+  if (cleaned.toLowerCase() === 'reach') return 'Reach'
+  return cleaned.replace(/\b\w/g, (character) => character.toUpperCase())
+}
 
-nothing to commit, working tree clean
+function formatMetricValue(value: unknown): string {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : value.toFixed(2)
+  }
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>git push
-Enumerating objects: 27, done.
-Counting objects: 100% (27/27), done.
-Delta compression using up to 8 threads
-Compressing objects: 100% (14/14), done.
-Writing objects: 100% (15/15), 97.17 KiB | 1.45 MiB/s, done.
-Total 15 (delta 10), reused 0 (delta 0), pack-reused 0 (from 0)
-remote: Resolving deltas: 100% (10/10), completed with 10 local objects.
-remote: 
-remote: GitHub found 44 vulnerabilities on 6E-Lab37/marketing-os's default branch (1 critical, 17 high, 20 moderate, 6 low). To find out more, visit:
-remote:      https://github.com/6E-Lab37/marketing-os/security/dependabot
-remote: 
-To https://github.com/6E-Lab37/marketing-os.git
-   469d0e9a..9733316d  dev_aditya -> dev_aditya
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No'
+  }
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>findstr /N /C:"workspace-resizer" /C:"button--stop" /C:"onStop" frontend\src\components\Workspace.tsx
-16:  onStop?: () => void
-42:export function Workspace({ chat, processing, phase, onSend, onStop, initialPrompt }: Props) {
-201:          {isRunning && onStop ? (
-203:              className="button button--stop"
-205:              onClick={onStop}
-226:          className="workspace-resizer"
-254:          <span className="workspace-resizer__grip" />
+  if (Array.isArray(value)) {
+    return value.map((item) => formatMetricValue(item)).join(', ')
+  }
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>findstr /N /C:"workspace-resizer" frontend\src\index.css
-450:.workspace-resizer {
-462:.workspace-resizer__grip {
-470:.workspace-resizer:hover .workspace-resizer__grip,
-471:.workspace-resizer:focus-visible .workspace-resizer__grip,
-472:.workspace-grid--dragging .workspace-resizer__grip {
-477:.workspace-resizer:focus-visible {
-487:.workspace-grid--dragging > *:not(.workspace-resizer) {
+  if (value && typeof value === 'object') {
+    return Object.entries(value)
+      .map(([entryKey, entryValue]) => `${formatMetricKey(entryKey)}: ${formatMetricValue(entryValue)}`)
+      .join(' · ')
+  }
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\Marketing_Repo_Nwe\Marketing os\marketing-os>
+  return String(value ?? '—')
+}
+
+function formatChannelWeight(weight: unknown) {
+  if (typeof weight !== 'number') return 'Allocation set'
+  return `${weight}%`
+}
+
+function getFinanceChannelName(channel: unknown, index: number): string {
+  if (typeof channel === 'string') return channel
+
+  if (channel && typeof channel === 'object') {
+    const item = channel as Record<string, unknown>
+    return String(item.channel ?? item.name ?? `Channel ${index + 1}`)
+  }
+
+  return `Channel ${index + 1}`
+}
+
+function formatFinanceChannel(channel: unknown, index: number): string {
+  if (typeof channel === 'string') return channel
+
+  if (channel && typeof channel === 'object') {
+    const item = channel as Record<string, unknown>
+    const channelName = String(item.channel ?? item.name ?? `Channel ${index + 1}`)
+    const allocation =
+      typeof item.total_allocation === 'number'
+        ? ` · ${formatCurrency(item.total_allocation)}`
+        : ''
+
+    return `${channelName}${allocation}`
+  }
+
+  return `Channel ${index + 1}`
+}
+export function CampaignDetail() {
+  const { campaignId } = useParams()
+  const [resolvedImageUrls, setResolvedImageUrls] = useState<Record<string, string | null>>({})
+  const [selectedOutput, setSelectedOutput] = useState<CreativeOutput | null>(null)
+
+  const localCampaign = useMemo(() => {
+    if (!campaignId) return null
+    const storedCampaigns = loadCampaigns()
+    return storedCampaigns.find((item) => item.id === campaignId) ?? null
+  }, [campaignId])
+
+  // A campaign generated on another machine is not in this browser's storage,
+  // so fall back to the server before deciding it does not exist.
+  const [remoteCampaign, setRemoteCampaign] = useState<CampaignRecord | null>(null)
+  const [isFetching, setIsFetching] = useState(!localCampaign)
+
+  useEffect(() => {
+    if (!campaignId || localCampaign) {
+      setIsFetching(false)
+      return
+    }
+
+    const controller = new AbortController()
+    setIsFetching(true)
+
+    fetchCampaign(campaignId, controller.signal)
+      .then((found) => setRemoteCampaign(found))
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === 'AbortError') return
+        setRemoteCampaign(null)
+      })
+      .finally(() => setIsFetching(false))
+
+    return () => controller.abort()
+  }, [campaignId, localCampaign])
+
+  const campaign = localCampaign ?? remoteCampaign
+
+  useEffect(() => {
+    const outputs = campaign?.summary.creative?.outputs ?? []
+    const refs = outputs
+      .flatMap((output) => [output.image_url, ...(output.image_urls ?? [])])
+      .filter((value): value is string => typeof value === 'string' && isIndexedImageRef(value))
+
+    if (refs.length === 0) return
+
+    let cancelled = false
+    void Promise.all(refs.map(async (ref) => ({ ref, url: await resolveIndexedImageRef(ref) }))).then((entries) => {
+      if (cancelled) return
+      setResolvedImageUrls((current) => {
+        const next = { ...current }
+        for (const entry of entries) {
+          next[entry.ref] = entry.url
+        }
+        return next
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [campaign?.id, campaign?.summary.creative?.outputs])
+
+  if (!campaign && isFetching) {
+    return (
+      <section className="empty-route">
+        <h2>Loading campaign…</h2>
+        <p>Fetching this plan from the server.</p>
+      </section>
+    )
+  }
+
+  if (!campaign) {
+    return (
+      <section className="empty-route">
+        <h2>Campaign not found</h2>
+        <p>It is not on this device and the server has no record of it.</p>
+        <Link className="button button--secondary" to="/campaigns">
+          Back to campaigns
+        </Link>
+      </section>
+    )
+  }
+
+  const channels = [...(campaign.summary.channels ?? [])].sort((left, right) => {
+    const leftWeight = typeof left.weight === 'number' ? left.weight : -1
+    const rightWeight = typeof right.weight === 'number' ? right.weight : -1
+    return rightWeight - leftWeight
+  })
+  const channelWeightTotal = channels.reduce((sum, channel) => sum + (typeof channel.weight === 'number' ? channel.weight : 0), 0)
+  const channelTargets = Object.entries(
+    campaign.summary.channel_targets && typeof campaign.summary.channel_targets === 'object'
+      ? campaign.summary.channel_targets
+      : {}
+  )
+  const finance = campaign.summary.finance
+  const financeChannels = Array.isArray(finance?.channels) ? finance.channels : []
+  const reallocationRules = Array.isArray(finance?.reallocation_rules) ? finance.reallocation_rules : []
+  const financeValidation = finance?.validation
+  const financeValidationTone = financeValidation?.is_valid === false ? 'warnings' : financeValidation?.is_valid ? 'aligned' : 'pending'
+  const creativeOutputs: CreativeOutput[] = (campaign.summary.creative?.outputs ?? []).flatMap((output) => {
+    const urls = output.image_urls?.length
+      ? output.image_urls
+      : output.image_url
+        ? [output.image_url]
+        : []
+    if (!urls.length) return [output]
+    return urls.map((url, index) => ({
+      ...output,
+      image_url: url,
+      image_urls: [url],
+      // Each image comes from its own prompt variant.
+      prompt: output.used_prompts?.[index] ?? output.prompt,
+      variant_index: index + 1,
+    }))
+  })
+
+  const getRenderableImageUrl = (value: string | null | undefined) => {
+    if (!value) return null
+    if (!isIndexedImageRef(value)) return value
+    return resolvedImageUrls[value] ?? null
+  }
+  const selectedImageUrl = getRenderableImageUrl(selectedOutput?.image_url ?? null)
+
+  useEffect(() => {
+    if (!selectedOutput) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedOutput(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectedOutput])
+
+  return (
+    <section className="page-stack">
+      <header className="page-header">
+        <div>
+          <span className="eyebrow">Campaign detail</span>
+          <h1>{campaign.summary.product ?? campaign.prompt}</h1>
+          <p>{campaign.summary.objective ?? campaign.prompt}</p>
+        </div>
+        <Link className="button button--secondary" to="/campaigns">
+          Back to campaigns
+        </Link>
+      </header>
+
+      <div className="detail-hero">
+        <div className="detail-hero__main">
+          <div className={`campaign-card__badge campaign-card__badge--${getAlignmentTone(campaign.summary.alignment_status)}`}>
+            {campaign.summary.alignment_status ?? 'pending'}
+          </div>
+          <span>{campaign.summary.primary_kpi ?? 'KPI pending'}</span>
+          <strong>{formatCurrency(campaign.summary.total_budget)}</strong>
+          <p>{campaign.summary.objective ?? campaign.prompt}</p>
+          <div className="detail-hero__chips">
+            <span>{campaign.summary.archetype ?? 'unknown'}</span>
+            <span>Revisions {campaign.summary.revision_count ?? 0}</span>
+            <span>Updated {formatDate(campaign.updatedAt)}</span>
+          </div>
+        </div>
+
+        <div className="detail-hero__meta">
+          <div>
+            <span>Primary KPI</span>
+            <strong>{campaign.summary.primary_kpi ?? 'pending'}</strong>
+          </div>
+          <div>
+            <span>Status</span>
+            <strong>{campaign.summary.alignment_status ?? 'pending'}</strong>
+          </div>
+          <div>
+            <span>Archetype</span>
+            <strong>{campaign.summary.archetype ?? 'unknown'}</strong>
+          </div>
+          <div>
+            <span>Budget</span>
+            <strong>{formatCurrency(campaign.summary.total_budget)}</strong>
+          </div>
+          <div>
+            <span>Updated</span>
+            <strong>{formatDate(campaign.updatedAt)}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div className="detail-grid">
+        <section className="detail-card">
+          <span className="eyebrow">Channel mix</span>
+          <div className="detail-list channel-mix">
+            {channels.length === 0 ? (
+              <p className="muted">No channel allocation was captured.</p>
+            ) : (
+              channels.map((channel, index) => {
+                const weight = typeof channel.weight === 'number' ? channel.weight : 0
+                const channelName = String(channel.name ?? `Channel ${index + 1}`)
+
+                return (
+                  <div key={`${campaign.id}-channel-${index}`} className="detail-row channel-mix__row">
+                    <div className="channel-mix__header">
+                      <strong>{channelName}</strong>
+                      <span>{formatChannelWeight(channel.weight)}</span>
+                    </div>
+                    <div className="channel-mix__bar-track" aria-hidden="true">
+                      <div className="channel-mix__bar" style={{ width: `${Math.max(0, Math.min(weight, 100))}%` }} />
+                    </div>
+                    <div className="channel-mix__footer">
+                      <span>{weight}% of mix</span>
+                      <span>{channelWeightTotal > 0 ? `${Math.round((weight / channelWeightTotal) * 100)}% of allocated budget` : 'No allocation total'}</span>
+                    </div>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </section>
+
+        <section className="detail-card">
+          <span className="eyebrow">Finance</span>
+          <div className="detail-list finance-stack">
+            <div className="detail-row finance-stack__summary">
+              <strong>Reserve buffer</strong>
+              <span>{formatCurrency(finance?.reserve_buffer)}</span>
+            </div>
+
+            <div className="detail-row">
+              <strong>Coverage channels</strong>
+              <div className="finance-chips">
+                {financeChannels.length === 0 ? (
+                  <span className="muted">No coverage channels were captured.</span>
+                ) : (
+                  financeChannels.map((channel, index) => (
+                    <span
+                      key={`${campaign.id}-finance-channel-${getFinanceChannelName(channel, index)}-${index}`}
+                      className="finance-chip"
+                    >
+                      {formatFinanceChannel(channel, index)}
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="detail-row">
+              <strong>Reallocation rules</strong>
+              {reallocationRules.length === 0 ? (
+                <span className="muted">No reallocation rules were captured.</span>
+              ) : (
+                <ul className="finance-list">
+                  {reallocationRules.map((rule, index) => (
+                    <li key={`${campaign.id}-reallocation-${index}`}>{formatMetricValue(rule)}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className={`detail-row validation-pill validation-pill--${financeValidationTone}`}>
+              <strong>Validation</strong>
+              <span>{financeValidation?.is_valid === false ? 'Needs review' : financeValidation?.is_valid ? 'Validated' : 'Pending validation'}</span>
+              {financeValidation ? <small>{formatMetricValue(financeValidation)}</small> : null}
+            </div>
+          </div>
+        </section>
+
+        <section className="detail-card detail-card--wide">
+          <span className="eyebrow">Channel KPIs</span>
+          <div className="detail-list kpi-stack kpi-stack--grid">
+            {channelTargets.length === 0 ? (
+              <p className="muted">No per-channel KPI targets were captured.</p>
+            ) : (
+              channelTargets.map(([channel, target]) => (
+                <div key={channel} className="detail-row kpi-card">
+                  <div className="kpi-card__header">
+                    <strong>{channel}</strong>
+                    <span>{Object.keys(target).length} target{Object.keys(target).length === 1 ? '' : 's'}</span>
+                  </div>
+                  <dl className="kpi-table">
+                    {Object.entries(target).map(([metric, value]) => (
+                      <div key={`${channel}-${metric}`} className="kpi-table__row">
+                        <dt>{formatMetricKey(metric)}</dt>
+                        <dd>{formatMetricValue(value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section className="detail-card detail-card--wide">
+          <span className="eyebrow">Creatives</span>
+          <div className="detail-list creative-grid">
+            {creativeOutputs.length === 0 ? (
+              <p className="muted">No creative assets were captured for this campaign.</p>
+            ) : (
+              creativeOutputs.map((output, index) => {
+                const imageUrl = getRenderableImageUrl(output.image_url ?? null)
+                return (
+                  <article
+                    key={`${campaign.id}-${output.channel}-${output.variant_index ?? index}`}
+                    className="creative-card detail-row"
+                  >
+                    {imageUrl ? (
+                      <button type="button" className="creative-card__preview" onClick={() => setSelectedOutput(output)}>
+                        <img
+                          src={imageUrl}
+                          alt={`${output.channel} ${output.format ?? ''} creative`}
+                          className="creative-card__image"
+                        />
+                      </button>
+                    ) : (
+                      <div className="creative-card__media creative-card__placeholder">
+                        <p className="muted" style={{ margin: 0 }}>Preview unavailable</p>
+                      </div>
+                    )}
+                    <div className="creative-card__meta">
+                      <div>
+                        <div className="creative-card__title">
+                          {output.channel}
+                        </div>
+
+                        {output.format && (
+                          <div className="creative-card__format">
+                            {output.format}
+                          </div>
+                        )}
+
+                        {output.variant_index && (
+                          <div className="creative-card__format">
+                            Image {output.variant_index}
+                          </div>
+                        )}
+                      </div>
+                      <span>{output.status}</span>
+                    </div>
+                    {output.error_message ? <p className="creative-card__error">{output.error_message}</p> : null}
+                  </article>
+                )
+              })
+            )}
+          </div>
+        </section>
+      </div>
+
+      {selectedOutput && selectedImageUrl && typeof document !== 'undefined' && createPortal(
+        <div className="creative-modal" role="dialog" aria-modal="true" aria-label="Creative preview" onClick={() => setSelectedOutput(null)}>
+          <div className="creative-modal__surface" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="creative-modal__close"
+              onClick={() => setSelectedOutput(null)}
+              aria-label="Close creative preview"
+            >
+              <X size={16} />
+            </button>
+            <div className="creative-modal__media">
+              <img src={selectedImageUrl} alt={`${selectedOutput.channel} ${selectedOutput.format ?? ''} creative`} />
+            </div>
+            <div className="creative-modal__body">
+              <div className="creative-modal__header">
+                <div>
+                  <span className="eyebrow">Creative preview</span>
+                  <h3>
+                    {selectedOutput.channel}
+                    {selectedOutput.format ? ` · ${selectedOutput.format}` : ''}
+                    {selectedOutput.variant_index ? ` · Image ${selectedOutput.variant_index}` : ''}
+                  </h3>
+                </div>
+                <span>{selectedOutput.status}</span>
+              </div>
+              {selectedOutput.headline && (
+                <div className="creative-modal__prompt">
+                  <strong>Headline</strong>
+                  <p>{selectedOutput.headline}</p>
+                </div>
+              )}
+
+              {selectedOutput.concept && (
+                <div className="creative-modal__prompt">
+                  <strong>Concept</strong>
+                  <p>{selectedOutput.concept}</p>
+                </div>
+              )}
+
+              <div className="creative-modal__prompt">
+                <strong>Prompt</strong>
+                <p>{selectedOutput.prompt ?? 'Prompt not available for this asset.'}</p>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </section>
+  )
+}
+-------------------------------------------------
+
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { BadgeCheck, CircleDot, Clock, ImageOff, X } from 'lucide-react'
+import type { CreativeOutput, PlanData, ProcessingSnapshot } from '../types'
+import { formatCurrency } from '../lib/utils'
+import { isIndexedImageRef, resolveIndexedImageRef } from '../lib/indexedStorage'
+
+type Props = {
+  processing: ProcessingSnapshot
+}
+
+function ConfidenceBadge({ value }: { value?: string }) {
+  const learned = value === 'learned'
+  return (
+    <span
+      style={{
+        fontSize: '0.65rem',
+        fontWeight: 600,
+        padding: '2px 6px',
+        borderRadius: '4px',
+        background: learned ? '#dcfce7' : '#f3f4f6',
+        color: learned ? '#16a34a' : '#6b7280',
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+      }}
+    >
+      {learned ? 'Learned' : 'Estimated'}
+    </span>
+  )
+}
+
+function WeightBar({ weight }: { weight: number }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={{ flex: 1, background: '#f3f4f6', borderRadius: '4px', height: '6px' }}>
+        <div
+          style={{
+            width: `${weight}%`,
+            background: '#2563eb',
+            borderRadius: '4px',
+            height: '6px',
+            transition: 'width 0.5s ease',
+          }}
+        />
+      </div>
+      <span style={{ fontSize: '0.75rem', color: '#6b7280', minWidth: '32px' }}>{weight}%</span>
+    </div>
+  )
+}
+
+function SectionHeader({ title, filled }: { title: string; filled: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+      {filled
+        ? <BadgeCheck size={15} color="#16a34a" />
+        : <CircleDot size={15} color="#d1d5db" />}
+      <h3 style={{ margin: 0, fontSize: '0.8rem', fontWeight: 700, color: filled ? '#111' : '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        {title}
+      </h3>
+    </div>
+  )
+}
+
+const ARCHETYPE_LABELS: Record<string, string> = {
+  A: 'High-intent transactional',
+  B: 'Discovery / considered',
+  C: 'E-commerce catalog',
+  D: 'Gifting / occasion',
+}
+
+function StrategySection({ planData }: { planData: PlanData }) {
+  const { archetype, archetype_reason, channels } = planData
+  const filled = !!(archetype || channels?.length)
+
+  return (
+    <div className="panel-section">
+      <SectionHeader title="Strategy" filled={filled} />
+      {!filled ? (
+        <p className="muted" style={{ fontSize: '0.8rem' }}>Waiting for GTM agent...</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {archetype && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Archetype</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', background: '#eff6ff', color: '#1d4ed8', padding: '2px 10px', borderRadius: '6px' }}>
+                  {ARCHETYPE_LABELS[archetype] ?? archetype}
+                </span>
+              </div>
+              {archetype_reason && (
+                <p style={{ fontSize: '0.72rem', color: '#6b7280', margin: 0 }}>{archetype_reason}</p>
+              )}
+            </div>
+          )}
+          {channels && channels.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {channels.map((ch) => (
+                <div key={ch.name} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{ch.name}</span>
+                    <span style={{ fontSize: '0.7rem', color: '#6b7280', textTransform: 'uppercase' }}>{ch.priority}</span>
+                  </div>
+                  <WeightBar weight={ch.weight} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TargetsSection({ planData }: { planData: PlanData }) {
+  const { primary_kpi, channel_targets } = planData
+  const filled = !!(primary_kpi || channel_targets)
+
+  return (
+    <div className="panel-section">
+      <SectionHeader title="Performance Targets" filled={filled} />
+      {!filled ? (
+        <p className="muted" style={{ fontSize: '0.8rem' }}>Waiting for Metrics agent...</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {primary_kpi && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+              <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Primary KPI</span>
+              <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>{primary_kpi}</span>
+            </div>
+          )}
+          {channel_targets && (
+            <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ color: '#9ca3af' }}>
+                  <th style={{ textAlign: 'left', padding: '4px 0', fontWeight: 600 }}>Channel</th>
+                  <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 600 }}>ROAS</th>
+                  <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 600 }}>CPA</th>
+                  <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 600 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(channel_targets).map(([ch, t]) => (
+                  <tr key={ch} style={{ borderTop: '1px solid #f3f4f6' }}>
+                    <td style={{ padding: '6px 0', fontWeight: 500 }}>{ch}</td>
+                    <td style={{ textAlign: 'right', padding: '6px 0', color: '#374151' }}>{t.target_roas ?? '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '6px 0', color: '#374151' }}>{t.target_cpa ? `₹${t.target_cpa}` : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '6px 0' }}>
+                      <ConfidenceBadge value={t.confidence as string} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BudgetSection({ planData }: { planData: PlanData }) {
+  const { finance } = planData
+  const filled = !!finance
+
+  return (
+    <div className="panel-section">
+      <SectionHeader title="Budget Allocation" filled={filled} />
+      {!filled ? (
+        <p className="muted" style={{ fontSize: '0.8rem' }}>Waiting for Finance agent...</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {finance.reserve_buffer && (
+            <div style={{ fontSize: '0.75rem', color: '#6b7280', padding: '6px 10px', background: '#fafafa', borderRadius: '6px', border: '1px solid #f3f4f6' }}>
+              Reserve: <strong style={{ color: '#111' }}>{formatCurrency(finance.reserve_buffer.amount)}</strong> ({finance.reserve_buffer.percent}%)
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {finance.channels.map((ch) => (
+              <div key={ch.channel} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{ch.channel}</span>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{formatCurrency(ch.total_allocation)}</span>
+                </div>
+                <div style={{ fontSize: '0.7rem', color: '#9ca3af' }}>
+                  {formatCurrency(ch.daily_cap)} / day
+                  {ch.reasoning && <span> · {ch.reasoning}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StatusBadge({ status }: { status: CreativeOutput['status'] }) {
+  const styles: Record<string, { bg: string; color: string; label: string }> = {
+    success: { bg: '#dcfce7', color: '#16a34a', label: 'Generated' },
+    error:   { bg: '#fee2e2', color: '#dc2626', label: 'Failed' },
+    pending: { bg: '#f3f4f6', color: '#6b7280', label: 'Pending' },
+  }
+  const s = styles[status] ?? styles.pending
+  return (
+    <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '2px 6px', borderRadius: '4px', background: s.bg, color: s.color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      {s.label}
+    </span>
+  )
+}
+
+function CreativeSkeletonCard() {
+  return (
+    <div className="creative-card creative-card--loading" aria-hidden="true">
+      <div className="creative-card__media creative-card__media--loading" />
+      <div className="creative-card__line shimmer-block" />
+      <div className="creative-card__line creative-card__line--short shimmer-block" />
+    </div>
+  )
+}
+
+function CreativeSection({ planData, activeAgent }: { planData: PlanData; activeAgent: string | null }) {
+  const creative = planData.creative
+  const isGenerating = activeAgent === 'creative'
+  const filled = !!(creative?.outputs?.length || creative?.summary)
+  const [selectedOutput, setSelectedOutput] = useState<CreativeOutput | null>(null)
+  const [resolvedImageUrls, setResolvedImageUrls] = useState<Record<string, string | null>>({})
+
+  useEffect(() => {
+    const outputs = creative?.outputs ?? []
+    const refs = outputs
+    .flatMap((output) => [
+      output.image_url,
+      ...(output.image_urls ?? []),
+    ])
+    .filter(
+      (value): value is string =>
+        typeof value === 'string' && isIndexedImageRef(value),
+    )
+
+    if (refs.length === 0) return
+
+    let cancelled = false
+    void Promise.all(refs.map(async (ref) => ({ ref, url: await resolveIndexedImageRef(ref) }))).then((entries) => {
+      if (cancelled) return
+      setResolvedImageUrls((current) => {
+        const next = { ...current }
+        for (const entry of entries) {
+          next[entry.ref] = entry.url
+        }
+        return next
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [creative?.outputs])
+
+  const getRenderableImageUrl = (value: string | null | undefined) => {
+    if (!value) return null
+    if (!isIndexedImageRef(value)) return value
+    return resolvedImageUrls[value] ?? null
+  }
+  const displayOutputs: CreativeOutput[] = (
+    creative?.outputs ?? []
+  ).flatMap((output) => {
+    const imageUrls = output.image_urls?.length
+      ? output.image_urls
+      : output.image_url
+        ? [output.image_url]
+        : []
+
+    if (!imageUrls.length) return [output]
+
+    return imageUrls.map((imageUrl, index) => ({
+      ...output,
+      image_url: imageUrl,
+      image_urls: [imageUrl],
+      // Each image comes from its own prompt variant, so attribute the real one
+      // rather than repeating the channel's first prompt on every card.
+      prompt: output.used_prompts?.[index] ?? output.prompt,
+      variant_index: index + 1,
+    }))
+  })
+
+  const selectedImageUrl = getRenderableImageUrl(selectedOutput?.image_url)
+  const visibleOutputs = displayOutputs.filter(
+    (output) => output.status !== 'pending',
+  )
+  const isLoadingGrid = isGenerating && (!creative?.outputs?.length || creative.outputs.some((output) => output.status === 'pending'))
+  const skeletonCount = Math.max(3, creative?.planning?.length ?? 0)
+  const creativeSummary = creative?.summary
+  const creativePlanning = creative?.planning ?? []
+
+  useEffect(() => {
+    if (!selectedOutput) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedOutput(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectedOutput])
+
+  return (
+    <div className="panel-section">
+      <SectionHeader title="Creative Assets" filled={filled} />
+      {!filled && !isGenerating && !creative?.planning && (
+        <p className="muted" style={{ fontSize: '0.8rem' }}>Waiting for Creative agent...</p>
+      )}
+      {!filled && isGenerating && creativePlanning.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <p style={{ fontSize: '0.78rem', color: '#6b7280', margin: 0 }}>Generating banners for:</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {creativePlanning.map((ch) => (
+              <span key={ch} style={{ fontSize: '0.72rem', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: '#eff6ff', color: '#1d4ed8' }}>{ch}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {(filled || isLoadingGrid) && (
+        <div style={{ display: 'grid', gap: '10px' }}>
+          {creativeSummary && (
+            <div style={{ fontSize: '0.72rem', color: '#6b7280', padding: '5px 10px', background: '#fafafa', borderRadius: '6px', border: '1px solid #f3f4f6' }}>
+              {creativeSummary.total_images ??
+                visibleOutputs.filter(
+                  (output) => output.status === 'success',
+                ).length}{' '}
+              images generated
+
+              {(creativeSummary.failed_channels ??
+                creativeSummary.failed ??
+                0) > 0 && (
+                <span style={{ color: '#dc2626' }}>
+                  {' '}·{' '}
+                  {creativeSummary.failed_channels ??
+                    creativeSummary.failed}{' '}
+                  channel(s) failed
+                </span>
+              )}
+            </div>
+          )}
+          <div className="creative-grid">
+            {visibleOutputs.map((out, i) => (
+              <div
+                key={`${out.channel}-${out.variant_index ?? i}`}
+                className="creative-card"
+              >
+                {getRenderableImageUrl(out.image_url) ? (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOutput(out)}
+                    className="creative-card__preview"
+                  >
+                    <img
+                      src={getRenderableImageUrl(out.image_url) ?? undefined}
+                      alt={`${out.channel} ${out.format ?? ''} banner`}
+                      className="creative-card__image"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                    />
+                  </button>
+                ) : out.status === 'success' ? (
+                  <div className="creative-card__media creative-card__placeholder creative-card__placeholder--success">
+                    <BadgeCheck size={14} />
+                    Asset ready — no preview URL
+                  </div>
+                ) : (
+                  <div className="creative-card__media creative-card__placeholder">
+                    <ImageOff size={20} />
+                  </div>
+                )}
+                <div className="creative-card__meta">
+                 <div>
+                    <div className="creative-card__title">
+                      {out.channel}
+                    </div>
+
+                    {out.format && (
+                      <div className="creative-card__format">
+                        {out.format}
+                      </div>
+                    )}
+
+                    {out.variant_index && (
+                      <div className="creative-card__format">
+                        Image {out.variant_index}
+                      </div>
+                    )}
+                  </div>
+                  <div className="creative-card__actions">
+                    <StatusBadge status={out.status} />
+                    {getRenderableImageUrl(out.image_url) && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedOutput(out)}
+                        className="creative-card__view"
+                        aria-label={`Open ${out.channel} creative preview`}
+                      >
+                        <span>View</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {out.status === 'error' && out.error_message && (
+                  <p className="creative-card__error">{out.error_message}</p>
+                )}
+              </div>
+            ))}
+            {isLoadingGrid && Array.from({ length: skeletonCount }).map((_, index) => (
+              <CreativeSkeletonCard key={`creative-skeleton-${index}`} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {selectedOutput && selectedImageUrl && typeof document !== 'undefined' && createPortal(
+        <div className="creative-modal" role="dialog" aria-modal="true" aria-label="Creative preview" onClick={() => setSelectedOutput(null)}>
+          <div className="creative-modal__surface" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="creative-modal__close"
+              onClick={() => setSelectedOutput(null)}
+              aria-label="Close creative preview"
+            >
+              <X size={16} />
+            </button>
+
+            <div className="creative-modal__media">
+              <img
+                src={selectedImageUrl}
+                alt={`${selectedOutput.channel} ${selectedOutput.format ?? ''} banner`}
+              />
+            </div>
+
+            <div className="creative-modal__body">
+              <div className="creative-modal__header">
+                <div>
+                  <span className="eyebrow">Creative preview</span>
+                  <h3>
+                    {selectedOutput.channel}
+                    {selectedOutput.format
+                      ? ` · ${selectedOutput.format}`
+                      : ''}
+                    {selectedOutput.variant_index
+                      ? ` · Image ${selectedOutput.variant_index}`
+                      : ''}
+                  </h3>
+                </div>
+                <StatusBadge status={selectedOutput.status} />
+              </div>
+
+              {selectedOutput.headline && (
+                <div className="creative-modal__prompt">
+                  <strong>Headline</strong>
+                  <p>{selectedOutput.headline}</p>
+                </div>
+              )}
+
+              {selectedOutput.concept && (
+                <div className="creative-modal__prompt">
+                  <strong>Concept</strong>
+                  <p>{selectedOutput.concept}</p>
+                </div>
+              )}
+
+              <div className="creative-modal__prompt">
+                <strong>Prompt</strong>
+                <p>{selectedOutput.prompt ?? 'Prompt not available for this asset.'}</p>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
+export function ProcessingPane({ processing }: Props) {
+  const { activeAgent, agentStatus, events, planData } = processing
+  const allUpdates = events.filter((e) => e.kind === 'update')
+
+  const activeLabel: Record<string, string> = {
+    gtm:          'Crafting go-to-market strategy',
+    metrics:      'Setting performance targets',
+    finance:      'Allocating your budget',
+    creative:     'Generating banner assets',
+    orchestrator: 'Coordinating agents',
+    summary:      'Writing campaign summary',
+  }
+
+  const trackedAgents = ['gtm', 'metrics', 'finance', 'creative']
+  const agentsTotal = trackedAgents.length
+
+  const agentsDone = processing.finalSummary
+    ? agentsTotal
+    : trackedAgents.filter(
+        (agent) => agentStatus[agent] === 'done',
+      ).length
+
+  return (
+    <section className="panel panel--processing">
+      <div className="panel__header">
+        <div>
+          <span className="eyebrow">Live plan</span>
+          <h2>Campaign being built</h2>
+        </div>
+        <div className={`status-pill ${processing.error ? 'status-pill--error' : ''}`}>
+          {activeAgent ? (
+            <>
+              <Clock size={13} />
+              <span>{activeLabel[activeAgent] ?? activeAgent}</span>
+            </>
+          ) : agentsDone > 0 ? (
+            <>
+              <BadgeCheck size={13} />
+              <span>{agentsDone}/{agentsTotal} agents done</span>
+            </>
+          ) : (
+            <span>Waiting to start</span>
+          )}
+        </div>
+      </div>
+
+      {allUpdates.length > 0 && (
+        <div className="panel-section">
+          <h3 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#9ca3af', marginBottom: '8px' }}>Activity log</h3>
+          <div className="trace-list" style={{ maxHeight: '185px', overflowY: 'auto' }}>
+            {allUpdates.map((event) => (
+              <div key={event.id} className="trace-item">
+                <BadgeCheck size={13} color="#10b981" />
+                <div>
+                  <strong style={{ fontSize: '0.75rem' }}>{event.node}</strong>
+                  <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: 0 }}>{event.summary}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <StrategySection planData={planData} />
+      <TargetsSection planData={planData} />
+      <BudgetSection planData={planData} />
+      <CreativeSection planData={planData} activeAgent={activeAgent} />
+    </section>
+  )
+}
+----------------------------------------------
+
+import { useState } from 'react'
+import { ArrowRight } from 'lucide-react'
+
+type Props = {
+  onSubmit: (value: string) => void
+  busy?: boolean
+}
+
+// Models all five fields the intake agent needs (product, offer, objective, budget,
+// visual direction) so the user's first message answers most of them up front instead
+// of being drawn out one question at a time. The visual direction deliberately shows
+// the brand constraint by example -- no airport or aircraft imagery.
+const EXAMPLE_BRIEF =
+  'Domestic flight sale for IndiGo, fares from ₹1,499, ₹8 lakh budget, ' +
+  'aiming to maximise bookings over a 48-hour window. ' +
+  'Visuals: the moment a trip stops being hypothetical — candid and uncluttered, no posed smiles.'
+
+export function CenteredComposer({ onSubmit, busy }: Props) {
+  const [value, setValue] = useState(EXAMPLE_BRIEF)
+
+  return (
+    <section className="hero-panel pt-4">
+      <div className="hero-panel__copy">
+        {/* <span className="eyebrow">Autonomous marketing platform</span> */}
+        <h1>Start with one prompt. The system turns it into an operating plan.</h1>
+        <p>
+          Enter a campaign brief and the platform will stream strategy, metrics, budget allocation,
+          and banner creative in real time.
+        </p>
+      </div>
+
+      <form
+        className="composer composer--centered"
+        onSubmit={(event) => {
+          event.preventDefault()
+          onSubmit(value.trim())
+        }}
+      >
+        <textarea
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          rows={4}
+          placeholder="What are you selling, what's the offer, what does success look like, what's the budget, and how should the banners feel?"
+          onKeyDown={(event) => {
+            // Enter sends, Shift+Enter makes a new line.
+            // isComposing guards IME input, where Enter confirms a candidate
+            // and must not submit the message.
+            if (event.key !== 'Enter' || event.shiftKey) return
+            if (event.nativeEvent.isComposing) return
+            event.preventDefault()
+            if (busy || !value.trim()) return
+            event.currentTarget.form?.requestSubmit()
+          }}
+        />
+        <div className="composer__actions">
+          <span>Tip: include the product, the offer, your objective, the budget, and how the banners should feel.</span>
+          <button className="button button--primary" type="submit" disabled={busy || !value.trim()}>
+            <span>Start campaign</span>
+            <ArrowRight size={16} />
+          </button>
+        </div>
+      </form>
+    </section>
+  )
+}
