@@ -1,3 +1,1 @@
-winget install --id=Gyan.FFmpeg -e
-
-ffmpeg -version
+No sources defined; add one with 'source add' or reset to defaults with 'source reset'
