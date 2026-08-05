@@ -1,1 +1,6 @@
-node -v && python3 -V && ffmpeg -version | head -1
+
+C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video>node -v && python -V && ffmpeg -version | head -1 
+v22.16.0
+Python 3.12.3
+'ffmpeg' is not recognized as an internal or external command,
+operable program or batch file.
