@@ -1,386 +1,613 @@
+"""The accumulation engine.
 
-(venv) C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server>uvicorn app.main:app --reload --port 8787
-INFO:     Will watch for changes in these directories: ['C:\\Users\\aditya.chauhan2\\Downloads\\marketing-autonomous-video\\server']
-INFO:     Uvicorn running on http://127.0.0.1:8787 (Press CTRL+C to quit)
-INFO:     Started reloader process [20508] using WatchFiles
-INFO:     Started server process [960]
-INFO:     Waiting for application startup.
-2026-08-05T12:36:53 INFO  [video.main] Storage at C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\storage
-2026-08-05T12:36:53 INFO  [video.main]   storyboard  not configured  Set AZURE_OPENAI_BASE_URL, AZURE_OPENAI_KEY and AZURE_OPENAI_DEPLOYMENT_NAME to plan storyboards.
-2026-08-05T12:36:53 INFO  [video.main]   clips       ready           veo-3.1-generate-preview, max 8s per generation
-2026-08-05T12:36:53 INFO  [video.main]   keyframes   not configured  Set VEO_USE_KEYFRAMES=true to lock continuity with generated first frames.
-2026-08-05T12:36:53 INFO  [video.main]   voiceover   not configured  Set AZURE_OPENAI_TTS_DEPLOYMENT_NAME for voiceover. Veo still generates in-scene dialogue without it.
-2026-08-05T12:36:53 INFO  [video.main]   music       not configured  No music generator configured — upload a track instead, or set MUSIC_PROVIDER.
-INFO:     Application startup complete.
-INFO:     127.0.0.1:50711 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50713 - "GET /api/health HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 409, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\applications.py", line 1054, in __call__
-    await super().__call__(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\applications.py", line 113, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 187, in __call__
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 165, in __call__
-    await self.app(scope, receive, _send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\exceptions.py", line 62, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 715, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 735, in app
-    await route.handle(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 288, in handle
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 76, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 73, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 301, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 212, in run_endpoint_function
-    return await dependant.call(**values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\routes\health.py", line 25, in health
-    "available": await ffmpeg_available(),
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\ffmpeg.py", line 486, in ffmpeg_available
-    process = await asyncio.create_subprocess_exec(
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\subprocess.py", line 224, in create_subprocess_exec
-    transport, protocol = await loop.subprocess_exec(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 1744, in subprocess_exec
-    transport = await self._make_subprocess_transport(
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 524, in _make_subprocess_transport
-    raise NotImplementedError
-NotImplementedError
-INFO:     127.0.0.1:52243 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52244 - "GET /api/health HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 409, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\applications.py", line 1054, in __call__
-    await super().__call__(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\applications.py", line 113, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 187, in __call__
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 165, in __call__
-    await self.app(scope, receive, _send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\exceptions.py", line 62, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 715, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 735, in app
-    await route.handle(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 288, in handle
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 76, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 73, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 301, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 212, in run_endpoint_function
-    return await dependant.call(**values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\routes\health.py", line 25, in health
-    "available": await ffmpeg_available(),
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\ffmpeg.py", line 486, in ffmpeg_available
-    process = await asyncio.create_subprocess_exec(
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\subprocess.py", line 224, in create_subprocess_exec
-    transport, protocol = await loop.subprocess_exec(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 1744, in subprocess_exec
-    transport = await self._make_subprocess_transport(
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 524, in _make_subprocess_transport
-    raise NotImplementedError
-NotImplementedError
-INFO:     127.0.0.1:57393 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57395 - "GET /api/health HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 409, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\applications.py", line 1054, in __call__
-    await super().__call__(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\applications.py", line 113, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 187, in __call__
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 165, in __call__
-    await self.app(scope, receive, _send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\exceptions.py", line 62, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 715, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 735, in app
-    await route.handle(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 288, in handle
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 76, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 73, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 301, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 212, in run_endpoint_function
-    return await dependant.call(**values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\routes\health.py", line 25, in health
-    "available": await ffmpeg_available(),
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\ffmpeg.py", line 486, in ffmpeg_available
-    process = await asyncio.create_subprocess_exec(
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\subprocess.py", line 224, in create_subprocess_exec
-    transport, protocol = await loop.subprocess_exec(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 1744, in subprocess_exec
-    transport = await self._make_subprocess_transport(
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 524, in _make_subprocess_transport
-    raise NotImplementedError
-NotImplementedError
-INFO:     127.0.0.1:57398 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57399 - "GET /api/health HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 409, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\applications.py", line 1054, in __call__
-    await super().__call__(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\applications.py", line 113, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 187, in __call__
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 165, in __call__
-    await self.app(scope, receive, _send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\exceptions.py", line 62, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 715, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 735, in app
-    await route.handle(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 288, in handle
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 76, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 73, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 301, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 212, in run_endpoint_function
-    return await dependant.call(**values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\routes\health.py", line 25, in health
-    "available": await ffmpeg_available(),
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\ffmpeg.py", line 486, in ffmpeg_available
-    process = await asyncio.create_subprocess_exec(
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\subprocess.py", line 224, in create_subprocess_exec
-    transport, protocol = await loop.subprocess_exec(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 1744, in subprocess_exec
-    transport = await self._make_subprocess_transport(
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 524, in _make_subprocess_transport
-    raise NotImplementedError
-NotImplementedError
-INFO:     127.0.0.1:52601 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52602 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52603 - "GET /api/health HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 409, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\applications.py", line 1054, in __call__
-    await super().__call__(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\applications.py", line 113, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 187, in __call__
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 165, in __call__
-    await self.app(scope, receive, _send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\exceptions.py", line 62, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 715, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 735, in app
-    await route.handle(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 288, in handle
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 76, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 73, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 301, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 212, in run_endpoint_function
-    return await dependant.call(**values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\routes\health.py", line 25, in health
-    "available": await ffmpeg_available(),
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\ffmpeg.py", line 486, in ffmpeg_available
-    process = await asyncio.create_subprocess_exec(
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\subprocess.py", line 224, in create_subprocess_exec
-    transport, protocol = await loop.subprocess_exec(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 1744, in subprocess_exec
-    transport = await self._make_subprocess_transport(
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 524, in _make_subprocess_transport
-    raise NotImplementedError
-NotImplementedError
-INFO:     127.0.0.1:52604 - "GET /api/health HTTP/1.1" 500 Internal Server Error
-ERROR:    Exception in ASGI application
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 409, in run_asgi
-    result = await app(  # type: ignore[func-returns-value]
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
-    return await self.app(scope, receive, send)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\applications.py", line 1054, in __call__
-    await super().__call__(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\applications.py", line 113, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 187, in __call__
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\errors.py", line 165, in __call__
-    await self.app(scope, receive, _send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\middleware\exceptions.py", line 62, in __call__
-    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 715, in __call__
-    await self.middleware_stack(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 735, in app
-    await route.handle(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 288, in handle
-    await self.app(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 76, in app
-    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
-    raise exc
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
-    await app(scope, receive, sender)
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\starlette\routing.py", line 73, in app
-    response = await f(request)
-               ^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 301, in app
-    raw_response = await run_endpoint_function(
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\venv\Lib\site-packages\fastapi\routing.py", line 212, in run_endpoint_function
-    return await dependant.call(**values)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\routes\health.py", line 25, in health
-    "available": await ffmpeg_available(),
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\ffmpeg.py", line 486, in ffmpeg_available
-    process = await asyncio.create_subprocess_exec(
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\subprocess.py", line 224, in create_subprocess_exec
-    transport, protocol = await loop.subprocess_exec(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 1744, in subprocess_exec
-    transport = await self._make_subprocess_transport(
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python312\Lib\asyncio\base_events.py", line 524, in _make_subprocess_transport
-    raise NotImplementedError
-NotImplementedError
+Veo hands back N short, independently encoded clips. Turning them into one file
+is three steps, and skipping any of them is where stitched AI video usually goes
+wrong:
+
+  1. Normalise. Every segment is re-encoded to identical geometry, frame rate,
+     pixel format, timescale and audio layout, and padded or trimmed to the
+     exact seconds the plan asked for. Veo returns 7.94s for an 8s request often
+     enough that concatenating raw output drifts.
+  2. Concatenate. Because step 1 made them identical, this is a stream copy.
+  3. Mix and trim. Music and voiceover are laid under the clips' native audio,
+     then the whole thing is cut to the exact target length.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Awaitable, Callable, Literal
+
+from ..config import settings
+from ..errors import AppError, UpstreamError
+from ..logging_setup import get_logger
+from ..storage import ensure_dir
+
+log = get_logger("ffmpeg")
+
+ProgressFn = Callable[[float, str], Awaitable[None] | None]
+
+
+def _resolve_binary(configured: str | None, name: str) -> str:
+    if configured:
+        return configured
+    found = shutil.which(name)
+    return found or name
+
+
+FFMPEG = _resolve_binary(settings.ffmpeg_path, "ffmpeg")
+FFPROBE = _resolve_binary(settings.ffprobe_path, "ffprobe")
+
+# Keeps a console window from flashing up for every ffmpeg call on Windows.
+# Absent on POSIX, where 0 means "no special flags".
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _missing_binary_error(binary: str, setting: str) -> AppError:
+    return AppError(
+        f'{Path(binary).name} was not found at "{binary}". '
+        f"Install it, or set {setting} in server/.env.",
+        status=503,
+        code=f"{Path(binary).stem}_missing",
+    )
+
+
+@dataclass(slots=True)
+class MediaInfo:
+    seconds: float
+    has_video: bool
+    has_audio: bool
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+
+
+@dataclass(slots=True)
+class Segment:
+    file: Path
+    seconds: float
+
+
+@dataclass(slots=True)
+class MixTrack:
+    file: Path
+    gain: float
+    #: Music loops to fill the runtime; voiceover plays once from the top.
+    loop: bool
+    fade_in: float = 0.0
+    fade_out: float = 0.0
+
+
+async def _report(callback: ProgressFn | None, fraction: float, message: str) -> None:
+    if callback is None:
+        return
+    result = callback(fraction, message)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+async def _run(
+    args: list[str],
+    *,
+    label: str = "ffmpeg",
+    total_seconds: float | None = None,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Run ffmpeg on a worker thread, relaying its progress to the event loop.
+
+    Deliberately NOT ``asyncio.create_subprocess_exec``. Uvicorn installs
+    ``WindowsSelectorEventLoopPolicy`` on Windows, and a selector loop cannot
+    spawn subprocesses at all — it raises ``NotImplementedError``. A plain
+    blocking ``Popen`` on a thread behaves identically on every platform and
+    every event loop policy, which is worth more here than native async I/O:
+    these calls are minutes long and there are only a handful in flight.
+
+    stderr goes to a temp file rather than a pipe so a chatty failure cannot
+    fill the OS pipe buffer and deadlock while we are draining stdout.
+    """
+    # `-progress pipe:1` gives machine-readable key=value on stdout, which is
+    # far more reliable than scraping the human-readable stderr banner.
+    argv = [
+        FFMPEG,
+        "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        *args,
+        "-progress", "pipe:1", "-nostats",
+    ]
+    log.debug("%s: %s", label, " ".join(argv))
+
+    loop = asyncio.get_running_loop()
+    updates: asyncio.Queue[float] = asyncio.Queue()
+    handle: dict[str, subprocess.Popen[bytes]] = {}
+
+    def blocking() -> tuple[int, str]:
+        with tempfile.TemporaryFile("w+b") as errors:
+            process = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                creationflags=_NO_WINDOW,
+            )
+            handle["process"] = process
+
+            assert process.stdout is not None
+            for raw in process.stdout:
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line.startswith("out_time_us="):
+                    continue
+                try:
+                    seconds = int(line.split("=", 1)[1]) / 1_000_000
+                except ValueError:
+                    continue
+                # Hop back onto the loop thread to publish progress.
+                loop.call_soon_threadsafe(updates.put_nowait, seconds)
+
+            process.stdout.close()
+            code = process.wait()
+
+            errors.seek(0)
+            return code, errors.read().decode("utf-8", "ignore")
+
+    try:
+        worker = asyncio.create_task(asyncio.to_thread(blocking))
+    except FileNotFoundError as error:
+        raise _missing_binary_error(FFMPEG, "FFMPEG_PATH") from error
+
+    try:
+        while not worker.done():
+            try:
+                seconds = await asyncio.wait_for(updates.get(), timeout=0.25)
+            except asyncio.TimeoutError:
+                continue
+            if total_seconds and on_progress:
+                fraction = max(0.0, min(0.99, seconds / total_seconds))
+                await _report(
+                    on_progress, fraction, f"{label}… {seconds:.1f}s / {total_seconds:.0f}s"
+                )
+    except asyncio.CancelledError:
+        # A cancelled render must not leave ffmpeg running for another minute.
+        process = handle.get("process")
+        if process is not None and process.poll() is None:
+            process.kill()
+        raise
+
+    try:
+        code, stderr = await worker
+    except FileNotFoundError as error:
+        raise _missing_binary_error(FFMPEG, "FFMPEG_PATH") from error
+
+    if code != 0:
+        raise UpstreamError(f"{label} failed (exit {code}).", details=stderr.strip()[-1500:])
+
+    await _report(on_progress, 1.0, f"{label} done.")
+
+
+# ---------------------------------------------------------------------------
+# Probe
+# ---------------------------------------------------------------------------
+
+
+async def probe(file: Path) -> MediaInfo:
+    args = ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(file)]
+
+    # Threaded for the same reason as `_run` — a selector event loop on Windows
+    # cannot spawn subprocesses.
+    def blocking() -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [FFPROBE, *args], capture_output=True, creationflags=_NO_WINDOW, check=False
+        )
+
+    try:
+        result = await asyncio.to_thread(blocking)
+    except FileNotFoundError as error:
+        raise _missing_binary_error(FFPROBE, "FFPROBE_PATH") from error
+
+    if result.returncode != 0:
+        raise UpstreamError(
+            f"ffprobe failed on {file.name}.",
+            details=result.stderr.decode("utf-8", "ignore")[-600:],
+        )
+
+    parsed = json.loads(result.stdout.decode("utf-8", "ignore") or "{}")
+    streams = parsed.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+    duration_raw = (parsed.get("format") or {}).get("duration") or (video or {}).get("duration") or 0
+    try:
+        seconds = float(duration_raw)
+    except (TypeError, ValueError):
+        seconds = 0.0
+
+    fps = None
+    if video:
+        try:
+            num, den = (video.get("avg_frame_rate") or "0/1").split("/")
+            fps = float(num) / float(den) if float(den) else None
+        except (ValueError, ZeroDivisionError):
+            fps = None
+
+    return MediaInfo(
+        seconds=seconds,
+        has_video=video is not None,
+        has_audio=audio is not None,
+        width=(video or {}).get("width"),
+        height=(video or {}).get("height"),
+        fps=fps,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 1 — normalise
+# ---------------------------------------------------------------------------
+
+
+async def normalise_segment(
+    source: Path,
+    destination: Path,
+    *,
+    width: int,
+    height: int,
+    seconds: float,
+    fps: int | None = None,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Re-encode one segment to the delivery geometry and to exactly ``seconds``.
+
+    ``scale=…:force_original_aspect_ratio=increase`` followed by ``crop`` is a
+    centre crop that fills the frame — this is what converts Veo's 9:16 output
+    into a 1:1 or 4:5 deliverable without letterboxing.
+
+    ``tpad``/``apad`` hold the last frame and pad silence so a clip that came
+    back fractionally short still fills its slot; ``-t`` then cuts it back to
+    length. Without this the finished film drifts a second or two under target.
+    """
+    rate = fps or settings.render_fps
+    info = await probe(source)
+    ensure_dir(destination.parent)
+
+    video_filter = ",".join(
+        [
+            f"scale={width}:{height}:force_original_aspect_ratio=increase",
+            f"crop={width}:{height}",
+            f"fps={rate}",
+            # Hold the final frame if the source came back short of its slot.
+            f"tpad=stop_mode=clone:stop_duration={max(1, math.ceil(seconds))}",
+            "setsar=1",
+            "format=yuv420p",
+        ]
+    )
+
+    args: list[str] = ["-i", str(source)]
+
+    if not info.has_audio:
+        # Veo normally returns audio, but a filtered or silent generation may
+        # not. The concat demuxer requires an identical stream layout on every
+        # segment, so synthesise silence rather than dropping the track.
+        args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+
+    args += [
+        "-map", "0:v:0",
+        "-map", "0:a:0" if info.has_audio else "1:a:0",
+        "-vf", video_filter,
+        "-af", "apad,aresample=48000:async=1",
+        "-t", str(seconds),
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "20",
+        "-profile:v", "high",
+        "-level", "4.2",
+        "-pix_fmt", "yuv420p",
+        # A shared timescale keeps the concat demuxer from introducing gaps.
+        "-video_track_timescale", str(rate * 1000),
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "48000",
+        "-ac", "2",
+        "-movflags", "+faststart",
+        str(destination),
+    ]
+
+    await _run(
+        args,
+        label=f"normalise {source.name}",
+        total_seconds=seconds,
+        on_progress=on_progress,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 2 — concatenate
+# ---------------------------------------------------------------------------
+
+
+def _concat_entry(path: Path) -> str:
+    """One line of a concat demuxer list file.
+
+    Paths are single-quoted; a literal quote is escaped as ``'\\''``, the same
+    convention a POSIX shell uses.
+    """
+    escaped = str(path).replace("'", "'\\''")
+    return f"file '{escaped}'"
+
+
+async def concat_segments(
+    segments: list[Segment],
+    destination: Path,
+    *,
+    transition: Literal["hardcut", "crossfade"] = "hardcut",
+    crossfade_seconds: float = 0.4,
+    work_dir: Path,
+    on_progress: ProgressFn | None = None,
+) -> float:
+    """Join the conformed segments. Returns the duration actually produced."""
+    if not segments:
+        raise UpstreamError("Nothing to concatenate — no clips are ready.")
+
+    ensure_dir(destination.parent)
+    plain_total = sum(segment.seconds for segment in segments)
+
+    if len(segments) == 1:
+        shutil.copyfile(segments[0].file, destination)
+        return plain_total
+
+    if transition == "crossfade":
+        return await _crossfade_segments(
+            segments, destination, crossfade_seconds, on_progress=on_progress
+        )
+
+    # Every segment was normalised to identical parameters, so this is a copy.
+    ensure_dir(work_dir)
+    list_file = work_dir / "concat.txt"
+    entries = [_concat_entry(segment.file) for segment in segments]
+    list_file.write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+    await _run(
+        ["-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy",
+         "-movflags", "+faststart", str(destination)],
+        label="concat",
+        total_seconds=plain_total,
+        on_progress=on_progress,
+    )
+
+    return plain_total
+
+
+async def _crossfade_segments(
+    segments: list[Segment],
+    destination: Path,
+    fade: float,
+    *,
+    on_progress: ProgressFn | None = None,
+) -> float:
+    """Dissolve between segments with ``xfade``/``acrossfade``.
+
+    Note the arithmetic: each transition overlaps two segments, so the result is
+    ``(n - 1) * fade`` seconds SHORTER than the sum of the parts. The duration
+    plan fits the target exactly for hard cuts; choosing crossfade trades that
+    exact landing for the dissolve, and the renderer reports what it got.
+    """
+    shortest = min(segment.seconds for segment in segments)
+    safe_fade = max(0.1, min(fade, shortest / 2 - 0.1))
+
+    inputs: list[str] = []
+    for segment in segments:
+        inputs += ["-i", str(segment.file)]
+
+    filters: list[str] = []
+    video_label = "0:v"
+    audio_label = "0:a"
+    offset = 0.0
+
+    for index in range(1, len(segments)):
+        offset += segments[index - 1].seconds - (0 if index == 1 else safe_fade)
+        transition_at = max(0.0, offset - safe_fade)
+
+        next_video, next_audio = f"v{index}", f"a{index}"
+        filters.append(
+            f"[{video_label}][{index}:v]xfade=transition=fade:"
+            f"duration={safe_fade}:offset={transition_at:.3f}[{next_video}]"
+        )
+        filters.append(f"[{audio_label}][{index}:a]acrossfade=d={safe_fade}[{next_audio}]")
+        video_label, audio_label = next_video, next_audio
+
+    total = sum(segment.seconds for segment in segments) - (len(segments) - 1) * safe_fade
+
+    await _run(
+        [
+            *inputs,
+            "-filter_complex", ";".join(filters),
+            "-map", f"[{video_label}]",
+            "-map", f"[{audio_label}]",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+            "-movflags", "+faststart",
+            str(destination),
+        ],
+        label="crossfade",
+        total_seconds=total,
+        on_progress=on_progress,
+    )
+
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — mix audio and land on the exact duration
+# ---------------------------------------------------------------------------
+
+
+async def mix_and_finalise(
+    source: Path,
+    destination: Path,
+    *,
+    seconds: float,
+    tracks: list[MixTrack],
+    fade_out_seconds: float = 0.0,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Lay music and voiceover under the clips' native audio, then cut to length.
+
+    Levels are static rather than side-chain ducked: Veo's native audio is
+    mostly room tone and texture, so a fixed bed sits under it cleanly, whereas
+    a compressor keyed off ambience pumps. ``loudnorm`` lands the whole film at
+    a broadcast-ish -16 LUFS.
+    """
+    ensure_dir(destination.parent)
+    usable = [track for track in tracks if track.gain > 0]
+
+    args: list[str] = ["-i", str(source)]
+    filters: list[str] = []
+    mix_labels: list[str] = ["0:a"]
+
+    for index, track in enumerate(usable, start=1):
+        if track.loop:
+            args += ["-stream_loop", "-1"]
+        args += ["-i", str(track.file)]
+
+        label = f"t{index}"
+        chain = [
+            f"atrim=0:{seconds}",
+            "asetpts=PTS-STARTPTS",
+            "aresample=48000",
+            f"volume={track.gain:.3f}",
+        ]
+        if track.fade_in > 0:
+            chain.append(f"afade=t=in:st=0:d={track.fade_in}")
+        if track.fade_out > 0:
+            chain.append(f"afade=t=out:st={max(0.0, seconds - track.fade_out):.2f}:d={track.fade_out}")
+        # Pad in case the track is shorter than the film and not set to loop.
+        chain.append(f"apad=whole_dur={seconds}")
+
+        filters.append(f"[{index}:a]{','.join(chain)}[{label}]")
+        mix_labels.append(label)
+
+    if len(mix_labels) > 1:
+        joined = "".join(f"[{label}]" for label in mix_labels)
+        filters.append(
+            f"{joined}amix=inputs={len(mix_labels)}:duration=first:"
+            "dropout_transition=0:normalize=0[mixed]"
+        )
+        filters.append("[mixed]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+    else:
+        filters.append("[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+
+    args += ["-filter_complex", ";".join(filters), "-map", "0:v:0", "-map", "[aout]"]
+
+    if fade_out_seconds > 0:
+        args += [
+            "-vf", f"fade=t=out:st={max(0.0, seconds - fade_out_seconds):.2f}:d={fade_out_seconds}",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+        ]
+    else:
+        # No picture change — keep the encode we already paid for.
+        args += ["-c:v", "copy"]
+
+    args += [
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-t", str(seconds),
+        "-movflags", "+faststart",
+        str(destination),
+    ]
+
+    await _run(args, label="mix", total_seconds=seconds, on_progress=on_progress)
+
+
+# ---------------------------------------------------------------------------
+# Poster frames
+# ---------------------------------------------------------------------------
+
+
+async def extract_poster(source: Path, destination: Path, at_seconds: float = 0.5) -> None:
+    ensure_dir(destination.parent)
+    await _run(
+        ["-ss", str(at_seconds), "-i", str(source), "-frames:v", "1", "-q:v", "3", str(destination)],
+        label="poster",
+    )
+
+
+async def ffmpeg_available() -> bool:
+    """Cheap availability probe for the health endpoint.
+
+    Never raises — health must stay answerable even when the toolchain is
+    broken, since telling the user *what* is broken is the whole point of it.
+    """
+
+    def blocking() -> bool:
+        try:
+            result = subprocess.run(
+                [FFMPEG, "-version"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+                check=False,
+            )
+        except OSError:
+            return False
+        return result.returncode == 0
+
+    try:
+        return await asyncio.to_thread(blocking)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+----------------------------
+
+
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter
+
+from ..config import capabilities, settings
+from ..services.ffmpeg import FFMPEG, FFPROBE, ffmpeg_available
+from ..skills.registry import skill_info
+
+router = APIRouter(tags=["health"])
+
+
+@router.get("/api/health")
+async def health() -> dict[str, Any]:
+    """What this server can do right now, and with what.
+
+    The UI calls this on load so it can disable steps whose keys are missing
+    instead of letting the user hit a wall three screens in.
+    """
+    # Health is the endpoint you call when things are broken, so it must not be
+    # able to break itself. Any failure becomes a reported `false`, not a 500.
+    try:
+        ffmpeg_ok = await ffmpeg_available()
+    except Exception:  # noqa: BLE001
+        ffmpeg_ok = False
+
+    return {
+        "ok": True,
+        "capabilities": capabilities(),
+        "ffmpeg": {
+            "available": ffmpeg_ok,
+            "ffmpeg": FFMPEG,
+            "ffprobe": FFPROBE,
+        },
+        "skill": skill_info(),
+        "veo": {
+            "model": settings.veo_model,
+            "maxClipSeconds": settings.veo_max_clip_seconds,
+            "allowedClipSeconds": settings.allowed_clip_seconds,
+            "resolution": settings.veo_resolution,
+            "concurrency": settings.veo_concurrency,
+            "keyframes": settings.veo_use_keyframes,
+        },
+        "limits": {
+            "maxVideoSeconds": settings.max_video_seconds,
+            "maxSegments": settings.max_segments,
+        },
+    }
