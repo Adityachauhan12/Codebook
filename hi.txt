@@ -1,40 +1,13 @@
-First Light, First Flight
-Each scene is one Veo generation. Edit a prompt directly, or ask for a rewrite.
-
-1
-Dawn Ritual on the Tarmac
-8s · Context · establish · 0:00
-veo/audio-line — No `Audio:` line. Veo will not generate sound unless it is labelled explicitly.
-duration-discipline — Prompt does not state "Duration: 8 seconds", which is what this segment will be generated at.
-continuity-block — The continuity block is not restated in this prompt. Veo has no memory between generations — repeat identity, wardrobe, palette and the lighting constant in every scene.
-Wide, static, 50mm, slow push-in on IndiGo aircraft’s blue-and-white tail and fuselage, dew beads glistening under pre-dawn floodlights. Ground crew: South Asian woman, oval face, warm brown skin, short black hair under navy blue cap, no facial hair, steady posture, in indigo-blue coveralls with reflective armbands, navy gloves, safety vest. She kneels to check the wheel chocks, lifts one in her gloved hand, leaving a faint dew trail, then stands and signals readiness up to the cockpit. Cool dew on blue-white paint, tarmac lights reflecting. Her breath is visible in the chilly air. Lighting: pre-dawn blue ambiance as key from frame-left, tarmac reflection as fill from below, sunrise gold building frame-right. Palette: IndiGo deep blue, pure white, silver dew, pale sky blue, gold accent, warm brown skin; ban all green and harsh reds. Location: pre-dawn tarmac, IndiGo aircraft on stand. Camera: always at human eye-level, slow push-in. Props: wheel chocks. All uniforms and branding use official IndiGo blues and whites. Characters’ appearance, clothing and light must match perfectly cut-to-cut. Sunlight always from same direction in every shot. Wardrobe: Ground crew in indigo-blue coveralls with reflective armbands, navy gloves, safety vest. Ends on the tail fin shining as the sunrise begins.
-Save prompt
-Ask for a rewrite
-Cut: Opens on a static, wide shot of the IndiGo aircraft’s blue-and-white tail, fuselage slick with morning dew, tarmac lights reflecting; camera at human eye-level, matching pre-dawn blue ambiance.
-2
-First Arrivals at the Gate
-8s · Crack · detail · 0:08
-veo/audio-line — No `Audio:` line. Veo will not generate sound unless it is labelled explicitly.
-duration-discipline — Prompt does not state "Duration: 8 seconds", which is what this segment will be generated at.
-Medium wide, 50mm, slow tracking shot left as passengers with rolling bags pass IndiGo blue-white signage in the glass terminal. Mother: South Asian woman, oval face, light brown skin, long dark hair in a low ponytail, sky blue blouse, white tailored trousers. Father: South Asian man, round face, medium brown skin, close-cropped black hair, navy sport jacket, light blue Oxford shirt, grey chinos. Two kids follow. Wardrobe: as specified. Mother tucks a strand of hair behind ear, father’s fingers grip boarding passes. Cold stone floor, glass wall misted with overnight condensation, sunlight streaks highlighting IndiGo blue on signage and moving bags. Lighting: low-angle warm sunlight from frame-right as key, blue ambient terminal glow as fill. Palette: IndiGo deep blue, pure white, pale sky blue, sunrise gold, warm brown skin—no green, no harsh reds. Location: morning airport terminal gate. Camera: human eye-level, slow tracking. Props: rolling bags, boarding passes. All branding uses official IndiGo colors. Characters’ appearance, clothing and light must match perfectly cut-to-cut. Sunlight always from same direction in every shot. Camera always at human eye-level. Ends on mother’s face warming as sunlight shifts.
-Save prompt
-Ask for a rewrite
-Cut: Opens in glass terminal, matching blue-white palette and human eye-level, low-angle sunlight streaming from frame-right, family enters in motion echoing the previous scene’s sunrise buildup.
-3
-Welcome Aboard
-6s · Acceleration · detail · 0:16
-veo/audio-line — No `Audio:` line. Veo will not generate sound unless it is labelled explicitly.
-duration-discipline — Prompt does not state "Duration: 6 seconds", which is what this segment will be generated at.
-Medium close-up, 85mm, gentle push-in as IndiGo flight attendant stands frame-left. Flight attendant: South Asian man, angular jaw, medium brown skin, short dark hair, clean-shaven, crisp bearing, navy IndiGo suit with matching tie, polished black shoes. Mother: South Asian woman, oval face, light brown skin, long dark hair in a low ponytail, sky blue blouse, white tailored trousers. Father: South Asian, round face, medium brown skin, close-cropped black hair, navy blazer, light blue Oxford shirt, grey chinos. Wardrobe: flight attendant in navy IndiGo suit and tie, polished black shoes; mother in sky blue blouse and white trousers; father in navy blazer, light blue Oxford shirt, grey chinos. The attendant checks a boarding pass held by the mother, thumb slides over pass. The mother relaxes her shoulders. One child taps a rolling bag handle. Golden sunrise pours in from frame-right as key, blue ambient light fills the jetway, metal threshold glints underfoot. Palette: IndiGo navy blue, pure white, sunrise gold, pale sky blue, warm brown skin; ban all green and harsh reds. Location: boarding gate entry, IndiGo branded backdrop. Camera: human eye-level, gentle push-in. Props: boarding passes, rolling bags. All uniforms and branding use official IndiGo blues and whites. Characters’ appearance, clothing and light must match perfectly cut-to-cut. Sunlight always from same direction. Camera always at human eye-level. Ends on flight attendant’s nod and mother’s smile, sunlight touching both faces.
-Save prompt
-Ask for a rewrite
-Cut: Opens on boarding gate entry, sunlight at same angle and palette as previous scene, matching wide-to-close transition and eye-level.
-4
-Takeoff Into Morning
-8s · Aftermath · aftermath · 0:22
-veo/audio-line — No `Audio:` line. Veo will not generate sound unless it is labelled explicitly.
-duration-discipline — Prompt does not state "Duration: 8 seconds", which is what this segment will be generated at.
-Medium, 50mm, static in cabin row with a slow tilt up as the father—South Asian, round face, medium brown skin, close-cropped black hair, navy blazer, light blue Oxford shirt, grey chinos—stows a bag overhead. Mother—South Asian woman, oval face, light brown skin, long dark hair in a low ponytail, sky blue blouse, white tailored trousers—settles child in window seat and brushes child’s hair. Wardrobe: father in navy blazer, light blue Oxford shirt, grey chinos; mother in sky blue blouse, white tailored trousers. Warm sunlight from frame-right cuts a gold streak across their faces and IndiGo blue seatbacks. Overhead bin clicks softly. Cabin air is quiet, morning optimism on faces. Exterior: wide, 35mm, slow pan up as IndiGo aircraft taxis and lifts off—tail fin catches full sun, blue-and-white livery sharp, airport shrinking below. Palette: IndiGo deep blue, pure white, sunrise gold, pale sky blue, silver, warm brown skin; ban all green and harsh reds. Lighting: direct sunrise gold through right windows as key, soft cabin fill; exterior: direct sunlight on tail fin. Location: IndiGo aircraft interior, then runway. Camera: always at human eye-level inside, exterior takeoff wide. Props: bags, seats. All branding: official IndiGo blue and white throughout. Characters’ appearance, clothing and light must match perfectly cut-to-cut. Sunlight always from same direction. Ends on tail fin etched in sunlight above retreating airport.
-Save prompt
-Ask for a rewrite
-C
+A 30-second brand film for IndiGo airlines. Opens tight on the IndiGo
+aircraft's blue-and-white livery, dew still on the fuselage, tarmac lights
+reflecting off the paint before sunrise. A ground crew member in an indigo-
+blue uniform checks the wheel chocks, then signals up to the cockpit. Cut to
+the terminal: passengers with rolling bags walk briskly past the IndiGo
+signage toward the gate, morning light low through the glass. At the gate, a
+flight attendant in the navy IndiGo uniform checks a boarding pass and
+welcomes a family aboard with a warm nod. Inside the cabin, warm sunrise
+light crosses the rows as passengers settle in and stow their bags. Final
+sequence: the aircraft taxis, then lifts off — the tail fin catching full
+sun, blue-and-white livery sharp against a clear sky, the airport shrinking
+below. Clean, confident, on-time — IndiGo's brand promise. Warm, optimistic,
+premium travel tone throughout.
