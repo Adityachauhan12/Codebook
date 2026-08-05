@@ -1,21 +1,47 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-// The Python backend runs separately (see server/README.md). Proxying keeps the
-// browser on one origin, so <video> media requests and the SSE progress stream
-// need no CORS handling in dev.
-const BACKEND = process.env.VITE_API_PROXY ?? "http://localhost:8787";
+node_modules
+dist
+dist-ssr
+.output
+.vinxi
+.tanstack/**
+.nitro
+*.local
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  resolve: {
-    tsconfigPaths: true,
-  },
-  server: {
-    proxy: {
-      "/api": { target: BACKEND, changeOrigin: true },
-      "/media": { target: BACKEND, changeOrigin: true },
-    },
-  },
-});
+# Wrangler / Cloudflare
+.wrangler/
+.dev.vars
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python backend (server/)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+# Generated clips, audio and final renders
+server/storage/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
