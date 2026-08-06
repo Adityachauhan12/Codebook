@@ -1,137 +1,432 @@
-# Pipeline addendum — how this skill is applied inside the AI Video studio
+"""IndiGo brand guardrails for the video pipeline.
 
-This file is **not** part of the upstream `visual-skills` release. It is the house
-layer that binds the skill to this backend. Read it last, after `dramaturgy.md`,
-`universal-rules.md` and `veo.md`. Where it conflicts with those files it is
-because the pipeline imposes a hard constraint — obey the constraint, keep the
-craft.
+Single source of truth for brand policy in this codebase. The image and text
+policies live in the sibling marketing repo (``prompts/platform_*_prompt.py``);
+this file carries the shared rules that survive the jump to motion, plus
+``INDIGO_VIDEO_BRAND_POLICY`` — the video-specific document, which has no
+counterpart there because video breaks brand in ways stills cannot.
 
----
+Three things make video different, and they are why this file exists:
 
-## 1. The generator is Veo, and Veo is short
+1. **Every clip is an independent generation.** Veo has no memory between the
+   4/6/8-second segments the duration planner produces, so a palette stated
+   once drifts off-brand by the middle of the film. Brand has to be restated in
+   every single prompt, exactly like the continuity block.
+2. **Generative video cannot render a wordmark.** Asking Veo for the IndiGo
+   logo produces a misspelt, wrong-coloured mark every time. The brand book
+   already forbids this by another route — "wordmark should always be used from
+   the master file, and should not be typed" — so the mark is banned from the
+   prompt and composited from the master asset at render time.
+3. **Motion carries brand meaning that a still cannot.** "Effortless" is a
+   camera behaviour before it is a colour.
+"""
 
-Every scene in this pipeline becomes exactly one Veo generation. Veo renders
-**4, 6 or 8 seconds** and nothing else. A 90 second film is 12 generations that
-ffmpeg accumulates into one file — it is never one long prompt.
+from __future__ import annotations
 
-Consequences that are not negotiable:
+# ---------------------------------------------------------------------------
+# Colour
+# ---------------------------------------------------------------------------
+# Pantone references only. There are deliberately no hex values here.
+#
+# Nothing in this pipeline paints a colour itself: the prompt layer steers Veo
+# with colour *language* (a diffusion model responds to "deep indigo navy-blue",
+# not to a number), and the brand mark is composited from the master artwork,
+# which already carries its own colour.
+#
+# Hex is needed only if we later render colour ourselves — supers, an end card,
+# letterbox bars, or a grade. Take those values from the brand book at that
+# point. A guessed Pantone-to-sRGB conversion sitting in a file called policy.py
+# will eventually be trusted by someone, and shipping a "close enough" blue is
+# the exact failure this module exists to prevent.
+#
+# NOTE: the two source policy files disagreed on the light blue (291 C in the
+# top-level rules, 284 C in the image policy). Confirmed as **Pantone 291 C**.
 
-- **You do not choose the durations.** The segment plan is computed before you
-  are called and handed to you. Write to the seconds you are given, scene by
-  scene. Do not merge scenes, do not split them, do not add or drop one.
-- **Every scene must be a complete shot in its own right.** It has to survive
-  being generated in isolation by a model with no memory of the other scenes.
-- **The last frame of scene N and the first frame of scene N+1 must match** in
-  pose, light, colour temperature and lens height. That match is the only reason
-  the cut works in the edit. Say the match out loud in `continuityNote`.
+INDIGO_DARK_BLUE_PANTONE = "Pantone 2738 C"
+INDIGO_LIGHT_BLUE_PANTONE = "Pantone 291 C"
 
-## 2. Budget the action to the seconds you were given
+#: How the palette should be *described* to a generative model. Colour names
+#: steer a diffusion model; hex codes do not.
+INDIGO_PALETTE_LANGUAGE = (
+    "deep indigo navy-blue with a violet lean (Pantone 2738 C) as the dominant colour, "
+    "pale sky blue (Pantone 291 C) as the secondary, and clean white as the breathing space"
+)
 
-A 4 second shot holds one action. An 8 second shot holds two, at most three.
-Cramming a five-beat sequence into 4 seconds produces the speed-up artefact.
 
-| Seconds | Beats inside the shot | Dialogue |
-|---|---|---|
-| 4 | 1 primary action, 1 reaction | up to ~8 words |
-| 6 | 2 actions, or 1 action + held reaction | up to ~14 words |
-| 8 | 2–3 actions with a pause | up to ~20 words |
+# ---------------------------------------------------------------------------
+# Shared rules — the brand book, as it applies to any medium
+# ---------------------------------------------------------------------------
 
-Veo caps spoken audio at 8 seconds per clip. Read every line aloud at normal
-pace before you keep it.
+INDIGO_BRAND_POLICY = """
+HARD RULES:
+- Brand name is always written as: IndiGo (capital I, capital G). Never Indigo, INDIGO,
+  indigo, Air IndiGo, IndiGo Airways, IndiGo Airlines, or goindigo
+- Never turn the name into a verb: no IndiGoing, IndiGoes, IndiGone, IndiWent
+- URL is always written as goIndiGo.in (I and G upper case)
+- Logo has 20 dots and must always appear in correct proportion and direction
+- Wordmark always comes from the master file and is never typed or recreated
+- Typeface: Bauhaus. Light weight for titles and headlines — never bold, semibold,
+  medium, or regular
+- Always sentence case. Never ALL CAPS. Title case only for names, properties, and assets
+- Never say anything negative about IndiGo
+- Always polite and professional
+- Never place the logo on an aircraft tail; place it in a corner that suits the composition
 
-## 3. The continuity block is repeated in every single prompt
+SOFT RULES:
+- Black, dark blue, or light blue background -> white logo
+- Arrow-plane may be used creatively (patterns, circles) but must always imply
+  forward/upward motion, never pure decoration
+- Where a logo meets a building, start it from the building rather than overlapping it
+- Primary colour: Dark Blue (Pantone 2738 C). Secondary: Light Blue (Pantone 291 C)
+- Simple, eye-catching, non-controversial subject that adapts to many sizes
+- Soft colours, balanced composition, simple design
+- Integrate pop culture and modern trends where they genuinely fit
+"""
 
-The model has no memory between generations. Each scene prompt restates, in
-full: character identity, exact wardrobe, location, palette with named colours,
-the lighting constant with its direction, and the dominant camera grammar.
 
-Yes, in all twelve prompts. Yes, verbatim. That repetition is the only thing
-holding the film together.
+# ---------------------------------------------------------------------------
+# Emotional register
+# ---------------------------------------------------------------------------
+# The craft layer's beat map is built for short drama: its own labels read
+# "Hero already in tension. Problem on screen.", "Hero tries to hold control.",
+# "A detail appears that breaks the hero's position.", "Breath tightens."
+#
+# Handed to a writer scene by scene, that produces an anxious person in an
+# airport — which is both off-brand ("effortless, hassle-free") and
+# reputationally wrong for an airline. The dramatic *shape* is still right; a
+# brand film needs a turn or it is a slideshow. Only the emotional colour of
+# each beat changes: the turn is a moment of warmth or recognition, never
+# distress.
+#
+# Keyed by the same beats as `domain/duration.py`, which stays brand-agnostic.
 
-## 4. Aspect ratio is fixed for the whole film
+INDIGO_BEAT_LABELS: dict[str, str] = {
+    "hook": "Open inside a feeling already in motion — a person mid-moment, warm and unforced.",
+    "context": "Where we are, who is near, and what this journey means to them.",
+    "pressure": "Anticipation builds. The wait stretches, in a good way — eagerness, not anxiety.",
+    "crack": "The turn: a small recognition or a moment of warmth that changes the feeling.",
+    "acceleration": "Cuts shorten and the heart lifts. Momentum, never panic.",
+    "impact": "The payoff lands — the reunion, the arrival, the feeling paid off in full.",
+    "aftermath": "A held breath of contentment. The image you remember.",
+}
 
-Veo natively renders `16:9` and `9:16`. Square and 4:5 deliverables are
-generated at `9:16` and centre-cropped by the renderer. Never write framing that
-depends on information at the top or bottom of a 9:16 frame when the delivery
-ratio is 1:1 or 4:5 — keep the subject in the middle third.
+#: What Veo *can* render that reads as IndiGo. Banning the logo without
+#: supplying a replacement left the brand invisible: the guardrails said what
+#: could not appear and nothing about what should.
+INDIGO_BRAND_SURFACE = """
+Because no mark and no type may be generated, brand presence has to be carried
+entirely by things Veo can actually render. Every scene needs at least one:
 
-## 5. Native audio is on — but you do not write the `Audio:` line
+- **The cabin.** Deep indigo navy-blue seat fabric, pale sky blue accents, clean
+  white panels, generous bright daylight through the windows.
+- **Crew.** Uniforms in deep indigo navy-blue, worn with calm, unhurried
+  competence. Warm, professional, never obsequious or stiff.
+- **The aircraft, abstracted.** Read the livery as blue-and-white *shapes* —
+  partial fuselage, wing, tail curve, underside, shadow, reflection — never a
+  clean broadside that would need readable lettering.
+- **Blue in the world.** Boarding pass, bag tag, lanyard, seat-back, window
+  reflection, tarmac light. Blue objects held, touched, and moved through.
+- **The light.** Clean, bright, generous. IndiGo is a daytime airline; the frame
+  should feel aired-out, never murky or moody.
 
-Veo generates synchronised audio, and `veo.md` is right that it needs explicit
-labels. This pipeline supplies two of them for you, so **override `veo.md` on
-this one point**:
+A scene with no cabin, no crew, no aircraft form, and no blue object is not an
+IndiGo scene. It is stock footage with a blue grade.
+"""
 
-- **Never write an `Audio:` or a `Duration:` line inside `prompt`.** Both are
-  appended in code — `Audio:` from the separate `audio` field you return, and
-  `Duration:` from the segment plan. Any you write yourself are discarded before
-  the prompt reaches Veo.
-- **Put the sound bed in the `audio` field**: room tone, texture, body sound,
-  the motif. No label, no duration, just the direction.
-- **`SFX:` and `Says:` lines still belong in `prompt`** when there is a punctual
-  event or a spoken line. Those are kept exactly as written.
+# ---------------------------------------------------------------------------
+# The video policy — the document this module exists for
+# ---------------------------------------------------------------------------
 
-A music bed is mixed in later by the renderer, so **do not ask Veo for score**.
-If a scene should be quiet, the `audio` field simply says `room tone only`.
+INDIGO_VIDEO_BRAND_POLICY = """
+========================
+1. BRAND FOUNDATION IN MOTION
+========================
 
-## 6. Per-scene hard requirements
+IndiGo believes low-cost should never feel cheap. In film this is carried by how
+the camera behaves, not by what is said.
 
-A scene is rejected by the automated audit and sent back for a rewrite if any of
-these is missing. Check them yourself before you emit.
+Every generated film must feel:
+- Effortless — nothing strains, nothing rushes
+- On-time and precise — clean, deliberate framing
+- Hassle-free — uncluttered frames, room to breathe
+- Affordable without ever looking cheap
 
-1. **Environmental pressure** — a physical fact of the space carrying the
-   emotion. Not "a nice room".
-2. **Physical micro-action** — the emotion rendered on a body. Not "she is
-   happy".
-3. **Sound anchor or visual motif** — tied to the spine of the piece and
-   recurring across scenes.
-4. **Lens** — a stated focal length.
-5. **One primary camera move**, with the reason it moves ("what changed?").
-6. **Named light source and direction** — "cold fridge light as key from
-   frame-right", not "beautiful lighting".
-7. **Named colours** — "cold blue-grey shadows, desaturated skin", not
-   "cinematic colours".
-8. **An explicit final image** — the frame the shot ends on.
-9. **The continuity block**, restated.
+Brand personality on screen: fun, fresh, smart, simple. Confident, never arrogant.
+Warm, never cheesy. Witty, never forced. Straightforward, never boring.
 
-## 7. Banned vocabulary
+Core principle: say simple truths in interesting ways.
 
-These words never render. Each one is a placeholder for a detail that was not
-invented. They fail the audit automatically:
 
-`cinematic`, `cinematic masterpiece`, `professional`, `high quality`,
-`highest quality`, `best quality`, `masterpiece`, `stunning`, `epic`, `amazing`,
-`beautiful lighting`, `beautiful light`, `dynamic camera`, `intense moment`,
-`powerful scene`, `breathtaking`, `award-winning`, `award winning`,
-`highly detailed`, `8k`, `4k`, `hyperrealistic`, `ultra realistic`,
-`ultra-realistic`, `photorealistic masterpiece`, `he is sad`, `she is angry`,
-`he is afraid`.
+========================
+2. THE MARK IS NEVER GENERATED  (ABSOLUTE)
+========================
 
-The one exception: `cinematic naturalism` as a named look inside the style block
-is allowed, because it denotes a specific grade rather than praise.
+This is the single most-violated rule and the most damaging.
 
-## 8. Marketing briefs are still drama
+A generative video model cannot render a wordmark, a logotype, or a 20-dot logo
+legibly. It will produce a misspelt, wrong-coloured, wrong-proportioned mark in
+every clip. This also violates the brand book directly: the wordmark must come
+from the master artwork and must never be typed.
 
-Most briefs into this studio are ads. That does not exempt them from the scene
-formula. A product film still needs a desire, an obstacle, a crack and a final
-image — "beautiful hero shot of product" is not a shot function. Use the
-commercial product-drama pattern:
+Therefore, in every scene prompt:
+- NEVER ask for the IndiGo logo, wordmark, logotype, or the arrow-plane device
+- NEVER ask for the word "IndiGo" to appear anywhere in frame
+- NEVER ask for the 20-dot pattern
+- NEVER ask for goIndiGo.in or any URL on screen
+- NEVER ask for aircraft tail lettering, fuselage lettering, livery text, or
+  branded signage that would need readable brand type
+- NEVER ask for subtitles, captions, supers, lower-thirds, end cards, or any
+  on-screen text of any kind
 
-```text
-lifestyle setup → product reveal → macro texture → human reaction → use moment → hero product shot
-```
+All brand marks and all on-screen type are composited after the render, from the
+master asset, in Bauhaus light, in sentence case. The generated footage is the
+plate underneath, and nothing more.
 
-The brand's payoff belongs on the `impact` and `aftermath` beats, not smeared
-across every scene.
+When an aircraft appears, frame it so unreadable lettering is not the subject:
+prefer partial fuselage, wing, underside, shadow, silhouette, or motion blur over
+a clean broadside of a tail.
 
-## 9. What you return
+BUT: banning the mark does not mean banning the brand. See section 2b — the
+brand still has to be visibly present in every scene, carried by things the model
+can actually render.
 
-Structured JSON only, matching the schema supplied in the request. No prose
-around it, no markdown fences. Prompts themselves are always written in English
-even when the brief is in another language, because Veo performs better in
-English; the `summary`, `title` and `treatment` fields follow the user's
-language.
 
----
+========================
+2b. HOW INDIGO IS MADE VISIBLE INSTEAD
+========================
+""" + INDIGO_BRAND_SURFACE + """
 
-*The craft layer this file extends is Visual Skills by Serge Shima, CC BY 4.0 —
-see `NOTICE`. This addendum is part of the AI Video studio backend.*
+
+========================
+3. COLOUR — AND WHY IT DRIFTS
+========================
+
+Palette:
+- Dominant: deep indigo navy-blue with a violet lean (Pantone 2738 C)
+- Secondary: pale sky blue (Pantone 291 C)
+- Breathing space: clean white
+- Any further colours must be soft and pastel
+
+Blue must dominate the frame in EVERY scene, not on average across the film.
+
+Strictly prohibited:
+- Red-dominant palettes
+- Purple-dominant palettes
+- High-contrast or harsh palettes
+- Sodium-orange or teal-and-orange grades
+
+THE DRIFT PROBLEM. Each clip is a separate Veo generation with no memory of the
+last one. A palette stated only in the treatment will be honoured in scene 1 and
+gone by scene 6, and the film will change colour halfway through. The palette
+therefore belongs in the continuity block AND restated inside every single scene
+prompt, in colour words, never hex codes — a diffusion model responds to
+"deep indigo navy-blue", not to a number.
+
+
+========================
+3b. EMOTIONAL REGISTER — WHAT THIS FILM IS FOR
+========================
+
+This is an advertisement. Its job is to make someone feel good about flying
+IndiGo. Everything else serves that.
+
+The craft references teach short-film dramaturgy, where tension is the engine.
+Keep the *shape* — a film with no turn is a slideshow — but change the colour:
+
+- The obstacle is never IndiGo, and never the journey. Distance, time apart, and
+  missing someone are legitimate. Delays, queues, lost bags, cramped seats,
+  turbulence, and airport stress are NOT.
+- "Pressure" means anticipation, not anxiety. The wait to see someone you love
+  is longing, not dread.
+- The "crack" is a moment of warmth or recognition that turns the feeling — not
+  a breakdown, a failure, or a loss of control.
+- Nobody in an IndiGo film is frightened, panicked, distressed, tearful with
+  grief, lost, or overwhelmed. Anticipation, longing, relief, delight, quiet
+  contentment: yes. Fear and stress: never.
+- Flying is the thing that RESOLVES the tension. The aircraft is where the story
+  turns warm, never where it turns difficult.
+
+If a beat seems to demand distress, express it as longing instead. A woman who
+has not seen her mother in three years is full of anticipation, not fear.
+
+
+========================
+4. CAMERA AND MOTION
+========================
+
+"Effortless" is a camera behaviour first.
+
+Preferred:
+- Calm, precise, motivated moves — slow push-in, gentle lateral track, locked-off
+- Smooth glides that echo the arrow-plane's forward/upward direction
+- Generous negative space; let the frame breathe
+- One primary move per shot, with a reason
+
+Avoid:
+- Frantic whip pans, snap zooms, aggressive speed ramps
+- Shaky or chaotic handheld
+- Restless drifting with no motivation
+- Over-designed, busy, or cluttered frames
+
+Direction of travel carries meaning: movement should read as forward or upward
+wherever the story allows it.
+
+
+========================
+5. PEOPLE AND PHOTOGRAPHY
+========================
+
+Prohibited:
+- Stock-photography look
+- Posed or smiling stock faces
+- Glamourised or cliché travel imagery
+- Luxury-airline styling, and equally, discount-airline styling
+
+Preferred:
+- Candid, natural, unposed people
+- Conceptual and insight-driven moments
+- Evocative, atmospheric imagery
+- Thoughtful or unexpected perspectives
+- Destination-led storytelling
+
+Aviation settings (tarmac, terminal, cabin, boarding) are permitted in a brand
+film — but the aircraft is never the story. A hero beauty-shot of an aircraft, a
+runway, or an airport with no human presence and no emotional beat is a cliché,
+not a scene. Put a person and a feeling in the frame.
+
+
+========================
+6. SOUND AND ANY SPOKEN LINE
+========================
+
+- Room tone, texture, and the story's motif. Never ask Veo for music; a score is
+  mixed in afterwards
+- Any dialogue or voiceover follows the copy rules: sentence case, British English
+  spellings (colour, favourite), Oxford comma, crisp and short
+- Say "flights", never "routes" or "sectors". "Non-stop" is always hyphenated
+- Never frame IndiGo as cheap or discount-heavy
+- No shouty, promotional, or jargon-heavy delivery
+- Smart, restrained wit. Effortless humour, never forced
+
+
+========================
+7. TYPOGRAPHY (POST ONLY)
+========================
+
+No type is ever generated into the footage. For the overlay stage:
+- Bauhaus, light weight only, for titles and headlines
+- Sentence case. Never ALL CAPS anywhere — titles, CTAs, or labels
+- Clean, legible, minimal; never handwritten, serif, decorative, or script
+- Never condensed, distorted, or heavily stylised
+
+
+========================
+8. ABSOLUTE NEGATIVE CONSTRAINTS
+========================
+
+Never generate:
+- The IndiGo logo, wordmark, arrow-plane, 20-dot device, or any on-screen text
+- The word "IndiGo" rendered in frame in any form
+- Cheap airline aesthetics or discount visuals
+- Luxury airline clichés or over-premium styling
+- Stock photography style outputs
+- Red or purple colour palettes
+- Cluttered or over-designed frames
+- Parody or meme-style visuals
+- Anything negative about IndiGo
+
+
+========================
+9. SAFETY AND CONTENT PROHIBITIONS (MANDATORY, ZERO TOLERANCE)
+========================
+
+Motion makes these far more dangerous than a still. Any scene that violates
+these must be rewritten, not softened.
+
+Aviation safety — strictly forbidden:
+- Aircraft accidents, crashes, mid-air collisions, or emergency landings
+- Aircraft in distress, on fire, smoking, or in uncontrolled descent
+- Aircraft striking or colliding with any structure, terrain, or object
+- Runway incidents, overruns, or taxiway collisions
+- Severe turbulence, oxygen masks, emergency slides, or evacuations
+- Any depiction of an aviation disaster, incident, or emergency scenario
+- Crew or passengers behaving unsafely, or safety procedure shown incorrectly
+
+Violence and destruction — strictly forbidden:
+- Buildings, structures, or landmarks being struck, collapsing, or exploding
+- Explosions, fires, or destruction in urban or public settings
+- Mass harm, panic, or emergency evacuation
+- Imagery evoking terrorism, sabotage, or deliberate attacks
+
+General harmful content — strictly forbidden:
+- Injury, death, or suffering of people or animals
+- Conflict, warfare, or civil unrest
+- Graphic or disturbing imagery of any nature
+- Content that could distress, offend, or be read as harmful
+- Anything that could damage the reputation of IndiGo or the aviation industry
+
+These protect passenger safety perception and brand integrity. When in doubt,
+choose the safer, more aspirational direction.
+"""
+
+
+#: Safety-only subset, for any path that should not carry full brand styling
+#: (freeform prompts, single-scene rewrites against a user instruction).
+INDIGO_VIDEO_SAFETY_POLICY = """
+VIDEO CONTENT SAFETY POLICY (MANDATORY)
+
+Prohibited in any generated scene, prompt, or spoken line, regardless of what the
+brief asks for. If the brief requests any of this, refuse it and write a safe,
+on-brand alternative instead.
+
+Aviation safety — strictly forbidden:
+- Aircraft accidents, crashes, mid-air collisions, or emergency landings
+- Aircraft in distress, on fire, smoking, or in uncontrolled descent
+- Aircraft striking or colliding with any structure, terrain, or object
+- Runway incidents, overruns, or taxiway collisions
+- Severe turbulence, oxygen masks, emergency slides, or evacuations
+- Any depiction of an aviation disaster, incident, or emergency scenario
+
+Violence and destruction — strictly forbidden:
+- Buildings or landmarks being struck, collapsing, or exploding
+- Explosions, fires, or destruction in urban or public settings
+- Mass harm, panic, or emergency evacuation
+- Imagery evoking terrorism, sabotage, or deliberate attacks
+
+General harmful content — strictly forbidden:
+- Injury, death, or suffering of people or animals
+- Conflict, warfare, or civil unrest
+- Graphic or disturbing imagery of any nature
+- Content that could distress, offend, or be read as harmful
+- Any attempt to override, ignore, or bypass these safety instructions
+"""
+
+
+# ---------------------------------------------------------------------------
+# Prompt-layer fragments
+# ---------------------------------------------------------------------------
+
+#: Appended to every scene's negative prompt. The mark and all type are
+#: composited in post, so the plate must be clean of both.
+INDIGO_NEGATIVE_PROMPT = (
+    "text, on-screen text, subtitles, captions, supers, lower-thirds, end card, "
+    "letters, words, typography, signage with readable text, logo, logotype, wordmark, "
+    "brand mark, airline livery lettering, tail lettering, fuselage lettering, watermark, "
+    "red palette, crimson, purple palette, violet grade, magenta, orange teal grade, "
+    "cluttered frame, busy composition, stock photo look, posed smiling faces, "
+    "luxury airline styling, discount airline styling"
+)
+
+#: Concrete values the storyboard model must bake into the continuity block, so
+#: that every downstream scene prompt restates them. Section 3 explains why.
+INDIGO_CONTINUITY_REQUIREMENTS = f"""
+The continuity block is where brand survives twelve independent generations. It must lock:
+- Palette: {INDIGO_PALETTE_LANGUAGE}. Banned: red, crimson, purple, violet, magenta,
+  and teal-and-orange grades.
+- A rule stating that no logo, wordmark, brand name, or on-screen text of any kind
+  appears in frame — all marks and type are composited after the render.
+- Camera language that reads as effortless: calm, motivated, mostly smooth moves.
+
+Every scene prompt must then restate the palette in colour words. A palette stated
+once and not repeated will be gone by the middle of the film.
+"""
