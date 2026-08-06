@@ -1,30 +1,137 @@
-The core idea is a quiet ritual of return, with the young woman’s journey rendered in still, contemplative frames. The emotional arc moves from tentative anticipation in the airport to gentle release in her mother’s embrace. The rhythm is slow, planting the audience within the woman's interiority—lingering on micro-actions and silent exchanges. The ending image is her eyes closing as her mother’s hand settles gently on her head, framed in warm, early sunlight.
+# Pipeline addendum — how this skill is applied inside the AI Video studio
 
-Locked medium wide, 35mm static camera, shallow depth of field. Young South Asian woman, oval face, dark expressive eyes, medium brown skin, shoulder-length black hair tied loosely, no facial hair. She sits stiffly in a muted blue oversized cardigan, white cotton t-shirt, loose tan trousers, worn white canvas sneakers, clutching a faded boarding pass in her right hand. Around her: empty airport chairs, vast window flooding the space with cold blue morning light. Cold skylight as key from frame-right, soft natural fill from left; gentle shadow pools under the seats. Palette: muted blues, soft beige, tan, cream, hints of maroon; no green or vivid red. Lighting constant: early morning light, cold blue at the airport. Continuity: exact face, hair, wardrobe, palette, lighting constant, boarding pass always visible, Delhi Indira Gandhi International Airport gate waiting area, locked frames, slow pace. Locked palette: muted blues, soft beige, tan, cream, maroon accents, no green, no vivid red. Locked lighting constant: cold skylight as key from frame-right for airport scenes. Ends on her gaze lowering to the boarding pass in her fist, the pale blue light reflecting in her eyes, posture held in unresolved anticipation.
+This file is **not** part of the upstream `visual-skills` release. It is the house
+layer that binds the skill to this backend. Read it last, after `dramaturgy.md`,
+`universal-rules.md` and `veo.md`. Where it conflicts with those files it is
+because the pipeline imposes a hard constraint — obey the constraint, keep the
+craft.
 
-Audio: Soft airport room tone, distant suitcase wheels, faint PA chime at 3 seconds, low hum of HVAC. The motif: subtle crinkle of the boarding pass as she shifts. No music.
+---
 
-Duration: 8 seconds.
+## 1. The generator is Veo, and Veo is short
 
+Every scene in this pipeline becomes exactly one Veo generation. Veo renders
+**4, 6 or 8 seconds** and nothing else. A 90 second film is 12 generations that
+ffmpeg accumulates into one file — it is never one long prompt.
 
+Consequences that are not negotiable:
 
-Medium close-up, 50mm, slow lateral tracking shot at waist height as she moves profile right-to-left. Young South Asian woman, oval face, dark expressive eyes, shoulder-length black hair tied loosely, medium brown skin, blue oversized cardigan, white cotton t-shirt, tan trousers, worn white canvas sneakers, faded boarding pass in hand, fabric carry-on bag over one shoulder. Environment: narrow, glass-walled jetway, edges lined with condensation, harsh cold overhead LEDs. She stands, smooths her cardigan, steps determinedly forward, fingers white on the boarding pass, jaw tight then easing as she spots the plane’s open door. Overhead cold LED as key, plane doorway rim light adds warmth as she nears. Palette: muted blues, soft beige, tan, cream, maroon; no green or vivid red. Lighting constant: early morning light, cold blue at the airport and jetway. Continuity: exact face, hair, wardrobe, palette, lighting constant, boarding pass always visible, Delhi Indira Gandhi International Airport jetway, camera language locked and intimate. Locked palette: muted blues, soft beige, tan, cream, maroon accents, no green, no vivid red. Locked lighting constant: cold skylight as key from frame-right for airport and jetway scenes. Ends on her silhouette pausing at the airplane threshold, sunlight from the cabin about to cross her face.
+- **You do not choose the durations.** The segment plan is computed before you
+  are called and handed to you. Write to the seconds you are given, scene by
+  scene. Do not merge scenes, do not split them, do not add or drop one.
+- **Every scene must be a complete shot in its own right.** It has to survive
+  being generated in isolation by a model with no memory of the other scenes.
+- **The last frame of scene N and the first frame of scene N+1 must match** in
+  pose, light, colour temperature and lens height. That match is the only reason
+  the cut works in the edit. Say the match out loud in `continuityNote`.
 
-Audio: Jetway ambience: shoes echoing on hollow floor, distant muffled announcements, boarding pass brushing against her side at 2 seconds, faint air whoosh as the plane’s interior opens at 6 seconds. No music.
+## 2. Budget the action to the seconds you were given
 
-Duration: 8 seconds.
+A 4 second shot holds one action. An 8 second shot holds two, at most three.
+Cramming a five-beat sequence into 4 seconds produces the speed-up artefact.
 
+| Seconds | Beats inside the shot | Dialogue |
+|---|---|---|
+| 4 | 1 primary action, 1 reaction | up to ~8 words |
+| 6 | 2 actions, or 1 action + held reaction | up to ~14 words |
+| 8 | 2–3 actions with a pause | up to ~20 words |
 
-Locked close-up, 85mm, static camera at window height. Young South Asian woman, oval face, dark expressive eyes, shoulder-length black hair tied loosely, blue oversized cardigan, white t-shirt, tan trousers, worn white sneakers. She sits pressed to the airplane window, boarding pass gripped in her fist against her knee, city lights and distant skyline retreat below. Stale airplane air, faint vibration, cold glass fogging slightly where her breath hits. Her hand trembles, knuckles whitening, then slowly loosens as the sun breaks through the clouds and spills gold across her face. Sunrise light through window as key from frame-right, soft cool fill from interior. Palette: golden sunlight, muted blues, tan, cream, accents of maroon; no green or vivid red. Lighting constant: transition from cold blue to warm gold, sunlight growing inside the cabin. Continuity: exact face, hair, wardrobe, palette, lighting constant, boarding pass always visible, airplane window seat, locked frame. Locked palette: muted blues, soft beige, tan, cream, maroon accents, no green, no vivid red. Locked lighting constant: cold skylight as key from frame-right in airport and jetway, transition to warm sunlight inside airplane. Ends on her hand unclenching, boarding pass illuminated by golden sun and her eyes brimming as she quietly exhales.
+Veo caps spoken audio at 8 seconds per clip. Read every line aloud at normal
+pace before you keep it.
 
-Audio: Low rumble of airplane cabin, muffled ascent, seatbelt clicks at 1 second, brief crinkle of boarding pass as she shifts grip, ambient sunrise hush. No music.
+## 3. The continuity block is repeated in every single prompt
 
-Duration: 6 seconds.
+The model has no memory between generations. Each scene prompt restates, in
+full: character identity, exact wardrobe, location, palette with named colours,
+the lighting constant with its direction, and the dominant camera grammar.
 
+Yes, in all twelve prompts. Yes, verbatim. That repetition is the only thing
+holding the film together.
 
+## 4. Aspect ratio is fixed for the whole film
 
-Medium close-up, 50mm slow push-in, shallow depth. Young South Asian woman, oval face, dark expressive eyes, shoulder-length black hair tied loosely, blue oversized cardigan, white t-shirt, tan trousers, worn white sneakers, faded boarding pass in hand. Mother: middle-aged South Asian woman, rounder face, gentle smile, silver-streaked black hair in a bun, simple maroon shawl, cream kurta, dark sandals. Arrivals hall suffused with warm morning sunlight from frame-right, gentle ambient hum. Daughter steps into light, mother’s arms open, they embrace; boarding pass slips from her hand to the floor as mother’s hand settles on her head. Warm sunlight as key from right, soft fill from left. Palette: warm gold, cream, beige, tan, maroon; no green or vivid red. Lighting constant: warm sunlight for arrival scene, palette transitions to gold here. Continuity: exact faces, hair, wardrobe, palette, lighting constant, Delhi airport arrivals hall, camera language slow and intimate, boarding pass released only here. Locked palette: muted blues, soft beige, tan, cream, maroon accents, no green, no vivid red. Locked lighting constant: warm sunlight as key from frame-right for arrival. Ends on daughter’s eyes closing under her mother’s hand, faces pressed together in the golden light, a moment of silent arrival.
+Veo natively renders `16:9` and `9:16`. Square and 4:5 deliverables are
+generated at `9:16` and centre-cropped by the renderer. Never write framing that
+depends on information at the top or bottom of a 9:16 frame when the delivery
+ratio is 1:1 or 4:5 — keep the subject in the middle third.
 
-Audio: Softly echoed footsteps, ambient arrivals hall murmur, motif: faint thud of boarding pass hitting floor at 4 seconds, mother’s audible exhale of relief as she folds her daughter in. No music.
+## 5. Native audio is on — but you do not write the `Audio:` line
 
-Duration: 8 seconds.
+Veo generates synchronised audio, and `veo.md` is right that it needs explicit
+labels. This pipeline supplies two of them for you, so **override `veo.md` on
+this one point**:
+
+- **Never write an `Audio:` or a `Duration:` line inside `prompt`.** Both are
+  appended in code — `Audio:` from the separate `audio` field you return, and
+  `Duration:` from the segment plan. Any you write yourself are discarded before
+  the prompt reaches Veo.
+- **Put the sound bed in the `audio` field**: room tone, texture, body sound,
+  the motif. No label, no duration, just the direction.
+- **`SFX:` and `Says:` lines still belong in `prompt`** when there is a punctual
+  event or a spoken line. Those are kept exactly as written.
+
+A music bed is mixed in later by the renderer, so **do not ask Veo for score**.
+If a scene should be quiet, the `audio` field simply says `room tone only`.
+
+## 6. Per-scene hard requirements
+
+A scene is rejected by the automated audit and sent back for a rewrite if any of
+these is missing. Check them yourself before you emit.
+
+1. **Environmental pressure** — a physical fact of the space carrying the
+   emotion. Not "a nice room".
+2. **Physical micro-action** — the emotion rendered on a body. Not "she is
+   happy".
+3. **Sound anchor or visual motif** — tied to the spine of the piece and
+   recurring across scenes.
+4. **Lens** — a stated focal length.
+5. **One primary camera move**, with the reason it moves ("what changed?").
+6. **Named light source and direction** — "cold fridge light as key from
+   frame-right", not "beautiful lighting".
+7. **Named colours** — "cold blue-grey shadows, desaturated skin", not
+   "cinematic colours".
+8. **An explicit final image** — the frame the shot ends on.
+9. **The continuity block**, restated.
+
+## 7. Banned vocabulary
+
+These words never render. Each one is a placeholder for a detail that was not
+invented. They fail the audit automatically:
+
+`cinematic`, `cinematic masterpiece`, `professional`, `high quality`,
+`highest quality`, `best quality`, `masterpiece`, `stunning`, `epic`, `amazing`,
+`beautiful lighting`, `beautiful light`, `dynamic camera`, `intense moment`,
+`powerful scene`, `breathtaking`, `award-winning`, `award winning`,
+`highly detailed`, `8k`, `4k`, `hyperrealistic`, `ultra realistic`,
+`ultra-realistic`, `photorealistic masterpiece`, `he is sad`, `she is angry`,
+`he is afraid`.
+
+The one exception: `cinematic naturalism` as a named look inside the style block
+is allowed, because it denotes a specific grade rather than praise.
+
+## 8. Marketing briefs are still drama
+
+Most briefs into this studio are ads. That does not exempt them from the scene
+formula. A product film still needs a desire, an obstacle, a crack and a final
+image — "beautiful hero shot of product" is not a shot function. Use the
+commercial product-drama pattern:
+
+```text
+lifestyle setup → product reveal → macro texture → human reaction → use moment → hero product shot
+```
+
+The brand's payoff belongs on the `impact` and `aftermath` beats, not smeared
+across every scene.
+
+## 9. What you return
+
+Structured JSON only, matching the schema supplied in the request. No prose
+around it, no markdown fences. Prompts themselves are always written in English
+even when the brief is in another language, because Veo performs better in
+English; the `summary`, `title` and `treatment` fields follow the user's
+language.
+
+---
+
+*The craft layer this file extends is Visual Skills by Serge Shima, CC BY 4.0 —
+see `NOTICE`. This addendum is part of the AI Video studio backend.*
