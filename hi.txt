@@ -1,432 +1,435 @@
-"""IndiGo brand guardrails for the video pipeline.
+"""Brand compliance, enforced in code.
 
-Single source of truth for brand policy in this codebase. The image and text
-policies live in the sibling marketing repo (``prompts/platform_*_prompt.py``);
-this file carries the shared rules that survive the jump to motion, plus
-``INDIGO_VIDEO_BRAND_POLICY`` — the video-specific document, which has no
-counterpart there because video breaks brand in ways stills cannot.
+Same reasoning as ``app/skills/audit.py``: a model asked whether it followed the
+brand book will say yes. These rules run against the structured storyboard the
+model actually returned, and anything at ``error`` severity is fed back as a
+repair brief before a single second of Veo time is spent.
 
-Three things make video different, and they are why this file exists:
-
-1. **Every clip is an independent generation.** Veo has no memory between the
-   4/6/8-second segments the duration planner produces, so a palette stated
-   once drifts off-brand by the middle of the film. Brand has to be restated in
-   every single prompt, exactly like the continuity block.
-2. **Generative video cannot render a wordmark.** Asking Veo for the IndiGo
-   logo produces a misspelt, wrong-coloured mark every time. The brand book
-   already forbids this by another route — "wordmark should always be used from
-   the master file, and should not be typed" — so the mark is banned from the
-   prompt and composited from the master asset at render time.
-3. **Motion carries brand meaning that a still cannot.** "Effortless" is a
-   camera behaviour before it is a colour.
+The rules here encode ``policy.INDIGO_VIDEO_BRAND_POLICY``. When that document
+changes, this file changes with it — a guardrail nobody checks is decoration.
 """
 
 from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# Colour
-# ---------------------------------------------------------------------------
-# Pantone references only. There are deliberately no hex values here.
-#
-# Nothing in this pipeline paints a colour itself: the prompt layer steers Veo
-# with colour *language* (a diffusion model responds to "deep indigo navy-blue",
-# not to a number), and the brand mark is composited from the master artwork,
-# which already carries its own colour.
-#
-# Hex is needed only if we later render colour ourselves — supers, an end card,
-# letterbox bars, or a grade. Take those values from the brand book at that
-# point. A guessed Pantone-to-sRGB conversion sitting in a file called policy.py
-# will eventually be trusted by someone, and shipping a "close enough" blue is
-# the exact failure this module exists to prevent.
-#
-# NOTE: the two source policy files disagreed on the light blue (291 C in the
-# top-level rules, 284 C in the image policy). Confirmed as **Pantone 291 C**.
+import re
 
-INDIGO_DARK_BLUE_PANTONE = "Pantone 2738 C"
-INDIGO_LIGHT_BLUE_PANTONE = "Pantone 291 C"
+from ..domain.models import AuditIssue, StoryOption
 
-#: How the palette should be *described* to a generative model. Colour names
-#: steer a diffusion model; hex codes do not.
-INDIGO_PALETTE_LANGUAGE = (
-    "deep indigo navy-blue with a violet lean (Pantone 2738 C) as the dominant colour, "
-    "pale sky blue (Pantone 291 C) as the secondary, and clean white as the breathing space"
+# ---------------------------------------------------------------------------
+# Brand name
+# ---------------------------------------------------------------------------
+
+_INDIGO_TOKEN = re.compile(r"\bindigo\b", re.IGNORECASE)
+
+#: "indigo" is also a legitimate colour word, and the approved palette language
+#: ("deep indigo navy-blue") depends on it. Colour usage is allowed; brand usage
+#: must be the exact IndiGo casing.
+_COLOUR_BEFORE = re.compile(
+    r"\b(?:deep|dark|pale|light|rich|soft|muted|bright|colour|color|shade|tint|tone|hue)\s*[-,]?\s*$",
+    re.IGNORECASE,
+)
+_COLOUR_AFTER = re.compile(
+    r"^\s*[-,]?\s*(?:blue|navy|violet|dye|tone|hue|tint|shade|grade|palette|wash|cast)\b",
+    re.IGNORECASE,
 )
 
+#: Name forms the brand book explicitly forbids.
+_BANNED_NAME_FORMS = re.compile(
+    r"\b(?:air\s+indigo|indigo\s+airways|indigo\s+airlines|goindigo(?!\.in\b)|"
+    r"indigoing|indigoes|indigone|indiwent)\b",
+    re.IGNORECASE,
+)
 
-# ---------------------------------------------------------------------------
-# Shared rules — the brand book, as it applies to any medium
-# ---------------------------------------------------------------------------
+#: The URL must carry both capitals.
+_URL_TOKEN = re.compile(r"\bgo\s?indigo\s?\.\s?in\b", re.IGNORECASE)
 
-INDIGO_BRAND_POLICY = """
-HARD RULES:
-- Brand name is always written as: IndiGo (capital I, capital G). Never Indigo, INDIGO,
-  indigo, Air IndiGo, IndiGo Airways, IndiGo Airlines, or goindigo
-- Never turn the name into a verb: no IndiGoing, IndiGoes, IndiGone, IndiWent
-- URL is always written as goIndiGo.in (I and G upper case)
-- Logo has 20 dots and must always appear in correct proportion and direction
-- Wordmark always comes from the master file and is never typed or recreated
-- Typeface: Bauhaus. Light weight for titles and headlines — never bold, semibold,
-  medium, or regular
-- Always sentence case. Never ALL CAPS. Title case only for names, properties, and assets
-- Never say anything negative about IndiGo
-- Always polite and professional
-- Never place the logo on an aircraft tail; place it in a corner that suits the composition
 
-SOFT RULES:
-- Black, dark blue, or light blue background -> white logo
-- Arrow-plane may be used creatively (patterns, circles) but must always imply
-  forward/upward motion, never pure decoration
-- Where a logo meets a building, start it from the building rather than overlapping it
-- Primary colour: Dark Blue (Pantone 2738 C). Secondary: Light Blue (Pantone 291 C)
-- Simple, eye-catching, non-controversial subject that adapts to many sizes
-- Soft colours, balanced composition, simple design
-- Integrate pop culture and modern trends where they genuinely fit
-"""
+def _brand_name_issues(text: str) -> list[str]:
+    """Return the misspelt brand-name occurrences in ``text``."""
+    problems: list[str] = []
+
+    for match in _INDIGO_TOKEN.finditer(text):
+        token = match.group(0)
+        if token == "IndiGo":
+            continue
+        before = text[max(0, match.start() - 24) : match.start()]
+        after = text[match.end() : match.end() + 24]
+        if _COLOUR_BEFORE.search(before) or _COLOUR_AFTER.match(after):
+            continue  # the colour, not the brand
+        problems.append(token)
+
+    return problems
 
 
 # ---------------------------------------------------------------------------
-# Emotional register
+# Frame content
 # ---------------------------------------------------------------------------
-# The craft layer's beat map is built for short drama: its own labels read
-# "Hero already in tension. Problem on screen.", "Hero tries to hold control.",
-# "A detail appears that breaks the hero's position.", "Breath tightens."
-#
-# Handed to a writer scene by scene, that produces an anxious person in an
-# airport — which is both off-brand ("effortless, hassle-free") and
-# reputationally wrong for an airline. The dramatic *shape* is still right; a
-# brand film needs a turn or it is a slideshow. Only the emotional colour of
-# each beat changes: the turn is a moment of warmth or recognition, never
-# distress.
-#
-# Keyed by the same beats as `domain/duration.py`, which stays brand-agnostic.
 
-INDIGO_BEAT_LABELS: dict[str, str] = {
-    "hook": "Open inside a feeling already in motion — a person mid-moment, warm and unforced.",
-    "context": "Where we are, who is near, and what this journey means to them.",
-    "pressure": "Anticipation builds. The wait stretches, in a good way — eagerness, not anxiety.",
-    "crack": "The turn: a small recognition or a moment of warmth that changes the feeling.",
-    "acceleration": "Cuts shorten and the heart lifts. Momentum, never panic.",
-    "impact": "The payoff lands — the reunion, the arrival, the feeling paid off in full.",
-    "aftermath": "A held breath of contentment. The image you remember.",
+#: Asking Veo for any of these produces a mangled mark or unreadable type.
+#: Policy section 2 — all marks and type are composited after the render.
+_MARK_OR_TYPE = re.compile(
+    r"\b(?:logo|logotype|wordmark|brand\s?mark|arrow[- ]plane|20[- ]dot|twenty[- ]dot|"
+    # "supers" plural only — "Super 35" and "super wide" are legitimate craft terms.
+    r"subtitle|caption|supers\b|lower[- ]third|end\s?card|title\s?card|on[- ]screen\s+text|"
+    r"text\s+overlay|overlay\s+text|tail\s+letter|fuselage\s+letter|livery\s+letter|"
+    r"signage\s+read|readable\s+(?:text|signage|lettering))\b",
+    re.IGNORECASE,
+)
+
+#: Banned dominant palettes. Policy section 3.
+_BANNED_COLOURS = re.compile(
+    r"\b(?:red|crimson|scarlet|maroon|purple|violet|magenta|fuchsia)\b", re.IGNORECASE
+)
+
+#: A prompt that correctly restates the palette *names* the banned colours in
+#: order to forbid them ("no red, no purple") — the guardrails ask for exactly
+#: that. Negation is therefore scoped to the clause, so "no red, crimson,
+#: magenta" clears the whole list while "crimson sunset" in its own clause does
+#: not. Getting this wrong would flag the very compliance we asked for.
+_NEGATION_CUE = re.compile(
+    r"\b(?:no|not|never|avoid|avoiding|without|banned?|ban|excluding|exclude|free\s+of|"
+    r"absent|zero|minus|prohibited|forbidden)\b",
+    re.IGNORECASE,
+)
+_CLAUSE_SPLIT = re.compile(r"[.;\n]")
+
+
+#: How far back a negation can reach. Long enough to cover "banned: red,
+#: crimson, purple, violet", short enough that an unrelated "not" earlier in a
+#: sentence does not silently excuse a colour genuinely in frame.
+_NEGATION_WINDOW = 60
+
+
+def _unnegated(pattern: re.Pattern[str], text: str) -> list[str]:
+    """Matches of ``pattern`` that are asserted, not forbidden.
+
+    Compliant prompts name the banned things in order to ban them — the
+    continuity block says "no logo, wordmark or on-screen text in frame", and
+    that block is restated in every scene. Matching naively would flag the exact
+    compliance the guardrails demand, on every single scene. A negation only
+    covers what follows it, so "crimson and gold, no blue" is still crimson.
+    """
+    found: list[str] = []
+    for clause in _CLAUSE_SPLIT.split(text):
+        for match in pattern.finditer(clause):
+            lookback = clause[max(0, match.start() - _NEGATION_WINDOW) : match.start()]
+            if not _NEGATION_CUE.search(lookback):
+                found.append(match.group(0).lower())
+    return found
+
+
+def _banned_colour_hits(text: str) -> set[str]:
+    return set(_unnegated(_BANNED_COLOURS, text))
+
+#: At least one of these must appear so the frame reads as IndiGo blue.
+_REQUIRED_BLUE = re.compile(r"\b(?:blue|navy|indigo|azure|cyan|cerulean)\b", re.IGNORECASE)
+
+#: Camera behaviour that contradicts "effortless". Policy section 4.
+_FRANTIC_CAMERA = re.compile(
+    r"\b(?:whip\s?pan|snap\s?zoom|crash\s?zoom|speed\s?ramp|shaky|frantic|chaotic|"
+    r"jerky|violent\s+(?:shake|movement))\b",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Safety. Policy section 9 — zero tolerance.
+# ---------------------------------------------------------------------------
+
+_SAFETY_TERMS = re.compile(
+    r"\b(?:crash(?:es|ing|ed)?|collision|colliding|mid[- ]air|emergency\s+landing|"
+    r"crash[- ]land|aircraft\s+(?:on\s+fire|in\s+distress)|uncontrolled\s+descent|"
+    r"nose[- ]dive|nosedive|runway\s+(?:incident|overrun)|oxygen\s+mask|evacuation\s+slide|"
+    r"emergency\s+slide|evacuat(?:e|ing|ion)|severe\s+turbulence|explosion|exploding|"
+    r"detonat|terroris|sabotage|hijack|wreckage|debris\s+field|casualt|fatalit)\b",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Tone. Policy sections 1 and 6.
+# ---------------------------------------------------------------------------
+
+_CHEAP_TONE = re.compile(
+    r"\b(?:cheap(?:est)?|dirt[- ]cheap|bargain|discount|rock[- ]bottom|slash(?:ed|ing)?\s+(?:price|fare)|"
+    r"unbeatable\s+(?:price|fare|deal)|lowest\s+(?:price|fare)\s+ever)\b",
+    re.IGNORECASE,
+)
+
+#: "routes"/"sectors" are trade words; the brand book says "flights".
+_TRADE_WORDS = re.compile(r"\b(?:routes|sectors)\b", re.IGNORECASE)
+
+_ALL_CAPS_RUN = re.compile(r"\b[A-Z]{4,}\b")
+
+#: Acronyms and codes that are legitimately upper case.
+_CAPS_ALLOWLIST = {
+    "FPV", "SFX", "LED", "HDR", "IMAX", "JSON", "MMKG", "USB", "IFE", "ATC", "VFX",
 }
 
-#: What Veo *can* render that reads as IndiGo. Banning the logo without
-#: supplying a replacement left the brand invisible: the guardrails said what
-#: could not appear and nothing about what should.
-INDIGO_BRAND_SURFACE = """
-Because no mark and no type may be generated, brand presence has to be carried
-entirely by things Veo can actually render. Every scene needs at least one:
-
-- **The cabin.** Deep indigo navy-blue seat fabric, pale sky blue accents, clean
-  white panels, generous bright daylight through the windows.
-- **Crew.** Uniforms in deep indigo navy-blue, worn with calm, unhurried
-  competence. Warm, professional, never obsequious or stiff.
-- **The aircraft, abstracted.** Read the livery as blue-and-white *shapes* —
-  partial fuselage, wing, tail curve, underside, shadow, reflection — never a
-  clean broadside that would need readable lettering.
-- **Blue in the world.** Boarding pass, bag tag, lanyard, seat-back, window
-  reflection, tarmac light. Blue objects held, touched, and moved through.
-- **The light.** Clean, bright, generous. IndiGo is a daytime airline; the frame
-  should feel aired-out, never murky or moody.
-
-A scene with no cabin, no crew, no aircraft form, and no blue object is not an
-IndiGo scene. It is stock footage with a blue grade.
-"""
-
-# ---------------------------------------------------------------------------
-# The video policy — the document this module exists for
-# ---------------------------------------------------------------------------
-
-INDIGO_VIDEO_BRAND_POLICY = """
-========================
-1. BRAND FOUNDATION IN MOTION
-========================
-
-IndiGo believes low-cost should never feel cheap. In film this is carried by how
-the camera behaves, not by what is said.
-
-Every generated film must feel:
-- Effortless — nothing strains, nothing rushes
-- On-time and precise — clean, deliberate framing
-- Hassle-free — uncluttered frames, room to breathe
-- Affordable without ever looking cheap
-
-Brand personality on screen: fun, fresh, smart, simple. Confident, never arrogant.
-Warm, never cheesy. Witty, never forced. Straightforward, never boring.
-
-Core principle: say simple truths in interesting ways.
-
-
-========================
-2. THE MARK IS NEVER GENERATED  (ABSOLUTE)
-========================
-
-This is the single most-violated rule and the most damaging.
-
-A generative video model cannot render a wordmark, a logotype, or a 20-dot logo
-legibly. It will produce a misspelt, wrong-coloured, wrong-proportioned mark in
-every clip. This also violates the brand book directly: the wordmark must come
-from the master artwork and must never be typed.
-
-Therefore, in every scene prompt:
-- NEVER ask for the IndiGo logo, wordmark, logotype, or the arrow-plane device
-- NEVER ask for the word "IndiGo" to appear anywhere in frame
-- NEVER ask for the 20-dot pattern
-- NEVER ask for goIndiGo.in or any URL on screen
-- NEVER ask for aircraft tail lettering, fuselage lettering, livery text, or
-  branded signage that would need readable brand type
-- NEVER ask for subtitles, captions, supers, lower-thirds, end cards, or any
-  on-screen text of any kind
-
-All brand marks and all on-screen type are composited after the render, from the
-master asset, in Bauhaus light, in sentence case. The generated footage is the
-plate underneath, and nothing more.
-
-When an aircraft appears, frame it so unreadable lettering is not the subject:
-prefer partial fuselage, wing, underside, shadow, silhouette, or motion blur over
-a clean broadside of a tail.
-
-BUT: banning the mark does not mean banning the brand. See section 2b — the
-brand still has to be visibly present in every scene, carried by things the model
-can actually render.
-
-
-========================
-2b. HOW INDIGO IS MADE VISIBLE INSTEAD
-========================
-""" + INDIGO_BRAND_SURFACE + """
-
-
-========================
-3. COLOUR — AND WHY IT DRIFTS
-========================
-
-Palette:
-- Dominant: deep indigo navy-blue with a violet lean (Pantone 2738 C)
-- Secondary: pale sky blue (Pantone 291 C)
-- Breathing space: clean white
-- Any further colours must be soft and pastel
-
-Blue must dominate the frame in EVERY scene, not on average across the film.
-
-Strictly prohibited:
-- Red-dominant palettes
-- Purple-dominant palettes
-- High-contrast or harsh palettes
-- Sodium-orange or teal-and-orange grades
-
-THE DRIFT PROBLEM. Each clip is a separate Veo generation with no memory of the
-last one. A palette stated only in the treatment will be honoured in scene 1 and
-gone by scene 6, and the film will change colour halfway through. The palette
-therefore belongs in the continuity block AND restated inside every single scene
-prompt, in colour words, never hex codes — a diffusion model responds to
-"deep indigo navy-blue", not to a number.
-
-
-========================
-3b. EMOTIONAL REGISTER — WHAT THIS FILM IS FOR
-========================
-
-This is an advertisement. Its job is to make someone feel good about flying
-IndiGo. Everything else serves that.
-
-The craft references teach short-film dramaturgy, where tension is the engine.
-Keep the *shape* — a film with no turn is a slideshow — but change the colour:
-
-- The obstacle is never IndiGo, and never the journey. Distance, time apart, and
-  missing someone are legitimate. Delays, queues, lost bags, cramped seats,
-  turbulence, and airport stress are NOT.
-- "Pressure" means anticipation, not anxiety. The wait to see someone you love
-  is longing, not dread.
-- The "crack" is a moment of warmth or recognition that turns the feeling — not
-  a breakdown, a failure, or a loss of control.
-- Nobody in an IndiGo film is frightened, panicked, distressed, tearful with
-  grief, lost, or overwhelmed. Anticipation, longing, relief, delight, quiet
-  contentment: yes. Fear and stress: never.
-- Flying is the thing that RESOLVES the tension. The aircraft is where the story
-  turns warm, never where it turns difficult.
-
-If a beat seems to demand distress, express it as longing instead. A woman who
-has not seen her mother in three years is full of anticipation, not fear.
-
-
-========================
-4. CAMERA AND MOTION
-========================
-
-"Effortless" is a camera behaviour first.
-
-Preferred:
-- Calm, precise, motivated moves — slow push-in, gentle lateral track, locked-off
-- Smooth glides that echo the arrow-plane's forward/upward direction
-- Generous negative space; let the frame breathe
-- One primary move per shot, with a reason
-
-Avoid:
-- Frantic whip pans, snap zooms, aggressive speed ramps
-- Shaky or chaotic handheld
-- Restless drifting with no motivation
-- Over-designed, busy, or cluttered frames
-
-Direction of travel carries meaning: movement should read as forward or upward
-wherever the story allows it.
-
-
-========================
-5. PEOPLE AND PHOTOGRAPHY
-========================
-
-Prohibited:
-- Stock-photography look
-- Posed or smiling stock faces
-- Glamourised or cliché travel imagery
-- Luxury-airline styling, and equally, discount-airline styling
-
-Preferred:
-- Candid, natural, unposed people
-- Conceptual and insight-driven moments
-- Evocative, atmospheric imagery
-- Thoughtful or unexpected perspectives
-- Destination-led storytelling
-
-Aviation settings (tarmac, terminal, cabin, boarding) are permitted in a brand
-film — but the aircraft is never the story. A hero beauty-shot of an aircraft, a
-runway, or an airport with no human presence and no emotional beat is a cliché,
-not a scene. Put a person and a feeling in the frame.
-
-
-========================
-6. SOUND AND ANY SPOKEN LINE
-========================
-
-- Room tone, texture, and the story's motif. Never ask Veo for music; a score is
-  mixed in afterwards
-- Any dialogue or voiceover follows the copy rules: sentence case, British English
-  spellings (colour, favourite), Oxford comma, crisp and short
-- Say "flights", never "routes" or "sectors". "Non-stop" is always hyphenated
-- Never frame IndiGo as cheap or discount-heavy
-- No shouty, promotional, or jargon-heavy delivery
-- Smart, restrained wit. Effortless humour, never forced
-
-
-========================
-7. TYPOGRAPHY (POST ONLY)
-========================
-
-No type is ever generated into the footage. For the overlay stage:
-- Bauhaus, light weight only, for titles and headlines
-- Sentence case. Never ALL CAPS anywhere — titles, CTAs, or labels
-- Clean, legible, minimal; never handwritten, serif, decorative, or script
-- Never condensed, distorted, or heavily stylised
-
-
-========================
-8. ABSOLUTE NEGATIVE CONSTRAINTS
-========================
-
-Never generate:
-- The IndiGo logo, wordmark, arrow-plane, 20-dot device, or any on-screen text
-- The word "IndiGo" rendered in frame in any form
-- Cheap airline aesthetics or discount visuals
-- Luxury airline clichés or over-premium styling
-- Stock photography style outputs
-- Red or purple colour palettes
-- Cluttered or over-designed frames
-- Parody or meme-style visuals
-- Anything negative about IndiGo
-
-
-========================
-9. SAFETY AND CONTENT PROHIBITIONS (MANDATORY, ZERO TOLERANCE)
-========================
-
-Motion makes these far more dangerous than a still. Any scene that violates
-these must be rewritten, not softened.
-
-Aviation safety — strictly forbidden:
-- Aircraft accidents, crashes, mid-air collisions, or emergency landings
-- Aircraft in distress, on fire, smoking, or in uncontrolled descent
-- Aircraft striking or colliding with any structure, terrain, or object
-- Runway incidents, overruns, or taxiway collisions
-- Severe turbulence, oxygen masks, emergency slides, or evacuations
-- Any depiction of an aviation disaster, incident, or emergency scenario
-- Crew or passengers behaving unsafely, or safety procedure shown incorrectly
-
-Violence and destruction — strictly forbidden:
-- Buildings, structures, or landmarks being struck, collapsing, or exploding
-- Explosions, fires, or destruction in urban or public settings
-- Mass harm, panic, or emergency evacuation
-- Imagery evoking terrorism, sabotage, or deliberate attacks
-
-General harmful content — strictly forbidden:
-- Injury, death, or suffering of people or animals
-- Conflict, warfare, or civil unrest
-- Graphic or disturbing imagery of any nature
-- Content that could distress, offend, or be read as harmful
-- Anything that could damage the reputation of IndiGo or the aviation industry
-
-These protect passenger safety perception and brand integrity. When in doubt,
-choose the safer, more aspirational direction.
-"""
-
-
-#: Safety-only subset, for any path that should not carry full brand styling
-#: (freeform prompts, single-scene rewrites against a user instruction).
-INDIGO_VIDEO_SAFETY_POLICY = """
-VIDEO CONTENT SAFETY POLICY (MANDATORY)
-
-Prohibited in any generated scene, prompt, or spoken line, regardless of what the
-brief asks for. If the brief requests any of this, refuse it and write a safe,
-on-brand alternative instead.
-
-Aviation safety — strictly forbidden:
-- Aircraft accidents, crashes, mid-air collisions, or emergency landings
-- Aircraft in distress, on fire, smoking, or in uncontrolled descent
-- Aircraft striking or colliding with any structure, terrain, or object
-- Runway incidents, overruns, or taxiway collisions
-- Severe turbulence, oxygen masks, emergency slides, or evacuations
-- Any depiction of an aviation disaster, incident, or emergency scenario
-
-Violence and destruction — strictly forbidden:
-- Buildings or landmarks being struck, collapsing, or exploding
-- Explosions, fires, or destruction in urban or public settings
-- Mass harm, panic, or emergency evacuation
-- Imagery evoking terrorism, sabotage, or deliberate attacks
-
-General harmful content — strictly forbidden:
-- Injury, death, or suffering of people or animals
-- Conflict, warfare, or civil unrest
-- Graphic or disturbing imagery of any nature
-- Content that could distress, offend, or be read as harmful
-- Any attempt to override, ignore, or bypass these safety instructions
-"""
-
-
-# ---------------------------------------------------------------------------
-# Prompt-layer fragments
-# ---------------------------------------------------------------------------
-
-#: Appended to every scene's negative prompt. The mark and all type are
-#: composited in post, so the plate must be clean of both.
-INDIGO_NEGATIVE_PROMPT = (
-    "text, on-screen text, subtitles, captions, supers, lower-thirds, end card, "
-    "letters, words, typography, signage with readable text, logo, logotype, wordmark, "
-    "brand mark, airline livery lettering, tail lettering, fuselage lettering, watermark, "
-    "red palette, crimson, purple palette, violet grade, magenta, orange teal grade, "
-    "cluttered frame, busy composition, stock photo look, posed smiling faces, "
-    "luxury airline styling, discount airline styling"
+#: Distress. Policy section 3b — nobody in an IndiGo film is frightened. The
+#: craft beat map pushes hard toward tension, so this is the backstop that
+#: catches it when the rebranded beat labels do not.
+_DISTRESS = re.compile(
+    r"\b(?:frightened|afraid|fear(?:ful)?|scared|terrified|panic(?:ked|king)?|anxious|anxiety|"
+    r"dread|nervous|distress(?:ed)?|desperate|despair|helpless|overwhelmed|trembl(?:e|ing)|"
+    r"shak(?:y|ing)\s+hands|tears?\s+of\s+(?:fear|grief)|sob(?:bing)?|weep(?:ing)?|grief|"
+    r"clench(?:ed|ing)?\s+jaw|white[- ]knuckle|brac(?:e|ing)\s+for|flinch|cower|"
+    r"stress(?:ed|ful)?|worried|worry|uneasy|apprehensive)\b",
+    re.IGNORECASE,
 )
 
-#: Concrete values the storyboard model must bake into the continuity block, so
-#: that every downstream scene prompt restates them. Section 3 explains why.
-INDIGO_CONTINUITY_REQUIREMENTS = f"""
-The continuity block is where brand survives twelve independent generations. It must lock:
-- Palette: {INDIGO_PALETTE_LANGUAGE}. Banned: red, crimson, purple, violet, magenta,
-  and teal-and-orange grades.
-- A rule stating that no logo, wordmark, brand name, or on-screen text of any kind
-  appears in frame — all marks and type are composited after the render.
-- Camera language that reads as effortless: calm, motivated, mostly smooth moves.
+#: Friction blamed on the journey itself. Policy section 3b — the obstacle is
+#: never IndiGo and never flying.
+_JOURNEY_FRICTION = re.compile(
+    r"\b(?:delay(?:ed|s)?|cancelled\s+flight|long\s+quel?ue|queue\s+snak|lost\s+(?:bag|luggage)|"
+    r"missed\s+(?:the\s+)?(?:flight|connection)|cramped|crowded\s+(?:cabin|gate)|turbulence|"
+    r"stuffy|delayed\s+boarding|rush(?:ing|ed)\s+through\s+security)\b",
+    re.IGNORECASE,
+)
 
-Every scene prompt must then restate the palette in colour words. A palette stated
-once and not repeated will be gone by the middle of the film.
-"""
+#: Things Veo *can* render that read as IndiGo. Policy section 2b — with the
+#: mark banned, a scene carrying none of these has no brand in it at all.
+_BRAND_SURFACE = re.compile(
+    r"\b(?:cabin|aisle|seat[- ]?back|seat\s+fabric|headrest|tray\s+table|overhead\s+bin|"
+    r"cabin\s+window|porthole|crew|attendant|steward(?:ess)?|pilot|uniform|lanyard|"
+    r"boarding\s+pass|bag\s+tag|baggage\s+tag|aircraft|airplane|aeroplane|plane|jet|"
+    r"fuselage|wing(?:tip)?|tail|livery|jet\s?bridge|air\s?bridge|tarmac|runway|"
+    r"gate|terminal|departure\s+board|trolley)\b",
+    re.IGNORECASE,
+)
+
+#: A hero shot of hardware with nobody in it. Policy section 5 — a warning, not
+#: a block: aviation settings are legitimate in a brand film, the cliché is not.
+_AVIATION_SUBJECT = re.compile(
+    r"\b(?:aircraft|airplane|aeroplane|plane|jet|airbus|a320|a321|runway|tarmac|"
+    r"airport|terminal|apron|taxiway)\b",
+    re.IGNORECASE,
+)
+_HUMAN_PRESENCE = re.compile(
+    r"\b(?:passenger|traveller|traveler|child|kid|boy|girl|man|woman|mother|father|"
+    r"crew|attendant|pilot|hand|face|eyes|shoulder|family|couple|person|people|"
+    r"grandmother|grandfather|daughter|son|figure|silhouette\s+of\s+a)\b",
+    re.IGNORECASE,
+)
+
+
+def _all_caps_hits(text: str) -> list[str]:
+    return [
+        word
+        for word in _ALL_CAPS_RUN.findall(text)
+        if word not in _CAPS_ALLOWLIST and not word.isdigit()
+    ]
+
+
+def brand_issues(story: StoryOption) -> list[AuditIssue]:
+    """Audit one story option against the IndiGo video guardrails."""
+    issues: list[AuditIssue] = []
+
+    def push(rule: str, severity: str, message: str) -> None:
+        issues.append(AuditIssue(rule=rule, severity=severity, message=message))  # type: ignore[arg-type]
+
+    def at(scene, rule: str, severity: str, message: str) -> None:
+        issues.append(
+            AuditIssue(
+                sceneId=scene.id,
+                sceneOrder=scene.order,
+                rule=rule,
+                severity=severity,  # type: ignore[arg-type]
+                message=message,
+            )
+        )
+
+    # --- Story level --------------------------------------------------------
+    story_text = " ".join(
+        [story.title, story.summary, story.treatment, story.angle, *story.continuity.rules]
+    )
+
+    misspelt = _brand_name_issues(story_text)
+    if misspelt:
+        push(
+            "brand/name",
+            "error",
+            f"The brand name is written as {', '.join(sorted(set(misspelt)))}. "
+            "It is always IndiGo — capital I, capital G.",
+        )
+
+    if _BANNED_NAME_FORMS.search(story_text):
+        push(
+            "brand/name-form",
+            "error",
+            "Forbidden name form. Never Air IndiGo, IndiGo Airways, IndiGo Airlines, or "
+            "goindigo, and never the name as a verb.",
+        )
+
+    palette = story.continuity.palette
+    if palette:
+        if not _REQUIRED_BLUE.search(palette):
+            push(
+                "brand/palette-blue",
+                "error",
+                "The locked palette does not name a blue. Deep indigo navy-blue "
+                "(Pantone 2738 C) must dominate, with pale sky blue (Pantone 291 C) secondary.",
+            )
+        banned = _banned_colour_hits(palette)
+        if banned:
+            push(
+                "brand/palette-banned",
+                "error",
+                f"The locked palette contains prohibited colours: {', '.join(sorted(banned))}. "
+                "Red and purple palettes are banned.",
+            )
+
+    if not any(
+        _MARK_OR_TYPE.search(rule) or "text" in rule.lower() for rule in story.continuity.rules
+    ):
+        push(
+            "brand/no-mark-rule",
+            "warning",
+            "The continuity block does not state that no logo, wordmark, or on-screen text "
+            "appears in frame. Lock it there so every scene inherits it.",
+        )
+
+    caps = _all_caps_hits(f"{story.title} {story.summary}")
+    if caps:
+        push(
+            "brand/sentence-case",
+            "warning",
+            f"ALL CAPS in story copy: {', '.join(sorted(set(caps))[:4])}. "
+            "IndiGo is always sentence case.",
+        )
+
+    if _CHEAP_TONE.search(story_text):
+        push(
+            "brand/tone",
+            "error",
+            "Discount-led language. Low-cost must never read as cheap — sell effortlessness, "
+            "not price.",
+        )
+
+    if _TRADE_WORDS.search(story_text):
+        push("brand/vocabulary", "warning", 'Use "flights", never "routes" or "sectors".')
+
+    # --- Scene level --------------------------------------------------------
+    for scene in story.scenes:
+        prompt = scene.prompt or ""
+        card = scene.shot_card
+        haystack = "\n".join(
+            [
+                prompt,
+                scene.summary,
+                *(value for value in card.model_dump().values() if isinstance(value, str)),
+            ]
+        )
+
+        marks = _unnegated(_MARK_OR_TYPE, haystack)
+        if marks:
+            at(
+                scene,
+                "brand/generated-mark",
+                "error",
+                f'This scene asks the model to render "{marks[0]}". Veo cannot render a '
+                "wordmark or type legibly — it will come back misspelt and off-colour. Remove it; "
+                "the mark is composited from the master file after the render.",
+            )
+
+        scene_misspelt = _brand_name_issues(haystack)
+        if scene_misspelt:
+            at(
+                scene,
+                "brand/name",
+                "error",
+                f"Brand name written as {', '.join(sorted(set(scene_misspelt)))}. It is always "
+                "IndiGo. Better still: describe the colour as deep indigo navy-blue and keep the "
+                "brand name out of the prompt entirely.",
+            )
+
+        if not _REQUIRED_BLUE.search(f"{card.palette} {prompt}"):
+            at(
+                scene,
+                "brand/palette-blue",
+                "error",
+                "No blue in this scene. Blue must dominate every frame, not just the average of "
+                "the film — Veo has no memory between clips, so the palette must be restated here.",
+            )
+
+        banned = _banned_colour_hits(f"{card.palette}. {prompt}")
+        if banned:
+            at(
+                scene,
+                "brand/palette-banned",
+                "error",
+                f"Prohibited colours in frame: {', '.join(sorted(banned))}. "
+                "Red and purple palettes are banned.",
+            )
+
+        if _SAFETY_TERMS.search(haystack):
+            at(
+                scene,
+                "brand/safety",
+                "error",
+                "This scene depicts an aviation incident, emergency, or destruction. Absolutely "
+                "prohibited — rewrite the beat entirely rather than softening it.",
+            )
+
+        if _FRANTIC_CAMERA.search(haystack):
+            at(
+                scene,
+                "brand/camera-calm",
+                "warning",
+                "Frantic camera work contradicts effortless. Prefer a calm, motivated move — "
+                "slow push-in, gentle track, or locked-off.",
+            )
+
+        if _CHEAP_TONE.search(haystack):
+            at(scene, "brand/tone", "error", "Discount-led language. Never frame IndiGo as cheap.")
+
+        distress = _unnegated(_DISTRESS, haystack)
+        if distress:
+            at(
+                scene,
+                "brand/distress",
+                "error",
+                f'This scene plays as distress ("{distress[0]}"). Nobody in an IndiGo film is '
+                "frightened or stressed — an airline cannot advertise anxiety. Express the same "
+                "beat as longing, anticipation, or relief instead.",
+            )
+
+        friction = _unnegated(_JOURNEY_FRICTION, haystack)
+        if friction:
+            at(
+                scene,
+                "brand/journey-friction",
+                "error",
+                f'This scene blames the journey ("{friction[0]}"). The obstacle is never IndiGo '
+                "and never flying — flying is what resolves the story. Distance and time apart "
+                "are fair game; delays, queues, and cramped cabins are not.",
+            )
+
+        if not _BRAND_SURFACE.search(haystack):
+            at(
+                scene,
+                "brand/no-brand-surface",
+                "error",
+                "Nothing in this scene reads as IndiGo. With the logo and all type banned from "
+                "the plate, brand has to be carried by what Veo can render — cabin interior, "
+                "crew uniform, aircraft form, or a blue brand object. Otherwise this is stock "
+                "footage with a blue grade.",
+            )
+
+        caps = _all_caps_hits(prompt)
+        if caps:
+            at(
+                scene,
+                "brand/sentence-case",
+                "warning",
+                f"ALL CAPS in the prompt: {', '.join(sorted(set(caps))[:4])}.",
+            )
+
+        if _AVIATION_SUBJECT.search(haystack) and not _HUMAN_PRESENCE.search(haystack):
+            at(
+                scene,
+                "brand/aviation-cliche",
+                "warning",
+                "An aircraft, runway, or terminal with no human presence is a stock aviation "
+                "shot, not a scene. Put a person and a feeling in the frame.",
+            )
+
+    return issues
