@@ -1,37 +1,8 @@
-Brief story
-The film unfolds quietly, following a young woman through the ritual of flying home after a long separation. Tension builds in the stillness of waiting, the intimacy of the plane cabin, the melancholy sight of the city receding, and the vulnerable walk into arrivals. The visual motif is the glow of her phone screen catching her face—a lifeline to home. The break occurs when she finally turns the phone off before reuniting. The piece is composed with slow tracking shots and long takes, ending on a held embrace that lingers beyond the cut.
-
-Dawn at the Gate
-8s · Context · establish · 0:00
-
-Locked-off wide shot, 35mm, subtle push-in. Young South Asian woman, oval face, warm brown skin, dark almond eyes, long straight black hair in a low ponytail, no makeup, delicate gold nose ring, sits alone at the airport gate. She wears a fitted blue denim jacket over a light beige sweater, navy cotton trousers, white trainers, simple woven backpack at her feet; her phone glows in her hands. The terminal is cavernous and still, glass walls layered with faint reflections. Cold dawn light pours through the window, mixing with fluorescent airport glow as key from frame-right, soft fill from the same side. Her thumb hovers above an unread message; her breath is visible in the pause. Muted blue-grays, off-white, brushed steel surfaces, warm brown skin tones. Continuity: character, wardrobe, location, lighting constant, palette, camera grammar, motif of glass reflections. Ends on her face and phone reflected in the terminal window, anticipation clear in her stillness.
-
-Audio: Soft air-conditioning drone, distant footsteps on hard tile, chair creaks, faint phone buzz at 5 seconds.
-
-Duration: 8 seconds.
-
-Boarding Threshold
-8s · Crack · detail · 0:08
-Tracking shot, 50mm, moves laterally as the young South Asian woman (oval face, warm brown skin, dark almond eyes, long straight black hair in a low ponytail, delicate gold nose ring) rises from her gate seat. She wears her fitted blue denim jacket, light beige sweater, navy cotton trousers, white trainers, woven backpack slung over one shoulder. She joins the slow boarding line in a narrow glass-walled corridor, her phone in one hand. Condensation streaks the glass, and her face and phone are seen reflected beside others. She squeezes her phone, glances at the unread message, then slips it into her pocket, squaring her shoulders. Fluorescent ramp lighting overhead, blue dawn spill from the left as key. Palette: soft blue-grays, brushed steel, navy, beige, warm brown skin. Continuity: character, wardrobe, location, lighting constant, palette, camera grammar, motif of glass and phone reflections. Ends on her pausing mid-step, her face and phone perfectly overlapped with another traveler's reflection in the ramp glass, hesitating just before stepping onto the plane.
-
-Audio: Muted hum, suitcase wheels on tile, backpack strap creak, muffled boarding announcement, gentle breath.
-
-Duration: 8 seconds.
-
-Window Farewell
-6s · Acceleration · detail · 0:16
-
-Static close-up, 85mm, very shallow depth of field. Young South Asian woman, oval face, warm brown skin, dark almond eyes, long straight black hair in a low ponytail, delicate gold nose ring, now in her fitted blue denim jacket, light beige sweater, navy cotton trousers, white trainers. She sits at the airplane window, profile to camera, phone held in her right hand. City’s early lights and her own face are reflected in the window glass. Her thumb hovers, then presses and holds the power button—her lips press together and her breath catches as the city lights blur and vanish. Lighting: cool dawn window light as key from frame-left, soft fluorescent overhead as fill. Palette: muted blue-grays, off-white, pale yellow, warm brown skin tones. Continuity: character, wardrobe, lighting constant, palette, camera grammar, motif of phone and glass reflections. Ends on her phone’s screen blacked out, her profile and reflection merged in the window.
-
-Audio: Low airplane drone, window vibration, seat creak, faint city noise trailing off at 3 seconds.
-
-Duration: 6 seconds.
-
-
-Embrace in Glass
-8s · Aftermath · aftermath · 0:22
-Locked-off medium shot, 50mm, slow push-in. Young South Asian woman, oval face, warm brown skin, dark almond eyes, long straight black hair in a low ponytail, delicate gold nose ring, now in her fitted blue denim jacket, light beige sweater, navy cotton trousers, white trainers, woven backpack. She steps into the arrivals hall, dropping her backpack with a soft thud. Her mother, rounded face, soft brown skin, short black hair with streaks of gray, gentle smile lines, in a pale yellow kurta, light gray shawl, silver bangles, opens her arms. They move into a tight embrace, faces pressed together, eyes closed. Sliding glass doors catch their full reflection—two figures merged in the glass, pale yellow and off-white tones. Environmental pressure: cool morning air, condensation on glass. Lighting: soft morning hall light from above, glass doors reflecting pale yellow, subtle window fill from frame-right. Fluorescent airport glow mixed with cool dawn window light as key from frame-right, soft fill from frame-right. Palette: off-white, brushed steel, pale yellow, warm brown and gray skin tones, muted blue-grays, no strong or vibrant colors, no reds or magentas. Continuity: both faces, clothing, lighting constant, palette, motif of glass reflection, camera grammar restated. Ends on their embrace held motionless, both faces pressed together and perfectly layered in the sliding glass doors’ reflection as the airport world blurs beyond.
-
-Audio: Suitcase lands at 2 seconds, soft gasp, sliding door motor, fabric rustle, breath held then released.
-
-Duration: 8 seconds.
+A 30-second IndiGo brand film about how effortless flying feels. A
+woman in her sixties is flying to meet her new grandchild for the
+first time, and she is delighted the whole way. Inside the IndiGo
+cabin: a crew member in a deep indigo navy uniform helps her stow her
+bag, she lifts the window shade onto bright morning cloud, she quietly
+practises what she will say, and she lands beaming. Warm, light and
+unhurried. Nothing goes wrong, nobody is anxious, and there are no
+tears — the joy is in the ordinary details.
