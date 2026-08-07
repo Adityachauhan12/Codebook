@@ -1,683 +1,526 @@
+"""Brand compliance, enforced in code.
+
+Same reasoning as ``app/skills/audit.py``: a model asked whether it followed the
+brand book will say yes. These rules run against the structured storyboard the
+model actually returned, and anything at ``error`` severity is fed back as a
+repair brief before a single second of Veo time is spent.
+
+The rules here encode ``policy.INDIGO_VIDEO_BRAND_POLICY``. When that document
+changes, this file changes with it — a guardrail nobody checks is decoration.
+"""
+
 from __future__ import annotations
 
-import asyncio
-import json
-from typing import Any, Callable, Literal
+import re
 
-from fastapi import APIRouter, File, Form, Query, Request, UploadFile
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from ..domain.models import AuditIssue, StoryOption
 
-from ..config import settings
-from ..domain.duration import default_pacing, plan_duration
-from ..domain.models import (
-    AspectRatio,
-    BriefAnalysis,
-    EndCard,
-    Pacing,
-    Project,
-    ProjectBrief,
-    RenderResult,
-    StylePreset,
-    TransitionStyle,
+# ---------------------------------------------------------------------------
+# Brand name
+# ---------------------------------------------------------------------------
+
+_INDIGO_TOKEN = re.compile(r"\bindigo\b", re.IGNORECASE)
+
+#: "indigo" is also a legitimate colour word, and the approved palette language
+#: ("deep indigo navy-blue") depends on it. Colour usage is allowed; brand usage
+#: must be the exact IndiGo casing.
+_COLOUR_BEFORE = re.compile(
+    r"\b(?:deep|dark|pale|light|rich|soft|muted|bright|colour|color|shade|tint|tone|hue)\s*[-,]?\s*$",
+    re.IGNORECASE,
 )
-from ..errors import BadRequest, NotFound
-from ..ids import short_id
-from ..services.audio import generate_track, save_uploaded_track, suggest_tracks
-from ..services.brief import analyse_brief
-from ..services.clips import generate_all_clips, generate_scene_clip, selected_story, sync_clips
-from ..services.jobs import JobContext, cancel_job, start_job
-from ..services.render import render_project
-from ..services.store import (
-    create_project,
-    delete_project,
-    get_job,
-    list_jobs,
-    list_projects,
-    require_project,
-    subscribe,
-    unsubscribe,
-    update_project,
-)
-from ..services.storyboard import (
-    generate_scenes,
-    generate_treatments,
-    regenerate_treatment,
-    rewrite_scene,
+_COLOUR_AFTER = re.compile(
+    r"^\s*[-,]?\s*(?:blue|navy|violet|dye|tone|hue|tint|shade|grade|palette|wash|cast)\b",
+    re.IGNORECASE,
 )
 
-router = APIRouter(prefix="/api/video", tags=["video"])
+#: Name forms the brand book explicitly forbids.
+_BANNED_NAME_FORMS = re.compile(
+    r"\b(?:air\s+indigo|indigo\s+airways|indigo\s+airlines|goindigo(?!\.in\b)|"
+    r"indigoing|indigoes|indigone|indiwent)\b",
+    re.IGNORECASE,
+)
+
+#: The URL must carry both capitals.
+_URL_TOKEN = re.compile(r"\bgo\s?indigo\s?\.\s?in\b", re.IGNORECASE)
+
+
+def _brand_name_issues(text: str) -> list[str]:
+    """Return the misspelt brand-name occurrences in ``text``."""
+    problems: list[str] = []
+
+    for match in _INDIGO_TOKEN.finditer(text):
+        token = match.group(0)
+        if token == "IndiGo":
+            continue
+        before = text[max(0, match.start() - 24) : match.start()]
+        after = text[match.end() : match.end() + 24]
+        if _COLOUR_BEFORE.search(before) or _COLOUR_AFTER.match(after):
+            continue  # the colour, not the brand
+        problems.append(token)
+
+    return problems
 
 
 # ---------------------------------------------------------------------------
-# Request bodies
+# Frame content
 # ---------------------------------------------------------------------------
 
+#: Asking Veo for any of these produces a mangled mark or unreadable type.
+#: Policy section 2 — all marks and type are composited after the render.
+_MARK_OR_TYPE = re.compile(
+    r"\b(?:logo|logotype|wordmark|brand\s?mark|arrow[- ]plane|20[- ]dot|twenty[- ]dot|"
+    # "supers" plural only — "Super 35" and "super wide" are legitimate craft terms.
+    r"subtitle|caption|supers\b|lower[- ]third|end\s?card|title\s?card|"
+    # The original pattern matched "on-screen text" only, so a scene reading
+    # "Final on-screen message ... as clean brand-safe typography" sailed
+    # through and Veo drew the end card itself. Cover the synonyms.
+    r"on[- ]screen\s+(?:text|message|copy|type|typography|graphic|line)|"
+    r"typograph(?:y|ic)|typeface|"
+    # "<copy> appears/reads/remains" is how a writer smuggles in a super
+    # without ever using the word "text".
+    r"(?:text|message|copy|headline|tagline|wording|lettering)\s+"
+    r"(?:appears|appear|reads|read|remains|remain|sits|fades|holds)|"
+    r"text\s+overlay|overlay\s+text|tail\s+letter|fuselage\s+letter|livery\s+letter|"
+    r"signage\s+read|readable\s+(?:text|signage|lettering))\b",
+    re.IGNORECASE,
+)
 
-class BriefBody(BaseModel):
-    brief: str = Field(min_length=8)
-    seconds: int = Field(ge=4)
-    style: StylePreset = "cinematic"
-    ratio: AspectRatio = "16:9"
-    pacing: Pacing | None = None
-    references: list[str] = Field(default_factory=list)
-    avoid: list[str] = Field(default_factory=list)
-    language: str = "English"
-    transition: TransitionStyle = "hardcut"
-    quality: Literal["standard", "draft"] = "standard"
+#: Banned dominant palettes. Policy section 3.
+_BANNED_COLOURS = re.compile(
+    r"\b(?:red|crimson|scarlet|maroon|purple|violet|magenta|fuchsia)\b", re.IGNORECASE
+)
 
-    def to_brief(self) -> ProjectBrief:
-        return ProjectBrief(
-            brief=self.brief.strip(),
-            seconds=self.seconds,
-            style=self.style,
-            ratio=self.ratio,
-            pacing=self.pacing or default_pacing(self.style),
-            references=self.references,
-            avoid=self.avoid,
-            language=self.language,
-        )
-
-
-class BriefPatch(BaseModel):
-    brief: str | None = None
-    seconds: int | None = Field(default=None, ge=4)
-    style: StylePreset | None = None
-    ratio: AspectRatio | None = None
-    pacing: Pacing | None = None
-    references: list[str] | None = None
-    avoid: list[str] | None = None
-    language: str | None = None
-    transition: TransitionStyle | None = None
-
-
-class SelectStoryBody(BaseModel):
-    storyId: str
+#: A prompt that correctly restates the palette *names* the banned colours in
+#: order to forbid them ("no red, no purple") — the guardrails ask for exactly
+#: that. Negation is therefore scoped to the clause, so "no red, crimson,
+#: magenta" clears the whole list while "crimson sunset" in its own clause does
+#: not. Getting this wrong would flag the very compliance we asked for.
+_NEGATION_CUE = re.compile(
+    r"\b(?:no|not|never|avoid|avoiding|without|banned?|ban|excluding|exclude|free\s+of|"
+    r"absent|zero|minus|prohibited|forbidden)\b",
+    re.IGNORECASE,
+)
+_CLAUSE_SPLIT = re.compile(r"[.;\n]")
 
 
-class ScenePatch(BaseModel):
-    prompt: str | None = None
-    title: str | None = None
-    summary: str | None = None
-    negativePrompt: str | None = None
-    transitionOut: TransitionStyle | None = None
+#: How far back a negation can reach. Long enough to cover "banned: red,
+#: crimson, purple, violet", short enough that an unrelated "not" earlier in a
+#: sentence does not silently excuse a colour genuinely in frame.
+_NEGATION_WINDOW = 60
 
 
-class RewriteBody(BaseModel):
-    instruction: str = ""
+def _unnegated(pattern: re.Pattern[str], text: str) -> list[str]:
+    """Matches of ``pattern`` that are asserted, not forbidden.
 
-
-class TrackPatch(BaseModel):
-    selected: bool | None = None
-    gain: float | None = Field(default=None, ge=0, le=2)
-    prompt: str | None = None
-    label: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Planning — no key required, so the UI can show the real clip count up front
-# ---------------------------------------------------------------------------
-
-
-@router.get("/plan")
-async def get_plan(
-    seconds: float = Query(default=30),
-    style: str = Query(default="cinematic"),
-    pacing: Pacing | None = Query(default=None),
-) -> dict[str, Any]:
-    resolved = pacing or default_pacing(style)
-    plan = plan_duration(seconds, resolved)
-
-    return {
-        "plan": plan.model_dump(by_alias=True, mode="json"),
-        "limits": {
-            "maxClipSeconds": settings.veo_max_clip_seconds,
-            "allowedClipSeconds": settings.allowed_clip_seconds,
-            "maxVideoSeconds": settings.max_video_seconds,
-            "maxSegments": settings.max_segments,
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# Projects
-# ---------------------------------------------------------------------------
-
-
-@router.get("/projects")
-async def get_projects() -> dict[str, Any]:
-    projects = await list_projects()
-    return {
-        "projects": [
-            {
-                "id": project.id,
-                "createdAt": project.created_at,
-                "brief": project.brief.brief[:140],
-                "seconds": project.plan.target_seconds,
-                "segments": len(project.plan.segments),
-                "render": project.render.status,
-            }
-            for project in projects
-        ]
-    }
-
-
-def _apply_analysis(analysis: BriefAnalysis) -> Callable[[Project], Project]:
-    """Distribute a brief analysis across the project.
-
-    Each part lands where the system that needs it will look: intent on the
-    brief for the prompt layer, supers and end card on the project for the
-    compositor, music on the brief for the composer.
+    Compliant prompts name the banned things in order to ban them — the
+    continuity block says "no logo, wordmark or on-screen text in frame", and
+    that block is restated in every scene. Matching naively would flag the exact
+    compliance the guardrails demand, on every single scene. A negation only
+    covers what follows it, so "crimson and gold, no blue" is still crimson.
     """
-
-    def mutate(current: Project) -> Project:
-        current.brief.intent = analysis.intent
-        current.brief.unsupported = analysis.unsupported
-        current.brief.music_direction = analysis.music
-        # dict.fromkeys de-duplicates while keeping the user's ordering first.
-        current.brief.avoid = list(dict.fromkeys([*current.brief.avoid, *analysis.avoid]))
-        current.supers = analysis.supers
-        current.end_card = analysis.end_card
-        return current
-
-    return mutate
+    found: list[str] = []
+    for clause in _CLAUSE_SPLIT.split(text):
+        for match in pattern.finditer(clause):
+            lookback = clause[max(0, match.start() - _NEGATION_WINDOW) : match.start()]
+            if not _NEGATION_CUE.search(lookback):
+                found.append(match.group(0).lower())
+    return found
 
 
-@router.post("/projects", status_code=201)
-async def post_project(body: BriefBody) -> dict[str, Any]:
-    brief = body.to_brief()
-    plan = plan_duration(brief.seconds, brief.pacing)
+def _banned_colour_hits(text: str) -> set[str]:
+    return set(_unnegated(_BANNED_COLOURS, text))
 
-    project = Project(
-        id=short_id("vid"),
-        brief=brief,
-        plan=plan,
-        transition=body.transition,
-        model=settings.veo_fast_model if body.quality == "draft" else settings.veo_model,
-    )
-    await create_project(project)
+#: The brand's own blues. The first cut of this accepted any word containing
+#: "blue", and real output sailed through on "cobalt blue" — a bright greenish
+#: blue that is not Pantone 2738 C. Checking for *a* blue is not checking for
+#: *the* blue.
+#: Named ``_REQUIRED_BLUE`` because that is what the two call sites ask for. It
+#: was previously defined as ``_BRAND_BLUE`` and referenced as ``_REQUIRED_BLUE``
+#: — a half-applied rename that left `brand_issues()` raising ``NameError`` on
+#: every story with scenes, which took the whole brand audit down with it.
+_REQUIRED_BLUE = re.compile(
+    r"\b(?:indigo|navy|sky\s+blue|pale\s+blue|powder\s+blue)\b", re.IGNORECASE
+)
 
-    # Kick the treatments off immediately — the UI shows a spinner on the cards.
-    async def work(context: JobContext) -> dict[str, int]:
-        # Split the brief before anything reads it. The scene writer must never
-        # see on-screen copy, or it will ask Veo to spell.
-        context.progress(0.05, "Reading the brief…")
-        analysis = await analyse_brief(brief.brief, seconds=brief.seconds)
-        analysed = await update_project(project.id, _apply_analysis(analysis))
+#: Blues that are recognisably not IndiGo's.
+_OFF_BRAND_BLUE = re.compile(
+    r"\b(?:cobalt|azure|cyan|turquoise|teal|cerulean|electric\s+blue|royal\s+blue|"
+    r"baby\s+blue|periwinkle|sapphire)\b",
+    re.IGNORECASE,
+)
 
-        context.progress(0.2, "Writing director treatments…")
-        stories = await generate_treatments(analysed.brief, plan)
+#: The brand name itself, correctly spelled. Naming the airline in a prompt is
+#: what makes Veo draw the wordmark on cabin walls and seat-backs — the exact
+#: thing the composite-in-post design exists to prevent. Describe the cabin by
+#: its colour instead.
+_BRAND_NAME_IN_PROMPT = re.compile(r"\bIndiGo\b")
 
-        def mutate(current: Project) -> Project:
-            current.stories = stories
-            current.selected_story_id = stories[0].id if stories else None
-            return current
+#: A gold-drenched grade. The brand wants clean, bright, generous daylight; a
+#: sunrise-soaked frame reads as warm nostalgia, not IndiGo, however blue the
+#: palette line claims to be. Lighting beats palette in a render.
+_WARM_GRADE = re.compile(
+    r"\b(?:golden\s+hour|sunset|sunrise|amber|golden|gold(?:en)?\s+light|honey\s+light|"
+    r"warm\s+gold|orange\s+glow|burnt\s+orange|sodium|firelight|candlelit)\b",
+    re.IGNORECASE,
+)
 
-        await update_project(project.id, mutate)
-        return {"stories": len(stories)}
-
-    job = start_job(project.id, "storyboard", work, message="Reading the brief…")
-    return {"project": project.dump(), "jobId": job.id}
-
-
-@router.get("/projects/{project_id}")
-async def get_one_project(project_id: str) -> dict[str, Any]:
-    project = await require_project(project_id)
-    return {"project": project.dump(), "jobs": [job.dump() for job in list_jobs(project_id)]}
-
-
-@router.delete("/projects/{project_id}")
-async def remove_project(project_id: str) -> dict[str, bool]:
-    await require_project(project_id)
-    await delete_project(project_id)
-    return {"ok": True}
-
-
-@router.patch("/projects/{project_id}")
-async def patch_project(project_id: str, body: BriefPatch) -> dict[str, Any]:
-    """Changing the brief re-plans the segments and invalidates the storyboard."""
-    existing = await require_project(project_id)
-    changes = body.model_dump(exclude_none=True)
-
-    merged = existing.brief.model_copy(
-        update={key: value for key, value in changes.items() if key != "transition"}
-    )
-    if body.style and not body.pacing:
-        merged.pacing = default_pacing(body.style)
-
-    duration_changed = (
-        merged.seconds != existing.brief.seconds or merged.pacing != existing.brief.pacing
-    )
-    plan = plan_duration(merged.seconds, merged.pacing) if duration_changed else existing.plan
-
-    # New brief text means the old split no longer describes it. A stale
-    # `intent` is worse than none: the prompt layer would keep quoting the
-    # previous brief while the supers came from the new one.
-    text_changed = merged.brief != existing.brief.brief
-    if text_changed:
-        merged.intent = ""
-        merged.unsupported = []
-        merged.music_direction = None
-
-    def mutate(current: Project) -> Project:
-        current.brief = merged
-        current.plan = plan
-        if body.transition:
-            current.transition = body.transition
-        if text_changed:
-            current.supers = []
-            current.end_card = EndCard(enabled=False)
-        if duration_changed or text_changed:
-            # A new segment count or a new brief makes the scene list meaningless.
-            for story in current.stories:
-                story.scenes = []
-            current.clips = []
-        return current
-
-    project = await update_project(project_id, mutate)
-
-    if text_changed:
-        analysis = await analyse_brief(merged.brief, seconds=merged.seconds)
-        project = await update_project(project_id, _apply_analysis(analysis))
-
-    return {"project": project.dump()}
-
+#: Camera behaviour that contradicts "effortless". Policy section 4.
+_FRANTIC_CAMERA = re.compile(
+    r"\b(?:whip\s?pan|snap\s?zoom|crash\s?zoom|speed\s?ramp|shaky|frantic|chaotic|"
+    r"jerky|violent\s+(?:shake|movement))\b",
+    re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
-# Storyboard
+# Safety. Policy section 9 — zero tolerance.
 # ---------------------------------------------------------------------------
 
+_SAFETY_TERMS = re.compile(
+    r"\b(?:crash(?:es|ing|ed)?|collision|colliding|mid[- ]air|emergency\s+landing|"
+    r"crash[- ]land|aircraft\s+(?:on\s+fire|in\s+distress)|uncontrolled\s+descent|"
+    r"nose[- ]dive|nosedive|runway\s+(?:incident|overrun)|oxygen\s+mask|evacuation\s+slide|"
+    r"emergency\s+slide|evacuat(?:e|ing|ion)|severe\s+turbulence|explosion|exploding|"
+    r"detonat|terroris|sabotage|hijack|wreckage|debris\s+field|casualt|fatalit)\b",
+    re.IGNORECASE,
+)
 
-@router.post("/projects/{project_id}/stories", status_code=202)
-async def post_stories(project_id: str) -> dict[str, str]:
-    project = await require_project(project_id)
+# ---------------------------------------------------------------------------
+# Tone. Policy sections 1 and 6.
+# ---------------------------------------------------------------------------
 
-    async def work(context: JobContext) -> dict[str, int]:
-        context.progress(0.1, "Writing director treatments…")
-        stories = await generate_treatments(project.brief, project.plan)
+_CHEAP_TONE = re.compile(
+    r"\b(?:cheap(?:est)?|dirt[- ]cheap|bargain|discount|rock[- ]bottom|slash(?:ed|ing)?\s+(?:price|fare)|"
+    r"unbeatable\s+(?:price|fare|deal)|lowest\s+(?:price|fare)\s+ever)\b",
+    re.IGNORECASE,
+)
 
-        def mutate(current: Project) -> Project:
-            current.stories = stories
-            current.selected_story_id = stories[0].id if stories else None
-            current.clips = []
-            return current
+#: "routes"/"sectors" are trade words; the brand book says "flights".
+_TRADE_WORDS = re.compile(r"\b(?:routes|sectors)\b", re.IGNORECASE)
 
-        await update_project(project_id, mutate)
-        return {"stories": len(stories)}
+_ALL_CAPS_RUN = re.compile(r"\b[A-Z]{4,}\b")
 
-    return {"jobId": start_job(project_id, "storyboard", work).id}
+#: Acronyms and codes that are legitimately upper case.
+_CAPS_ALLOWLIST = {
+    "FPV", "SFX", "LED", "HDR", "IMAX", "JSON", "MMKG", "USB", "IFE", "ATC", "VFX",
+}
+
+#: Distress. Policy section 3b — nobody in an IndiGo film is frightened. The
+#: craft beat map pushes hard toward tension, so this is the backstop that
+#: catches it when the rebranded beat labels do not.
+_DISTRESS = re.compile(
+    r"\b(?:frightened|afraid|fear(?:ful)?|scared|terrified|panic(?:ked|king)?|anxious|anxiety|"
+    r"dread|nervous|distress(?:ed)?|desperate|despair|helpless|overwhelmed|trembl(?:e|ing)|"
+    r"shak(?:y|ing)\s+hands|tears?\s+of\s+(?:fear|grief)|sob(?:bing)?|weep(?:ing)?|grief|"
+    r"clench(?:ed|ing)?\s+jaw|white[- ]knuckle|brac(?:e|ing)\s+for|flinch|cower|"
+    r"stress(?:ed|ful)?|worried|worry|uneasy|apprehensive)\b",
+    re.IGNORECASE,
+)
+
+#: Friction blamed on the journey itself. Policy section 3b — the obstacle is
+#: never IndiGo and never flying.
+_JOURNEY_FRICTION = re.compile(
+    r"\b(?:delay(?:ed|s)?|cancelled\s+flight|long\s+quel?ue|queue\s+snak|lost\s+(?:bag|luggage)|"
+    r"missed\s+(?:the\s+)?(?:flight|connection)|cramped|crowded\s+(?:cabin|gate)|turbulence|"
+    r"stuffy|delayed\s+boarding|rush(?:ing|ed)\s+through\s+security)\b",
+    re.IGNORECASE,
+)
+
+#: Things Veo *can* render that read as IndiGo. Policy section 2b — with the
+#: mark banned, a scene carrying none of these has no brand in it at all.
+_BRAND_SURFACE = re.compile(
+    r"\b(?:cabin|aisle|seat[- ]?back|seat\s+fabric|headrest|tray\s+table|overhead\s+bin|"
+    r"cabin\s+window|porthole|crew|attendant|steward(?:ess)?|pilot|uniform|lanyard|"
+    r"boarding\s+pass|bag\s+tag|baggage\s+tag|aircraft|airplane|aeroplane|plane|jet|"
+    r"fuselage|wing(?:tip)?|tail|livery|jet\s?bridge|air\s?bridge|tarmac|runway|"
+    r"gate|terminal|departure\s+board|trolley)\b",
+    re.IGNORECASE,
+)
+
+#: A hero shot of hardware with nobody in it. Policy section 5 — a warning, not
+#: a block: aviation settings are legitimate in a brand film, the cliché is not.
+_AVIATION_SUBJECT = re.compile(
+    r"\b(?:aircraft|airplane|aeroplane|plane|jet|airbus|a320|a321|runway|tarmac|"
+    r"airport|terminal|apron|taxiway)\b",
+    re.IGNORECASE,
+)
+_HUMAN_PRESENCE = re.compile(
+    r"\b(?:passenger|traveller|traveler|child|kid|boy|girl|man|woman|mother|father|"
+    r"crew|attendant|pilot|hand|face|eyes|shoulder|family|couple|person|people|"
+    r"grandmother|grandfather|daughter|son|figure|silhouette\s+of\s+a)\b",
+    re.IGNORECASE,
+)
 
 
-@router.post("/projects/{project_id}/stories/{story_id}/regenerate", status_code=202)
-async def post_regenerate_story(project_id: str, story_id: str) -> dict[str, str]:
-    project = await require_project(project_id)
-    if not any(story.id == story_id for story in project.stories):
-        raise NotFound(f"Story {story_id} not found.")
+def _all_caps_hits(text: str) -> list[str]:
+    return [
+        word
+        for word in _ALL_CAPS_RUN.findall(text)
+        if word not in _CAPS_ALLOWLIST and not word.isdigit()
+    ]
 
-    async def work(context: JobContext) -> dict[str, str]:
-        context.progress(0.2, "Finding a different direction…")
-        replacement = await regenerate_treatment(
-            project.brief, project.plan, project.stories, story_id
+
+def brand_issues(story: StoryOption) -> list[AuditIssue]:
+    """Audit one story option against the IndiGo video guardrails."""
+    issues: list[AuditIssue] = []
+
+    def push(rule: str, severity: str, message: str) -> None:
+        issues.append(AuditIssue(rule=rule, severity=severity, message=message))  # type: ignore[arg-type]
+
+    def at(scene, rule: str, severity: str, message: str) -> None:
+        issues.append(
+            AuditIssue(
+                sceneId=scene.id,
+                sceneOrder=scene.order,
+                rule=rule,
+                severity=severity,  # type: ignore[arg-type]
+                message=message,
+            )
         )
 
-        def mutate(current: Project) -> Project:
-            current.stories = [
-                replacement if story.id == story_id else story for story in current.stories
-            ]
-            if current.selected_story_id == story_id:
-                current.clips = []
-            return current
+    # --- Story level --------------------------------------------------------
+    story_text = " ".join(
+        [story.title, story.summary, story.treatment, story.angle, *story.continuity.rules]
+    )
 
-        await update_project(project_id, mutate)
-        return {"storyId": story_id}
-
-    return {"jobId": start_job(project_id, "storyboard", work, target_id=story_id).id}
-
-
-@router.post("/projects/{project_id}/stories/{story_id}/scenes", status_code=202)
-async def post_scenes(project_id: str, story_id: str) -> dict[str, str]:
-    """Write the scene-by-scene prompts for one story."""
-    project = await require_project(project_id)
-    story = next((candidate for candidate in project.stories if candidate.id == story_id), None)
-    if story is None:
-        raise NotFound(f"Story {story_id} not found.")
-
-    async def work(context: JobContext) -> dict[str, Any]:
-        written, repair_passes = await generate_scenes(
-            project.brief,
-            project.plan,
-            story,
-            lambda fraction, message: context.progress(fraction, message),
+    misspelt = _brand_name_issues(story_text)
+    if misspelt:
+        push(
+            "brand/name",
+            "error",
+            f"The brand name is written as {', '.join(sorted(set(misspelt)))}. "
+            "It is always IndiGo — capital I, capital G.",
         )
 
-        def mutate(current: Project) -> Project:
-            current.stories = [
-                written if candidate.id == story_id else candidate for candidate in current.stories
-            ]
-            current.clips = sync_clips(current)
-            return current
-
-        await update_project(project_id, mutate)
-        return {
-            "storyId": story_id,
-            "scenes": len(written.scenes),
-            "audit": written.audit.model_dump(by_alias=True, mode="json"),
-            "repairPasses": repair_passes,
-        }
-
-    job = start_job(
-        project_id,
-        "storyboard",
-        work,
-        target_id=story_id,
-        message=f"Writing {len(project.plan.segments)} scene prompts…",
-    )
-    return {"jobId": job.id}
-
-
-@router.post("/projects/{project_id}/select-story")
-async def post_select_story(project_id: str, body: SelectStoryBody) -> dict[str, Any]:
-    project = await require_project(project_id)
-    if not any(story.id == body.storyId for story in project.stories):
-        raise NotFound(f"Story {body.storyId} not found.")
-
-    def mutate(current: Project) -> Project:
-        current.selected_story_id = body.storyId
-        current.clips = sync_clips(current)
-        return current
-
-    updated = await update_project(project_id, mutate)
-    return {"project": updated.dump()}
-
-
-@router.patch("/projects/{project_id}/scenes/{scene_id}")
-async def patch_scene(project_id: str, scene_id: str, body: ScenePatch) -> dict[str, Any]:
-    """Direct edit of a scene prompt from the storyboard drawer."""
-    changes = body.model_dump(exclude_none=True)
-    field_map = {
-        "prompt": "prompt",
-        "title": "title",
-        "summary": "summary",
-        "negativePrompt": "negative_prompt",
-        "transitionOut": "transition_out",
-    }
-    update = {field_map[key]: value for key, value in changes.items()}
-
-    def mutate(current: Project) -> Project:
-        for story in current.stories:
-            story.scenes = [
-                scene.model_copy(update=update) if scene.id == scene_id else scene
-                for scene in story.scenes
-            ]
-        if "prompt" in update:
-            # An edited prompt means the existing clip no longer matches the scene.
-            current.clips = [
-                clip.model_copy(update={"status": "idle", "progress": 0.0, "error": None})
-                if clip.scene_id == scene_id
-                else clip
-                for clip in current.clips
-            ]
-        return current
-
-    project = await update_project(project_id, mutate)
-    return {"project": project.dump()}
-
-
-@router.post("/projects/{project_id}/scenes/{scene_id}/rewrite", status_code=202)
-async def post_rewrite_scene(project_id: str, scene_id: str, body: RewriteBody) -> dict[str, str]:
-    project = await require_project(project_id)
-    story = selected_story(project)
-    scene = next((candidate for candidate in story.scenes if candidate.id == scene_id), None)
-    if scene is None:
-        raise NotFound(f"Scene {scene_id} not found in the selected story.")
-
-    async def work(context: JobContext) -> dict[str, str]:
-        context.progress(0.3, "Rewriting the scene…")
-        rewritten = await rewrite_scene(project.brief, story, scene, body.instruction)
-
-        def mutate(current: Project) -> Project:
-            for candidate in current.stories:
-                if candidate.id != story.id:
-                    continue
-                candidate.scenes = [
-                    rewritten if existing.id == scene_id else existing
-                    for existing in candidate.scenes
-                ]
-            current.clips = [
-                clip.model_copy(update={"status": "idle", "progress": 0.0, "error": None})
-                if clip.scene_id == scene_id
-                else clip
-                for clip in current.clips
-            ]
-            return current
-
-        await update_project(project_id, mutate)
-        return {"sceneId": scene_id}
-
-    return {"jobId": start_job(project_id, "storyboard", work, target_id=scene_id).id}
-
-
-# ---------------------------------------------------------------------------
-# Clips
-# ---------------------------------------------------------------------------
-
-
-@router.post("/projects/{project_id}/clips/generate-all", status_code=202)
-async def post_generate_all(project_id: str, force: bool = Query(default=False)) -> dict[str, str]:
-    project = await require_project(project_id)
-    selected_story(project)  # fail fast with a clear message
-
-    async def work(context: JobContext) -> dict[str, int]:
-        fresh = await require_project(project_id)
-        return await generate_all_clips(fresh, context, force=force)
-
-    job = start_job(
-        project_id,
-        "clips",
-        work,
-        message=f"Generating {len(project.plan.segments)} clips…",
-    )
-    return {"jobId": job.id}
-
-
-@router.post("/projects/{project_id}/clips/{scene_id}/generate", status_code=202)
-async def post_generate_clip(project_id: str, scene_id: str) -> dict[str, str]:
-    await require_project(project_id)
-
-    async def work(context: JobContext) -> dict[str, Any]:
-        fresh = await require_project(project_id)
-        clip = await generate_scene_clip(
-            fresh,
-            scene_id,
-            force=True,
-            on_progress=lambda fraction, message: context.progress(fraction, message),
+    if _BANNED_NAME_FORMS.search(story_text):
+        push(
+            "brand/name-form",
+            "error",
+            "Forbidden name form. Never Air IndiGo, IndiGo Airways, IndiGo Airlines, or "
+            "goindigo, and never the name as a verb.",
         )
-        return clip.model_dump(by_alias=True, mode="json")
 
-    return {"jobId": start_job(project_id, "clip", work, target_id=scene_id).id}
+    for url in _URL_TOKEN.findall(story_text):
+        if url != "goindigo.in":
+            push(
+                "brand/url",
+                "warning",
+                f'The website is written as "{url}". It is goindigo.in — one word, lowercase, '
+                "no space before the dot.",
+            )
+            break
 
+    palette = story.continuity.palette
+    if palette:
+        if not _REQUIRED_BLUE.search(palette):
+            push(
+                "brand/palette-blue",
+                "error",
+                "The locked palette does not name a blue. Deep indigo navy-blue "
+                "(Pantone 2738 C) must dominate, with pale sky blue (Pantone 291 C) secondary.",
+            )
+        banned = _banned_colour_hits(palette)
+        if banned:
+            push(
+                "brand/palette-banned",
+                "error",
+                f"The locked palette contains prohibited colours: {', '.join(sorted(banned))}. "
+                "Red and purple palettes are banned.",
+            )
 
-# ---------------------------------------------------------------------------
-# Audio
-# ---------------------------------------------------------------------------
+    if not any(
+        _MARK_OR_TYPE.search(rule) or "text" in rule.lower() for rule in story.continuity.rules
+    ):
+        push(
+            "brand/no-mark-rule",
+            "warning",
+            "The continuity block does not state that no logo, wordmark, or on-screen text "
+            "appears in frame. Lock it there so every scene inherits it.",
+        )
 
+    caps = _all_caps_hits(f"{story.title} {story.summary}")
+    if caps:
+        push(
+            "brand/sentence-case",
+            "warning",
+            f"ALL CAPS in story copy: {', '.join(sorted(set(caps))[:4])}. "
+            "IndiGo is always sentence case.",
+        )
 
-@router.post("/projects/{project_id}/audio/suggest", status_code=202)
-async def post_audio_suggest(project_id: str) -> dict[str, str]:
-    project = await require_project(project_id)
-    story = selected_story(project)
+    if _CHEAP_TONE.search(story_text):
+        push(
+            "brand/tone",
+            "error",
+            "Discount-led language. Low-cost must never read as cheap — sell effortlessness, "
+            "not price.",
+        )
 
-    async def work(context: JobContext) -> dict[str, int]:
-        context.progress(0.3, "Writing music direction…")
-        tracks = await suggest_tracks(project.brief, story, project.plan.target_seconds)
+    if _TRADE_WORDS.search(story_text):
+        push("brand/vocabulary", "warning", 'Use "flights", never "routes" or "sectors".')
 
-        def mutate(current: Project) -> Project:
-            # Uploaded tracks survive a re-suggest; generated ideas are replaced.
-            current.audio = [
-                track for track in current.audio if track.source == "uploaded"
-            ] + tracks
-            return current
+    # --- Scene level --------------------------------------------------------
+    for scene in story.scenes:
+        prompt = scene.prompt or ""
+        card = scene.shot_card
+        haystack = "\n".join(
+            [
+                prompt,
+                scene.summary,
+                *(value for value in card.model_dump().values() if isinstance(value, str)),
+            ]
+        )
 
-        await update_project(project_id, mutate)
-        return {"tracks": len(tracks)}
+        marks = _unnegated(_MARK_OR_TYPE, haystack)
+        if marks:
+            at(
+                scene,
+                "brand/generated-mark",
+                "error",
+                f'This scene asks the model to render "{marks[0]}". Veo cannot render a '
+                "wordmark or type legibly — it will come back misspelt and off-colour. Remove it; "
+                "the mark is composited from the master file after the render.",
+            )
 
-    return {"jobId": start_job(project_id, "audio", work).id}
+        scene_misspelt = _brand_name_issues(haystack)
+        if scene_misspelt:
+            at(
+                scene,
+                "brand/name",
+                "error",
+                f"Brand name written as {', '.join(sorted(set(scene_misspelt)))}. It is always "
+                "IndiGo. Better still: describe the colour as deep indigo navy-blue and keep the "
+                "brand name out of the prompt entirely.",
+            )
 
+        # Even correctly spelled, the name in a prompt is what makes Veo paint a
+        # wordmark on the fuselage and the seat-backs — and it comes back as
+        # "IndlGo" with a mangled device beside it. The mark is composited from
+        # the master file; the prompt describes colour and form only.
+        named = _BRAND_NAME_IN_PROMPT.findall(prompt)
+        if named:
+            at(
+                scene,
+                "brand/name-in-prompt",
+                "error",
+                f"This prompt names IndiGo {len(named)} time(s). Veo renders a named brand as "
+                "drawn lettering, and it cannot spell — that is where the broken fuselage "
+                "wordmark comes from. Describe it instead: 'deep indigo navy-blue tail and "
+                "engine accents, pearl white fuselage'. The mark is composited after the render.",
+            )
 
-@router.post("/projects/{project_id}/audio/{track_id}/generate", status_code=202)
-async def post_audio_generate(project_id: str, track_id: str) -> dict[str, str]:
-    await require_project(project_id)
+        off_blue = _unnegated(_OFF_BRAND_BLUE, haystack)
+        if off_blue:
+            at(
+                scene,
+                "brand/off-brand-blue",
+                "warning",
+                f"Off-brand blue in frame: {', '.join(sorted(set(off_blue)))}. Checking for *a* "
+                "blue is not checking for *the* blue — use deep indigo navy-blue, with pale sky "
+                "blue secondary.",
+            )
 
-    async def work(context: JobContext) -> dict[str, Any]:
-        context.progress(0.2, "Generating audio…")
-        fresh = await require_project(project_id)
-        track = await generate_track(fresh, track_id)
-        return track.model_dump(by_alias=True, mode="json")
+        # Lighting beats palette in a render: a frame can name indigo in its
+        # palette line and still come back entirely amber if the key is a
+        # sunrise. Warn only when nothing pulls the other way.
+        warm = _unnegated(_WARM_GRADE, haystack)
+        if warm and not _REQUIRED_BLUE.search(f"{card.lighting} {card.palette}"):
+            at(
+                scene,
+                "brand/warm-grade",
+                "warning",
+                f"The grade is carried by warm light ({', '.join(sorted(set(warm))[:3])}) with no "
+                "brand blue in the lighting or palette line. Lighting beats palette in a render — "
+                "this frame will come back gold, which reads as nostalgia rather than IndiGo.",
+            )
 
-    return {"jobId": start_job(project_id, "audio", work, target_id=track_id).id}
+        if not _REQUIRED_BLUE.search(f"{card.palette} {prompt}"):
+            at(
+                scene,
+                "brand/palette-blue",
+                "error",
+                "No blue in this scene. Blue must dominate every frame, not just the average of "
+                "the film — Veo has no memory between clips, so the palette must be restated here.",
+            )
 
+        banned = _banned_colour_hits(f"{card.palette}. {prompt}")
+        if banned:
+            at(
+                scene,
+                "brand/palette-banned",
+                "error",
+                f"Prohibited colours in frame: {', '.join(sorted(banned))}. "
+                "Red and purple palettes are banned.",
+            )
 
-@router.patch("/projects/{project_id}/audio/{track_id}")
-async def patch_audio(project_id: str, track_id: str, body: TrackPatch) -> dict[str, Any]:
-    changes = body.model_dump(exclude_none=True)
+        if _SAFETY_TERMS.search(haystack):
+            at(
+                scene,
+                "brand/safety",
+                "error",
+                "This scene depicts an aviation incident, emergency, or destruction. Absolutely "
+                "prohibited — rewrite the beat entirely rather than softening it.",
+            )
 
-    def mutate(current: Project) -> Project:
-        target = next((track for track in current.audio if track.id == track_id), None)
-        if target is None:
-            return current
+        if _FRANTIC_CAMERA.search(haystack):
+            at(
+                scene,
+                "brand/camera-calm",
+                "warning",
+                "Frantic camera work contradicts effortless. Prefer a calm, motivated move — "
+                "slow push-in, gentle track, or locked-off.",
+            )
 
-        updated = []
-        for track in current.audio:
-            if track.id == track_id:
-                patch = dict(changes)
-                # Editing the prompt invalidates the rendered audio.
-                if (
-                    "prompt" in patch
-                    and patch["prompt"] != track.prompt
-                    and track.source == "generated"
-                ):
-                    patch |= {"status": "idle", "file": None, "url": None}
-                updated.append(track.model_copy(update=patch))
-            elif changes.get("selected") is True and track.kind == target.kind:
-                # Selecting a track deselects the others of the same kind.
-                updated.append(track.model_copy(update={"selected": False}))
-            else:
-                updated.append(track)
+        if _CHEAP_TONE.search(haystack):
+            at(scene, "brand/tone", "error", "Discount-led language. Never frame IndiGo as cheap.")
 
-        current.audio = updated
-        return current
+        distress = _unnegated(_DISTRESS, haystack)
+        if distress:
+            at(
+                scene,
+                "brand/distress",
+                "error",
+                f'This scene plays as distress ("{distress[0]}"). Nobody in an IndiGo film is '
+                "frightened or stressed — an airline cannot advertise anxiety. Express the same "
+                "beat as longing, anticipation, or relief instead.",
+            )
 
-    project = await update_project(project_id, mutate)
-    return {"project": project.dump()}
+        friction = _unnegated(_JOURNEY_FRICTION, haystack)
+        if friction:
+            at(
+                scene,
+                "brand/journey-friction",
+                "error",
+                f'This scene blames the journey ("{friction[0]}"). The obstacle is never IndiGo '
+                "and never flying — flying is what resolves the story. Distance and time apart "
+                "are fair game; delays, queues, and cramped cabins are not.",
+            )
 
+        if not _BRAND_SURFACE.search(haystack):
+            at(
+                scene,
+                "brand/no-brand-surface",
+                "error",
+                "Nothing in this scene reads as IndiGo. With the logo and all type banned from "
+                "the plate, brand has to be carried by what Veo can render — cabin interior, "
+                "crew uniform, aircraft form, or a blue brand object. Otherwise this is stock "
+                "footage with a blue grade.",
+            )
 
-@router.post("/projects/{project_id}/audio/upload", status_code=201)
-async def post_audio_upload(
-    project_id: str,
-    file: UploadFile = File(...),
-    kind: str = Form(default="music"),
-) -> dict[str, Any]:
-    project = await require_project(project_id)
-    payload = await file.read()
+        caps = _all_caps_hits(prompt)
+        if caps:
+            at(
+                scene,
+                "brand/sentence-case",
+                "warning",
+                f"ALL CAPS in the prompt: {', '.join(sorted(set(caps))[:4])}.",
+            )
 
-    if len(payload) > 40 * 1024 * 1024:
-        raise BadRequest("Audio uploads are capped at 40MB.")
-    if not payload:
-        raise BadRequest("The uploaded file is empty.")
+        if _AVIATION_SUBJECT.search(haystack) and not _HUMAN_PRESENCE.search(haystack):
+            at(
+                scene,
+                "brand/aviation-cliche",
+                "warning",
+                "An aircraft, runway, or terminal with no human presence is a stock aviation "
+                "shot, not a scene. Put a person and a feeling in the frame.",
+            )
 
-    track = await save_uploaded_track(
-        project,
-        file.filename or "track.mp3",
-        payload,
-        "voiceover" if kind == "voiceover" else "music",
-    )
-    return {"track": track.model_dump(by_alias=True, mode="json")}
-
-
-# ---------------------------------------------------------------------------
-# Render
-# ---------------------------------------------------------------------------
-
-
-@router.post("/projects/{project_id}/render", status_code=202)
-async def post_render(project_id: str) -> dict[str, str]:
-    project = await require_project(project_id)
-    selected_story(project)
-
-    async def work(context: JobContext) -> dict[str, Any]:
-        fresh = await require_project(project_id)
-        return await render_project(fresh, context)
-
-    job = start_job(project_id, "render", work, message="Accumulating clips…")
-
-    def mutate(current: Project) -> Project:
-        current.render = RenderResult(status="queued", progress=0.0)
-        return current
-
-    await update_project(project_id, mutate)
-    return {"jobId": job.id}
-
-
-# ---------------------------------------------------------------------------
-# Jobs and live progress
-# ---------------------------------------------------------------------------
-
-
-@router.get("/jobs/{job_id}")
-async def get_one_job(job_id: str) -> dict[str, Any]:
-    job = get_job(job_id)
-    if job is None:
-        raise NotFound(f"Job {job_id} not found.")
-    return {"job": job.dump()}
-
-
-@router.post("/jobs/{job_id}/cancel")
-async def post_cancel_job(job_id: str) -> dict[str, bool]:
-    return {"cancelled": cancel_job(job_id)}
-
-
-@router.get("/projects/{project_id}/events")
-async def stream_events(project_id: str, request: Request) -> StreamingResponse:
-    """Live project state over SSE.
-
-    Every event carries full state, so a dropped connection recovers simply by
-    reconnecting — there is no incremental log to replay.
-    """
-    project = await require_project(project_id)
-    queue = subscribe(project_id)
-
-    async def generator():
-        try:
-            yield _sse("project", {"project": project.dump()})
-            for job in list_jobs(project_id):
-                yield _sse("job", {"job": job.dump()})
-
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=20.0)
-                except asyncio.TimeoutError:
-                    # Heartbeat, so proxies keep the connection open through the
-                    # quiet stretches of a long render.
-                    yield ": ping\n\n"
-                    continue
-
-                kind = event.pop("type")
-                yield _sse(kind, event)
-        finally:
-            unsubscribe(project_id, queue)
-
-    return StreamingResponse(
-        generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-def _sse(event: str, data: dict[str, Any]) -> str:
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    return issues
