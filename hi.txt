@@ -1,240 +1,191 @@
-import * as React from "react";
-import useEmblaCarousel, { type UseEmblaCarouselType } from "embla-carousel-react";
-import { ArrowLeft, ArrowRight } from "lucide-react";
+"""Pre-flight check for the video pipeline. Run from `server/`:
 
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+    python verify_setup.py
 
-type CarouselApi = UseEmblaCarouselType[1];
-type UseCarouselParameters = Parameters<typeof useEmblaCarousel>;
-type CarouselOptions = UseCarouselParameters[0];
-type CarouselPlugin = UseCarouselParameters[1];
+Checks the things that fail silently or fail late — a missing font, an ffmpeg
+built without freetype, a half-copied brand asset, the `_REQUIRED_BLUE` crash.
+Exits non-zero if anything is broken, so it can gate a deploy.
+"""
 
-type CarouselProps = {
-  opts?: CarouselOptions;
-  plugins?: CarouselPlugin;
-  orientation?: "horizontal" | "vertical";
-  setApi?: (api: CarouselApi) => void;
-};
+from __future__ import annotations
 
-type CarouselContextProps = {
-  carouselRef: ReturnType<typeof useEmblaCarousel>[0];
-  api: ReturnType<typeof useEmblaCarousel>[1];
-  scrollPrev: () => void;
-  scrollNext: () => void;
-  canScrollPrev: boolean;
-  canScrollNext: boolean;
-} & CarouselProps;
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
-const CarouselContext = React.createContext<CarouselContextProps | null>(null);
+sys.path.insert(0, str(Path(__file__).parent))
 
-function useCarousel() {
-  const context = React.useContext(CarouselContext);
+PASS, FAIL, WARN = "PASS", "FAIL", "WARN"
+results: list[tuple[str, str, str]] = []
 
-  if (!context) {
-    throw new Error("useCarousel must be used within a <Carousel />");
-  }
 
-  return context;
-}
+def record(status: str, name: str, detail: str = "") -> None:
+    results.append((status, name, detail))
+    mark = {PASS: "  ok  ", FAIL: " FAIL ", WARN: " warn "}[status]
+    print(f"[{mark}] {name}" + (f"\n           {detail}" if detail else ""))
 
-const Carousel = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement> & CarouselProps
->(({ orientation = "horizontal", opts, setApi, plugins, className, children, ...props }, ref) => {
-  const [carouselRef, api] = useEmblaCarousel(
-    {
-      ...opts,
-      axis: orientation === "horizontal" ? "x" : "y",
-    },
-    plugins,
-  );
-  const [canScrollPrev, setCanScrollPrev] = React.useState(false);
-  const [canScrollNext, setCanScrollNext] = React.useState(false);
 
-  const onSelect = React.useCallback((api: CarouselApi) => {
-    if (!api) {
-      return;
-    }
+# --- 1. Modules import -----------------------------------------------------
 
-    setCanScrollPrev(api.canScrollPrev());
-    setCanScrollNext(api.canScrollNext());
-  }, []);
+try:
+    from app.brand import brand_issues
+    from app.brand.assets import font_path, icon, reference_images, wordmark
+    from app.config import settings
+    from app.services.ffmpeg import FFMPEG, FFPROBE, Lockup, Super, burn_brand
+    from app.services.brief import analyse_brief  # noqa: F401
+    from app.services.clips import _generate_chained  # noqa: F401
+    from app.skills.audit import _audit_boilerplate  # noqa: F401
 
-  const scrollPrev = React.useCallback(() => {
-    api?.scrollPrev();
-  }, [api]);
+    record(PASS, "Python modules import")
+except Exception as error:  # noqa: BLE001
+    record(FAIL, "Python modules import", f"{type(error).__name__}: {error}")
+    print("\nStop here — nothing else can be checked. Copy the files again.")
+    raise SystemExit(1)
 
-  const scrollNext = React.useCallback(() => {
-    api?.scrollNext();
-  }, [api]);
 
-  const handleKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        scrollPrev();
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        scrollNext();
-      }
-    },
-    [scrollPrev, scrollNext],
-  );
+# --- 2. The NameError that took the whole brand audit down -----------------
 
-  React.useEffect(() => {
-    if (!api || !setApi) {
-      return;
-    }
+try:
+    from app.domain.models import ContinuityBlock, Scene, ShotCard, StoryOption
 
-    setApi(api);
-  }, [api, setApi]);
+    probe_scene = Scene(
+        id="v1", order=1, seconds=8, startsAt=0, beat="context", shotFunction="establish",
+        title="verify", summary="verify",
+        prompt="Anamorphic 40mm. Deep indigo navy cabin, pearl white surfaces.",
+        shotCard=ShotCard(palette="deep indigo navy-blue", lighting="pale sky blue key"),
+    )
+    probe_story = StoryOption(
+        id="v", title="verify", summary="s", treatment="t", angle="a", scenes=[probe_scene],
+        continuity=ContinuityBlock(palette="Deep indigo navy-blue, pearl white"),
+    )
+    issues = brand_issues(probe_story)
+    record(PASS, "Brand audit runs", f"returned {len(issues)} issue(s) on the probe story")
+except NameError as error:
+    record(FAIL, "Brand audit runs",
+           f"{error} — this is the bug that silently disabled ALL brand checks. "
+           "Re-copy server/app/brand/checks.py.")
+except Exception as error:  # noqa: BLE001
+    record(FAIL, "Brand audit runs", f"{type(error).__name__}: {error}")
 
-  React.useEffect(() => {
-    if (!api) {
-      return;
-    }
 
-    onSelect(api);
-    api.on("reInit", onSelect);
-    api.on("select", onSelect);
+# --- 3. ffmpeg, and specifically drawtext ----------------------------------
 
-    return () => {
-      api?.off("select", onSelect);
-    };
-  }, [api, onSelect]);
 
-  return (
-    <CarouselContext.Provider
-      value={{
-        carouselRef,
-        api: api,
-        opts,
-        orientation: orientation || (opts?.axis === "y" ? "vertical" : "horizontal"),
-        scrollPrev,
-        scrollNext,
-        canScrollPrev,
-        canScrollNext,
-      }}
-    >
-      <div
-        ref={ref}
-        onKeyDownCapture={handleKeyDown}
-        className={cn("relative", className)}
-        role="region"
-        aria-roledescription="carousel"
-        {...props}
-      >
-        {children}
-      </div>
-    </CarouselContext.Provider>
-  );
-});
-Carousel.displayName = "Carousel";
+def run(args: list[str]) -> tuple[int, str]:
+    try:
+        done = subprocess.run(args, capture_output=True, text=True, timeout=60)
+        return done.returncode, (done.stdout or "") + (done.stderr or "")
+    except FileNotFoundError:
+        return 127, "not found"
+    except Exception as error:  # noqa: BLE001
+        return 1, str(error)
 
-const CarouselContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => {
-    const { carouselRef, orientation } = useCarousel();
 
-    return (
-      <div ref={carouselRef} className="overflow-hidden">
-        <div
-          ref={ref}
-          className={cn(
-            "flex",
-            orientation === "horizontal" ? "-ml-4" : "-mt-4 flex-col",
-            className,
-          )}
-          {...props}
-        />
-      </div>
-    );
-  },
-);
-CarouselContent.displayName = "CarouselContent";
+code, out = run([FFMPEG, "-hide_banner", "-version"])
+if code != 0:
+    record(FAIL, "ffmpeg present", f"{FFMPEG} — {out[:120]}. Set FFMPEG_PATH in .env.")
+else:
+    record(PASS, "ffmpeg present", out.splitlines()[0][:90] if out else "")
 
-const CarouselItem = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => {
-    const { orientation } = useCarousel();
+code, out = run([FFPROBE, "-hide_banner", "-version"])
+record(PASS if code == 0 else FAIL, "ffprobe present",
+       "" if code == 0 else f"{FFPROBE} — set FFPROBE_PATH in .env.")
 
-    return (
-      <div
-        ref={ref}
-        role="group"
-        aria-roledescription="slide"
-        className={cn(
-          "min-w-0 shrink-0 grow-0 basis-full",
-          orientation === "horizontal" ? "pl-4" : "pt-4",
-          className,
-        )}
-        {...props}
-      />
-    );
-  },
-);
-CarouselItem.displayName = "CarouselItem";
+# drawtext needs libfreetype compiled in. Some minimal Windows builds omit it,
+# and the failure mode is an ffmpeg error only at render time.
+code, out = run([FFMPEG, "-hide_banner", "-filters"])
+if code == 0 and "drawtext" in out:
+    record(PASS, "ffmpeg has drawtext")
+else:
+    record(FAIL, "ffmpeg has drawtext",
+           "This build cannot draw text, so every super will be dropped. "
+           "Install a full build (gyan.dev 'full' or 'essentials' both include it).")
 
-const CarouselPrevious = React.forwardRef<HTMLButtonElement, React.ComponentProps<typeof Button>>(
-  ({ className, variant = "outline", size = "icon", ...props }, ref) => {
-    const { orientation, scrollPrev, canScrollPrev } = useCarousel();
 
-    return (
-      <Button
-        ref={ref}
-        variant={variant}
-        size={size}
-        className={cn(
-          "absolute  h-8 w-8 rounded-full",
-          orientation === "horizontal"
-            ? "-left-12 top-1/2 -translate-y-1/2"
-            : "-top-12 left-1/2 -translate-x-1/2 rotate-90",
-          className,
-        )}
-        disabled={!canScrollPrev}
-        onClick={scrollPrev}
-        {...props}
-      >
-        <ArrowLeft className="h-4 w-4" />
-        <span className="sr-only">Previous slide</span>
-      </Button>
-    );
-  },
-);
-CarouselPrevious.displayName = "CarouselPrevious";
+# --- 4. Font ---------------------------------------------------------------
 
-const CarouselNext = React.forwardRef<HTMLButtonElement, React.ComponentProps<typeof Button>>(
-  ({ className, variant = "outline", size = "icon", ...props }, ref) => {
-    const { orientation, scrollNext, canScrollNext } = useCarousel();
+font = font_path()
+if font is None:
+    record(FAIL, "Font for supers",
+           "No usable font found. Set BRAND_FONT_PATH in .env, or drop a .ttf into "
+           "server/app/brand/assets/fonts/.")
+else:
+    record(PASS, "Font for supers", str(font))
 
-    return (
-      <Button
-        ref={ref}
-        variant={variant}
-        size={size}
-        className={cn(
-          "absolute h-8 w-8 rounded-full",
-          orientation === "horizontal"
-            ? "-right-12 top-1/2 -translate-y-1/2"
-            : "-bottom-12 left-1/2 -translate-x-1/2 rotate-90",
-          className,
-        )}
-        disabled={!canScrollNext}
-        onClick={scrollNext}
-        {...props}
-      >
-        <ArrowRight className="h-4 w-4" />
-        <span className="sr-only">Next slide</span>
-      </Button>
-    );
-  },
-);
-CarouselNext.displayName = "CarouselNext";
 
-export {
-  type CarouselApi,
-  Carousel,
-  CarouselContent,
-  CarouselItem,
-  CarouselPrevious,
-  CarouselNext,
-};
+# --- 5. Brand artwork ------------------------------------------------------
+
+marks = [wordmark(on_dark=True), wordmark(on_dark=False), icon(on_dark=True), icon(on_dark=False)]
+missing = [path for path in marks if not path.is_file()]
+if missing:
+    record(FAIL, "Brand marks present",
+           "Missing: " + ", ".join(path.name for path in missing) +
+           " — copy these as BINARY, not text.")
+else:
+    # A PNG truncated by a text-mode copy still exists but is unreadable.
+    sizes = {path.name: path.stat().st_size for path in marks}
+    tiny = [name for name, size in sizes.items() if size < 2000]
+    if tiny:
+        record(FAIL, "Brand marks present",
+               f"Suspiciously small, likely corrupted by a text-mode copy: {', '.join(tiny)}")
+    else:
+        record(PASS, "Brand marks present", ", ".join(f"{n} {s:,}B" for n, s in sizes.items()))
+
+record(PASS if reference_images() else WARN, "Brand reference images",
+       f"{len(reference_images())} found" if reference_images()
+       else "none found — only affects future keyframe conditioning")
+
+
+# --- 6. The real test: burn a super onto a frame ---------------------------
+
+if font is not None:
+    import asyncio
+
+    async def smoke() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            plate, out = work / "plate.mp4", work / "out.mp4"
+            code, message = run([
+                FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "color=c=navy:s=640x360:d=2", str(plate),
+            ])
+            if code != 0:
+                record(FAIL, "Super compositing smoke test", message[:160])
+                return
+            await burn_brand(
+                plate, out, seconds=2.0,
+                supers=[Super(text="IndiGo x Japan - 100% ready", start=0.1, end=1.9,
+                              x="20", y="20", size=28)],
+                lockups=[Lockup(file=wordmark(on_dark=True), start=0.5, width=200)],
+                font=font, work_dir=work / "supers",
+            )
+            if out.is_file() and out.stat().st_size > 1000:
+                record(PASS, "Super compositing smoke test",
+                       f"rendered {out.stat().st_size:,}B with text and lockup")
+            else:
+                record(FAIL, "Super compositing smoke test", "produced no output")
+
+    try:
+        asyncio.run(smoke())
+    except Exception as error:  # noqa: BLE001
+        record(FAIL, "Super compositing smoke test", f"{type(error).__name__}: {error}")
+
+
+# --- 7. Settings worth eyeballing ------------------------------------------
+
+print("\nSettings:")
+for name in ("brand", "brand_enforce_audit", "veo_model", "veo_resolution",
+             "veo_use_keyframes", "veo_chain_keyframes", "veo_concurrency",
+             "music_provider", "render_fps"):
+    print(f"    {name:22} = {getattr(settings, name, '?')}")
+
+
+# --- Summary ---------------------------------------------------------------
+
+failures = [name for status, name, _ in results if status == FAIL]
+print("\n" + "-" * 62)
+if failures:
+    print(f"{len(failures)} check(s) FAILED: {', '.join(failures)}")
+    raise SystemExit(1)
+print(f"All {len(results)} checks passed.")
