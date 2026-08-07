@@ -1,252 +1,383 @@
-"""The accumulation step.
+"""Shared vocabulary for the AI Video pipeline.
 
-Takes the N independently generated Veo clips and produces one file of exactly
-``plan.target_seconds``. Three phases, weighted for the progress bar roughly by
-how long they actually take.
+The frontend mirrors these in ``src/lib/video-api-types.ts`` — keep the two in
+sync when changing anything here.
 """
 
 from __future__ import annotations
 
-import shutil
-from pathlib import Path
+from datetime import datetime, timezone
+from typing import Any, Literal
 
-from ..brand.assets import font_path
-from ..brand.supers import build_lockups, build_supers
-from ..config import settings
-from ..domain.formats import output_size_for
-from ..domain.models import Project, RenderResult, now_iso
-from ..errors import BadRequest
-from ..logging_setup import get_logger
-from ..storage import (
-    ensure_dir,
-    media_url,
-    output_dir,
-    resolve_in_storage,
-    to_storage_relative,
-    work_dir,
-)
-from .clips import selected_story
-from .ffmpeg import (
-    MixTrack,
-    Segment,
-    burn_brand,
-    concat_segments,
-    mix_and_finalise,
-    normalise_segment,
-    probe,
-)
-from .jobs import JobContext
-from .store import update_project
+from pydantic import BaseModel, Field
 
-log = get_logger("render")
+AspectRatio = Literal["16:9", "9:16", "1:1", "4:5"]
+#: Veo only renders 16:9 and 9:16. Everything else is cropped at render time.
+VeoAspectRatio = Literal["16:9", "9:16"]
+StylePreset = Literal["cinematic", "product", "docu", "animated", "ugc"]
+Pacing = Literal["slow", "standard", "fast"]
+TransitionStyle = Literal["hardcut", "crossfade"]
 
-PHASE_NORMALISE = 0.50
-PHASE_CONCAT = 0.18
-PHASE_BRAND = 0.12
-PHASE_MIX = 0.20
+#: Beat map from the dramaturgy reference (Layer 1).
+Beat = Literal["hook", "context", "pressure", "crack", "acceleration", "impact", "aftermath"]
+
+#: Shot function taxonomy (Layer 2).
+ShotFunction = Literal[
+    "establish", "power", "pressure", "detail", "reaction", "shift", "impact", "aftermath", "exit"
+]
 
 
-async def _set_render(project_id: str, **patch) -> Project:
-    def mutate(project: Project) -> Project:
-        project.render = project.render.model_copy(update=patch)
-        return project
-
-    return await update_project(project_id, mutate)
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-async def render_project(project: Project, context: JobContext) -> dict:
-    story = selected_story(project)
-    plan = project.plan
+# ---------------------------------------------------------------------------
+# Duration planning
+# ---------------------------------------------------------------------------
 
-    # Order matters: the timeline is the story order, not the order clips finished.
-    by_scene = {clip.scene_id: clip for clip in project.clips}
-    ordered = [(scene, by_scene.get(scene.id)) for scene in story.scenes]
 
-    missing = [scene for scene, clip in ordered if clip is None or clip.status != "ready" or not clip.file]
-    if missing:
-        listed = ", ".join(str(scene.order) for scene in missing)
-        raise BadRequest(
-            f"{len(missing)} of {len(ordered)} clips are not ready yet: scene {listed}."
-        )
+class PlannedSegment(BaseModel):
+    index: int
+    #: Seconds requested from Veo for this segment. Always 4, 6 or 8.
+    seconds: int
+    #: Where this segment starts on the finished timeline.
+    starts_at: int = Field(alias="startsAt")
+    beat: Beat
+    shot_function: ShotFunction = Field(alias="shotFunction")
 
-    work = Path(work_dir(project.id))
-    out = Path(output_dir(project.id))
-    ensure_dir(work)
-    ensure_dir(out)
+    model_config = {"populate_by_name": True}
 
-    segments_dir = work / "segments"
-    # A re-render must not concatenate last run's leftovers.
-    shutil.rmtree(segments_dir, ignore_errors=True)
-    ensure_dir(segments_dir)
 
-    width, height = output_size_for(project.brief.ratio, settings.veo_resolution)
-    started_at = now_iso()
+class DurationPlan(BaseModel):
+    #: What the user asked for.
+    target_seconds: int = Field(alias="targetSeconds")
+    #: Sum of every segment's requested seconds. May exceed the target.
+    planned_seconds: int = Field(alias="plannedSeconds")
+    #: planned_seconds - target_seconds. Trimmed off the tail during render.
+    trim_seconds: int = Field(alias="trimSeconds")
+    #: True when no trim was needed.
+    exact: bool
+    strategy: Literal["stitch"] = "stitch"
+    segments: list[PlannedSegment]
+    notes: list[str] = Field(default_factory=list)
 
-    await _set_render(
-        project.id,
-        status="rendering",
-        progress=0.0,
-        stage="Preparing clips…",
-        started_at=started_at,
-        error=None,
-    )
+    model_config = {"populate_by_name": True}
 
-    try:
-        # --- Phase 1: conform every clip to identical parameters -------------
-        normalised: list[Segment] = []
-        total = len(ordered)
 
-        for index, (scene, clip) in enumerate(ordered):
-            assert clip is not None and clip.file
-            source = resolve_in_storage(clip.file)
-            target = segments_dir / f"seg-{index:03d}.mp4"
-            stage = f"Conforming clip {index + 1} of {total}"
+# ---------------------------------------------------------------------------
+# Storyboard
+# ---------------------------------------------------------------------------
 
-            await _set_render(project.id, stage=stage, progress=(index / total) * PHASE_NORMALISE)
 
-            async def on_progress(fraction: float, _message: str, i: int = index) -> None:
-                context.progress(((i + fraction) / total) * PHASE_NORMALISE, stage)
+class StoryAnchors(BaseModel):
+    """The five anchors. One per piece, no more."""
 
-            await normalise_segment(
-                source,
-                target,
-                width=width,
-                height=height,
-                seconds=scene.seconds,
-                fps=settings.render_fps,
-                on_progress=on_progress,
-            )
+    emotion: str = ""
+    motif: str = ""
+    object: str = ""
+    break_: str = Field(default="", alias="break")
+    final_image: str = Field(default="", alias="finalImage")
 
-            normalised.append(Segment(file=target, seconds=scene.seconds))
+    model_config = {"populate_by_name": True}
 
-        # --- Phase 2: accumulate ---------------------------------------------
-        joined_path = work / "joined.mp4"
-        await _set_render(
-            project.id,
-            stage=f"Accumulating {len(normalised)} clips into one timeline…",
-            progress=PHASE_NORMALISE,
-        )
 
-        async def concat_progress(fraction: float, message: str) -> None:
-            context.progress(PHASE_NORMALISE + fraction * PHASE_CONCAT, message)
+class ContinuityBlock(BaseModel):
+    """Repeated verbatim inside every scene prompt — Veo has no memory."""
 
-        joined_seconds = await concat_segments(
-            normalised,
-            joined_path,
-            transition=project.transition,
-            crossfade_seconds=0.4,
-            work_dir=work,
-            on_progress=concat_progress,
-        )
+    characters: list[str] = Field(default_factory=list)
+    wardrobe: list[str] = Field(default_factory=list)
+    location: str = ""
+    palette: str = ""
+    lighting_constant: str = Field(default="", alias="lightingConstant")
+    camera_language: str = Field(default="", alias="cameraLanguage")
+    props: list[str] = Field(default_factory=list)
+    rules: list[str] = Field(default_factory=list)
 
-        # Hard cuts land on the plan exactly; a crossfade eats (n-1) x fade seconds.
-        final_seconds = round(min(plan.target_seconds, joined_seconds), 3)
-        if final_seconds < plan.target_seconds - 0.05:
-            log.info(
-                "Crossfade overlap shortened the film to %.2fs against a %ds target.",
-                final_seconds, plan.target_seconds,
-            )
+    model_config = {"populate_by_name": True}
 
-        # --- Phase 2b: burn supers and the brand mark ------------------------
-        # Veo returns a clean plate by policy; everything a viewer reads is
-        # drawn here, from a font file, so it is spelled the way it was written.
-        supers = build_supers(
-            project.supers, project.end_card, seconds=final_seconds, height=height
-        )
-        lockups = build_lockups(project.end_card, seconds=final_seconds, width=width)
 
-        if supers or lockups:
-            branded_path = work / "branded.mp4"
-            await _set_render(
-                project.id,
-                stage=f"Compositing {len(supers)} super(s) and the brand mark…",
-                progress=PHASE_NORMALISE + PHASE_CONCAT,
-            )
+class ShotCard(BaseModel):
+    """Compressed form of the 14-field shot card."""
 
-            async def brand_progress(fraction: float, message: str) -> None:
-                context.progress(
-                    PHASE_NORMALISE + PHASE_CONCAT + fraction * PHASE_BRAND, message
-                )
+    frame: str = ""
+    composition: str = ""
+    camera: str = ""
+    movement_reason: str = Field(default="", alias="movementReason")
+    action: str = ""
+    eye_trace: str = Field(default="", alias="eyeTrace")
+    environmental_pressure: str = Field(default="", alias="environmentalPressure")
+    micro_action: str = Field(default="", alias="microAction")
+    sound_anchor: str = Field(default="", alias="soundAnchor")
+    lighting: str = ""
+    palette: str = ""
+    cut_type: str = Field(default="", alias="cutType")
 
-            await burn_brand(
-                joined_path,
-                branded_path,
-                seconds=final_seconds,
-                supers=supers,
-                lockups=lockups,
-                font=font_path(),
-                work_dir=work / "supers",
-                on_progress=brand_progress,
-            )
-            mix_source = branded_path
-        else:
-            mix_source = joined_path
+    model_config = {"populate_by_name": True}
 
-        # --- Phase 3: mix and trim -------------------------------------------
-        tracks = [
-            MixTrack(
-                file=resolve_in_storage(track.file),
-                gain=track.gain,
-                # Music loops to cover the runtime; voiceover plays once from the top.
-                loop=track.kind == "music",
-                fade_in=1.0 if track.kind == "music" else 0.0,
-                fade_out=2.0 if track.kind == "music" else 0.0,
-            )
-            for track in project.audio
-            if track.selected and track.status == "ready" and track.file
-        ]
 
-        final_path = out / "final.mp4"
-        done_before_mix = PHASE_NORMALISE + PHASE_CONCAT + PHASE_BRAND
-        await _set_render(
-            project.id,
-            stage="Mixing audio…" if tracks else "Finishing…",
-            progress=done_before_mix,
-        )
+class Scene(BaseModel):
+    id: str
+    order: int
+    title: str = ""
+    beat: Beat
+    shot_function: ShotFunction = Field(alias="shotFunction")
+    #: Seconds this scene occupies in the finished cut.
+    seconds: int
+    starts_at: int = Field(alias="startsAt")
+    summary: str = ""
+    #: The full, ready-to-send Veo prompt.
+    prompt: str = ""
+    shot_card: ShotCard = Field(default_factory=ShotCard, alias="shotCard")
+    negative_prompt: str = Field(default="", alias="negativePrompt")
+    transition_out: TransitionStyle = Field(default="hardcut", alias="transitionOut")
+    #: How this scene joins the previous one.
+    continuity_note: str = Field(default="", alias="continuityNote")
 
-        async def mix_progress(fraction: float, message: str) -> None:
-            context.progress(done_before_mix + fraction * PHASE_MIX, message)
+    model_config = {"populate_by_name": True}
 
-        await mix_and_finalise(
-            mix_source,
-            final_path,
-            seconds=final_seconds,
-            tracks=tracks,
-            fade_out_seconds=0.6,
-            on_progress=mix_progress,
-        )
 
-        info = await probe(final_path)
-        size = final_path.stat().st_size
-        relative = to_storage_relative(final_path)
+class AuditIssue(BaseModel):
+    scene_id: str | None = Field(default=None, alias="sceneId")
+    scene_order: int | None = Field(default=None, alias="sceneOrder")
+    rule: str
+    severity: Literal["error", "warning"]
+    message: str
 
-        result = RenderResult(
-            status="ready",
-            progress=1.0,
-            stage="Done.",
-            file=relative,
-            url=media_url(relative),
-            seconds=info.seconds,
-            bytes=size,
-            startedAt=started_at,
-            completedAt=now_iso(),
-        )
+    model_config = {"populate_by_name": True}
 
-        await _set_render(project.id, **result.model_dump())
-        log.info(
-            "Rendered project %s: %.2fs, %.1fMB from %d clips.",
-            project.id, info.seconds, size / 1_048_576, total,
-        )
 
-        # The conformed intermediates are large and reproducible. Keep the
-        # joined file — a re-mix with different music skips phases 1 and 2 —
-        # and drop the rest.
-        shutil.rmtree(segments_dir, ignore_errors=True)
+class AuditReport(BaseModel):
+    passed: bool = True
+    score: int = 100
+    issues: list[AuditIssue] = Field(default_factory=list)
+    checked_at: str = Field(default_factory=now_iso, alias="checkedAt")
 
-        return result.model_dump(by_alias=True, mode="json")
+    model_config = {"populate_by_name": True}
 
-    except Exception as error:
-        await _set_render(
-            project.id, status="failed", stage=None, error=str(error), completed_at=now_iso()
-        )
-        raise
+
+class StoryOption(BaseModel):
+    id: str
+    title: str
+    #: One-line pitch for the story card.
+    summary: str = ""
+    #: The prose treatment shown under "Brief story".
+    treatment: str = ""
+    angle: str = ""
+    anchors: StoryAnchors = Field(default_factory=StoryAnchors)
+    continuity: ContinuityBlock = Field(default_factory=ContinuityBlock)
+    scenes: list[Scene] = Field(default_factory=list)
+    audit: AuditReport = Field(default_factory=AuditReport)
+
+    model_config = {"populate_by_name": True}
+
+
+# ---------------------------------------------------------------------------
+# Project
+# ---------------------------------------------------------------------------
+
+ClipStatus = Literal["idle", "queued", "generating", "ready", "failed"]
+AudioKind = Literal["music", "voiceover", "sfx"]
+RenderStatus = Literal["idle", "queued", "rendering", "ready", "failed"]
+
+
+class Clip(BaseModel):
+    scene_id: str = Field(alias="sceneId")
+    order: int
+    status: ClipStatus = "idle"
+    progress: float = 0.0
+    #: Requested seconds.
+    seconds: int
+    #: Actual duration of the downloaded file, measured with ffprobe.
+    actual_seconds: float | None = Field(default=None, alias="actualSeconds")
+    #: Storage-relative path to the mp4.
+    file: str | None = None
+    url: str | None = None
+    poster_url: str | None = Field(default=None, alias="posterUrl")
+    #: Veo operation name for the in-flight generation.
+    operation: str | None = None
+    attempts: int = 0
+    error: str | None = None
+    started_at: str | None = Field(default=None, alias="startedAt")
+    completed_at: str | None = Field(default=None, alias="completedAt")
+
+    model_config = {"populate_by_name": True}
+
+
+class AudioTrack(BaseModel):
+    id: str
+    kind: AudioKind = "music"
+    label: str = ""
+    #: Prompt for a generator, or the script for a voiceover.
+    prompt: str = ""
+    selected: bool = False
+    status: Literal["idle", "generating", "ready", "failed"] = "idle"
+    #: Mix gain applied under the clip audio.
+    gain: float = 0.28
+    seconds: float | None = None
+    file: str | None = None
+    url: str | None = None
+    source: Literal["generated", "uploaded"] | None = None
+    error: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class RenderResult(BaseModel):
+    status: RenderStatus = "idle"
+    progress: float = 0.0
+    stage: str | None = None
+    file: str | None = None
+    url: str | None = None
+    seconds: float | None = None
+    bytes: int | None = None
+    error: str | None = None
+    started_at: str | None = Field(default=None, alias="startedAt")
+    completed_at: str | None = Field(default=None, alias="completedAt")
+
+    model_config = {"populate_by_name": True}
+
+
+#: Where a super sits in frame. Semantic rather than pixel coordinates, so the
+#: render layer owns safe-area maths and the same project renders correctly at
+#: any output size or ratio.
+SuperPosition = Literal["upper-left", "upper-centre", "lower-left", "lower-centre", "centre"]
+
+
+class SuperSpec(BaseModel):
+    """One line of on-screen copy, burnt in after the render.
+
+    Veo is never asked to draw text — it cannot spell, and it misspelt four of
+    five cards the one time it was asked. Copy lives here instead, gets stripped
+    out of the brief before the scene writer sees it, and is composited by
+    ffmpeg from a font file.
+    """
+
+    text: str
+    start: float
+    end: float
+    position: SuperPosition = "upper-left"
+
+    model_config = {"populate_by_name": True}
+
+
+class EndCard(BaseModel):
+    """The closing brand frame: lockup, plus optional headline and subline."""
+
+    enabled: bool = True
+    headline: str | None = None
+    subline: str | None = None
+    mark: Literal["wordmark", "icon", "none"] = "wordmark"
+    #: How long before the end of the film the card starts resolving.
+    seconds: float = 4.0
+
+    model_config = {"populate_by_name": True}
+
+
+class BriefAnalysis(BaseModel):
+    """A raw brief decomposed into the things that go to different places.
+
+    A brief is not one instruction, it is four kinds of instruction wearing a
+    trench coat: what the film is *about*, what a viewer should *read*, what the
+    deliverable *is*, and what must not appear. Feeding the lot to the scene
+    writer is how "On-Screen Text: A new horizon awaits." became a request for
+    Veo to spell, and how "4K HDR" became a silent no-op.
+
+    Only ``intent`` ever reaches a prompt.
+    """
+
+    #: The creative brief with copy, deliverable spec and prohibitions removed.
+    intent: str
+    #: Copy the viewer reads. Composited after the render, never prompted.
+    supers: list[SuperSpec] = Field(default_factory=list)
+    end_card: EndCard = Field(default_factory=lambda: EndCard(enabled=False), alias="endCard")
+    #: Things the brief says must not appear, for the negative prompt.
+    avoid: list[str] = Field(default_factory=list)
+    #: Asks the pipeline cannot honour, surfaced to the user rather than
+    #: silently dropped — "4K HDR" when Veo tops out at 1080p SDR, say.
+    unsupported: list[str] = Field(default_factory=list)
+    #: Music and sound direction. Goes to the audio service, not to Veo.
+    music: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class ProjectBrief(BaseModel):
+    brief: str
+    seconds: int
+    style: StylePreset = "cinematic"
+    ratio: AspectRatio = "16:9"
+    pacing: Pacing = "standard"
+    #: Free-text notes pulled from user attachments.
+    references: list[str] = Field(default_factory=list)
+    #: Words/brands/visuals the user wants excluded.
+    avoid: list[str] = Field(default_factory=list)
+    language: str = "English"
+    #: ``brief`` with copy, deliverable spec and prohibitions stripped out. This
+    #: is what the scene writer sees; ``brief`` is kept verbatim for display and
+    #: re-analysis. Empty until the brief has been analysed.
+    intent: str = ""
+    #: Asks the pipeline cannot honour, recorded so the UI can say so.
+    unsupported: list[str] = Field(default_factory=list)
+    #: Music and sound direction lifted out of the brief, for the composer. It
+    #: is stripped from ``intent`` so it cannot distract the scene writer.
+    music_direction: str | None = Field(default=None, alias="musicDirection")
+
+    def creative(self) -> str:
+        """What the prompt layer is allowed to read."""
+        return (self.intent or self.brief).strip()
+
+    model_config = {"populate_by_name": True}
+
+
+class Project(BaseModel):
+    id: str
+    created_at: str = Field(default_factory=now_iso, alias="createdAt")
+    updated_at: str = Field(default_factory=now_iso, alias="updatedAt")
+    brief: ProjectBrief
+    plan: DurationPlan
+    stories: list[StoryOption] = Field(default_factory=list)
+    selected_story_id: str | None = Field(default=None, alias="selectedStoryId")
+    clips: list[Clip] = Field(default_factory=list)
+    audio: list[AudioTrack] = Field(default_factory=list)
+    render: RenderResult = Field(default_factory=RenderResult)
+    #: On-screen copy, burnt in at render time. Extracted from the brief so the
+    #: scene writer never sees it and never asks Veo to draw it.
+    supers: list[SuperSpec] = Field(default_factory=list)
+    end_card: EndCard = Field(default_factory=EndCard, alias="endCard")
+    transition: TransitionStyle = "hardcut"
+    #: Veo model actually used, recorded for reproducibility.
+    model: str = ""
+
+    model_config = {"populate_by_name": True}
+
+    def dump(self) -> dict[str, Any]:
+        """camelCase JSON for the browser."""
+        return self.model_dump(by_alias=True, mode="json")
+
+
+# ---------------------------------------------------------------------------
+# Jobs
+# ---------------------------------------------------------------------------
+
+JobKind = Literal["storyboard", "clip", "clips", "audio", "render"]
+JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
+
+
+class Job(BaseModel):
+    id: str
+    project_id: str = Field(alias="projectId")
+    kind: JobKind
+    status: JobStatus = "queued"
+    progress: float = 0.0
+    message: str = ""
+    #: Scene id for clip jobs, track id for audio jobs.
+    target_id: str | None = Field(default=None, alias="targetId")
+    error: str | None = None
+    created_at: str = Field(default_factory=now_iso, alias="createdAt")
+    updated_at: str = Field(default_factory=now_iso, alias="updatedAt")
+    result: Any = None
+
+    model_config = {"populate_by_name": True}
+
+    def dump(self) -> dict[str, Any]:
+        return self.model_dump(by_alias=True, mode="json")
