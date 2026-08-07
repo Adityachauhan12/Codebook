@@ -1,134 +1,40 @@
-"""Pinpoint why drawtext fails. Run from `server/`:
+(venv) C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server>py verify_setup.py
+[  ok  ] Python modules import
+[  ok  ] Brand audit runs
+           returned 0 issue(s) on the probe story
+[  ok  ] ffmpeg present
+           ffmpeg version 9.0-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers
+[  ok  ] ffprobe present
+[  ok  ] ffmpeg has drawtext
+[  ok  ] Font for supers
+           C:\Windows\Fonts\GOTHIC.TTF
+[ warn ] Brand enforcement is OFF (BRAND='none')
+           Every IndiGo guardrail is a no-op and the end card gets NO logo, because brand.supers.build_lockups() gates on the active brand. Set BRAND=indigo in .env to switch the brand layer on.
+[  ok  ] Brand marks present
+           wordmark-white.png 28,553B, wordmark-blue.png 28,666B, icon-white.png 57,778B, icon-blue.png 58,360B
+[  ok  ] Brand reference images
+           8 found
+[ FAIL ] Super compositing smoke test
+           UpstreamError: brand failed (exit 4294967274).
+           ffmpeg said:
+           [AVFilterGraph @ 000001711d150d00] No option name near '/Windows/Fonts/GOTHIC.TTF:textfile=C:/Users/ADITYA~1.CHA/AppData/Local/Temp/tmpfcrgtxne/supers/super-00.txt:expansion=none:fontcolor=white:fontsize=28:x=20:y=20:enable=between(t,0.100,1.900):alpha=max(0,min(1,min((t-0.100)/0.500,(1.900-t)/0.500))):line_spacing=10:shadowcolor=black@0.35:shadowx=0:shadowy=2'
+           [AVFilterGraph @ 000001711d150d00] Error parsing a filter description around: [txt0];[1:v]scale=200:-1,format=rgba,fade=t=in:st=0.500:d=0.600:alpha=1,setpts=PTS-STARTPTS[mark0];[txt0][mark0]overlay=x=(W-w)/2:y=(H-h)/2:enable='gte(t\,0.500)'[ov0]
+           [AVFilterGraph @ 000001711d150d00] Error parsing filterchain '[0:v]drawtext=fontfile=C\:/Windows/Fonts/GOTHIC.TTF:textfile=C\:/Users/ADITYA~1.CHA/AppData/Local/Temp/tmpfcrgtxne/supers/super-00.txt:expansion=none:fontcolor=white:fontsize=28:x=20:y=20:enable=between(t\,0.100\,1.900):alpha=max(0\,min(1\,min((t-0.100)/0.500\,(1.900-t)/0.500))):line_spacing=10:shadowcolor=black@0.35:shadowx=0:shadowy=2[txt0];[1:v]scale=200:-1,format=rgba,fade=t=in:st=0.500:d=0.600:alpha=1,setpts=PTS-STARTPTS[mark0];[txt0][mark0]overlay=x=(W-w)/2:y=(H-h)/2:enable='gte(t\,0.500)'[ov0]' around: [txt0];[1:v]scale=200:-1,format=rgba,fade=t=in:st=0.500:d=0.600:alpha=1,setpts=PTS-STARTPTS[mark0];[txt0][mark0]overlay=x=(W-w)/2:y=(H-h)/2:enable='gte(t\,0.500)'[ov0]
+           Error : Invalid argument
+           Run `python diagnose_drawtext.py` to pinpoint it.
 
-    python diagnose_drawtext.py
+Settings:
+    brand                  = none
+    brand_enforce_audit    = True
+    veo_model              = veo-3.1-generate-preview
+    veo_resolution         = 1080p
+    veo_use_keyframes      = False
+    veo_chain_keyframes    = False
+    veo_concurrency        = 3
+    music_provider         = none
+    render_fps             = 24
 
-Builds a ladder of increasingly complex drawtext calls and reports the first
-rung that breaks, then tries font-path escaping variants. ffmpeg's exit code
-alone (-22 / 4294967274 = EINVAL) does not say which argument it disliked, and
-`_filter_path()` only does anything on Windows — so it has never actually run
-until now.
-"""
+--------------------------------------------------------------
+1 check(s) FAILED: Super compositing smoke test
 
-from __future__ import annotations
-
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
-
-from app.brand.assets import font_path, wordmark  # noqa: E402
-from app.services.ffmpeg import FFMPEG, _fade_alpha, _filter_path  # noqa: E402
-
-font = font_path()
-if font is None:
-    raise SystemExit("No font resolved — fix that first.")
-
-print(f"ffmpeg    : {FFMPEG}")
-print(f"font      : {font}")
-print(f"escaped   : {_filter_path(font)}")
-print()
-
-work = Path(tempfile.mkdtemp(prefix="dtdiag-"))
-plate = work / "plate.mp4"
-copy_file = work / "copy.txt"
-copy_file.write_text("IndiGo x Japan - 100% ready", encoding="utf-8")
-
-subprocess.run(
-    [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-     "-f", "lavfi", "-i", "color=c=navy:s=320x180:d=1", str(plate)],
-    capture_output=True,
-)
-if not plate.is_file():
-    raise SystemExit("Could not even create a test plate — ffmpeg is not usable.")
-
-
-def attempt(label: str, video_filter: str, extra_inputs: list[str] | None = None) -> bool:
-    """Run one filtergraph. Print PASS, or FAIL with ffmpeg's own words."""
-    out = work / "out.mp4"
-    out.unlink(missing_ok=True)
-    args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", str(plate)]
-    args += extra_inputs or []
-    args += ["-filter_complex", video_filter, "-map", "[v]",
-             "-c:v", "libx264", "-crf", "30", "-pix_fmt", "yuv420p", str(out)]
-
-    done = subprocess.run(args, capture_output=True, text=True)
-    ok = done.returncode == 0 and out.is_file()
-    print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
-    if not ok:
-        stderr = (done.stderr or "").strip().splitlines()
-        for line in stderr[-4:]:
-            print(f"         {line[:150]}")
-        if not stderr:
-            print(f"         (no stderr; exit {done.returncode})")
-    return ok
-
-
-FONT = _filter_path(font)
-TEXTFILE = _filter_path(copy_file)
-
-print("--- Ladder: each rung adds one option --------------------------------")
-rungs: list[tuple[str, str]] = [
-    ("1 minimal text=",
-     f"[0:v]drawtext=fontfile={FONT}:text=hello:fontcolor=white:fontsize=24:x=20:y=20[v]"),
-    ("2 + expansion=none",
-     f"[0:v]drawtext=fontfile={FONT}:text=hello:expansion=none:fontcolor=white:"
-     f"fontsize=24:x=20:y=20[v]"),
-    ("3 textfile= instead of text=",
-     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
-     f"fontsize=24:x=20:y=20[v]"),
-    ("4 + enable=between()",
-     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
-     f"fontsize=24:x=20:y=20:enable=between(t\\,0.1\\,0.9)[v]"),
-    ("5 + alpha= expression",
-     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
-     f"fontsize=24:x=20:y=20:enable=between(t\\,0.1\\,0.9):"
-     f"alpha={_fade_alpha(0.1, 0.9, 0.2)}[v]"),
-    ("6 + shadow",
-     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
-     f"fontsize=24:x=20:y=20:shadowcolor=black@0.35:shadowx=0:shadowy=2[v]"),
-    ("7 + line_spacing",
-     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
-     f"fontsize=24:x=20:y=20:line_spacing=10[v]"),
-]
-first_bad = None
-for label, graph in rungs:
-    if not attempt(label, graph):
-        first_bad = label
-        break
-
-print()
-print("--- Font path escaping variants (only matter on Windows) -------------")
-raw = str(font)
-variants = {
-    "A current  C\\:/x/y": _filter_path(font),
-    "B double   C\\\\:/x/y": raw.replace("\\", "/").replace(":", "\\\\:"),
-    "C quoted  'C\\:/x/y'": "'" + raw.replace("\\", "/").replace(":", "\\:") + "'",
-    "D plain    C:/x/y": raw.replace("\\", "/"),
-    "E native   C:\\x\\y": raw,
-}
-working = []
-for label, value in variants.items():
-    graph = f"[0:v]drawtext=fontfile={value}:text=hello:fontcolor=white:fontsize=24:x=20:y=20[v]"
-    if attempt(label, graph):
-        working.append(label)
-
-print()
-print("--- Overlay of the brand mark ----------------------------------------")
-mark = wordmark(on_dark=True)
-if mark.is_file():
-    attempt(
-        "overlay + fade",
-        "[1:v]scale=120:-1,format=rgba,fade=t=in:st=0.2:d=0.3:alpha=1,setpts=PTS-STARTPTS[m];"
-        "[0:v][m]overlay=x=(W-w)/2:y=(H-h)/2:enable='gte(t\\,0.2)'[v]",
-        extra_inputs=["-loop", "1", "-t", "1.0", "-i", str(mark)],
-    )
-else:
-    print("  (mark missing, skipped)")
-
-print()
-print("=" * 70)
-print(f"First failing rung : {first_bad or 'none — the ladder passed'}")
-print(f"Working font forms : {', '.join(working) if working else 'NONE'}")
-print(f"Artifacts left in  : {work}")
+(venv) C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server>
