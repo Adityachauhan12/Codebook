@@ -1,209 +1,257 @@
-"""Decompose a raw brief before anything else reads it.
+"""Environment configuration.
 
-The pipeline used to treat the brief as one opaque string and hand it to the
-scene writer whole. That is the root of several unrelated-looking failures:
+Two providers, two jobs:
 
-  * "On-Screen Text: A new horizon awaits." reached Veo as an instruction to
-    render type, and came back as "A new horizon awasts."
-  * "4K HDR" was silently ignored, because nothing in the pipeline is allowed
-    to say "no".
-  * Music direction competed for the scene writer's attention with camera
-    direction, and neither the composer nor Veo ever saw it.
+    Azure OpenAI  -> the writing brain. Storyboards, scene prompts, repairs,
+                     audio direction. Anything that produces text.
+    Google Gemini -> the pixels. Veo for the video segments, and the Gemini
+                     image model for optional scene keyframes used as Veo first
+                     frames.
 
-Splitting the brief is what lets each of those go to the right place — or be
-refused out loud. Only ``intent`` is ever allowed into a prompt.
+Nothing is required at boot. The keys arrive later, and a server that refuses to
+start without them is useless for wiring up the UI. Each capability reports
+itself through ``capabilities()``, and routes fail loudly, per request, with an
+actionable message.
 """
 
 from __future__ import annotations
 
-import re
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
 
-from ..brand import brand_system_block
-from ..domain.models import BriefAnalysis, EndCard, SuperSpec
-from ..logging_setup import get_logger
-from .llm import ChatMessage, chat_json
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-log = get_logger("brief")
+SERVER_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = SERVER_ROOT.parent
 
-#: Headings a human writes above the copy they want burnt in. Matching these is
-#: the deterministic fallback for when no model is configured — crude, but it
-#: catches the common shape and is better than passing copy through to Veo.
-_COPY_HEADING = re.compile(
-    r"^\s*(?:on[- ]screen\s+text|on[- ]screen\s+copy|supers?|captions?|titles?|"
-    r"text\s+overlay|end\s?card|final\s+frame|copy)\s*[:\-]?\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-#: Asks that read as achievable but are not, on this pipeline. Kept short and
-#: specific: a false positive here tells the user "no" about something we could
-#: in fact do, which is worse than staying quiet.
-_UNSUPPORTED = (
-    (re.compile(r"\b(?:4k|uhd|2160p|8k)\b", re.IGNORECASE),
-     "4K/8K delivery — Veo renders at 1080p maximum. The film will be 1080p."),
-    (re.compile(r"\bhdr\b|\bdolby\s+vision\b", re.IGNORECASE),
-     "HDR — Veo output is SDR. The grade will be delivered in SDR."),
-    (re.compile(r"\b(?:60|120)\s?fps\b", re.IGNORECASE),
-     "High frame rate — clips are conformed to the project frame rate."),
-)
+# server/.env wins; the repo root .env is the fallback so one file can feed both apps.
+_ENV_FILES = (REPO_ROOT / ".env", SERVER_ROOT / ".env")
 
 
-_SYSTEM = """\
-You split an advertising brief into parts that go to different systems. You do \
-not write, improve, critique or expand the brief. You sort it.
-
-Return JSON with exactly these keys:
-
-  intent      string. The creative brief: story, subject, mood, setting, casting, \
-camera and grade direction. Everything a director needs and nothing else. \
-Remove on-screen copy, duration/resolution/aspect specification, music \
-direction, and prohibition lists — those are captured separately below. Keep \
-the user's own wording wherever you can; you are deleting, not rewriting.
-
-  supers      array. Every piece of text the VIEWER READS ON SCREEN. Each item: \
-{"text": string, "start": number, "end": number, "position": one of \
-"upper-left"|"upper-centre"|"lower-left"|"lower-centre"|"centre"}. If the brief \
-gives timings, use them. If it gives a range like "0-10 sec", use it. If it \
-gives no timing, distribute the lines evenly across the runtime. Copy the text \
-EXACTLY as written, including capitalisation. Do not invent copy that is not \
-in the brief. Empty array if the brief asks for no on-screen text.
-
-  endCard     object. The closing brand frame, if the brief describes one: \
-{"enabled": bool, "headline": string|null, "subline": string|null, \
-"mark": "wordmark"|"icon"|"none", "seconds": number}. A "final frame" or "logo \
-reveal" instruction belongs here, not in supers. enabled=false if absent.
-
-  avoid       array of strings. Things the brief says must NOT appear. Split a \
-comma-separated negative prompt into individual items.
-
-  music       string or null. Music and sound-design direction, verbatim.
-
-Rules:
-- Text a CHARACTER reads (a sign, a boarding pass, a phone screen) is NOT a \
-super. It stays in intent. Supers are only what is composited over the picture.
-- Never put copy in both intent and supers.
-- If the brief contains no on-screen text at all, supers is [] and endCard.enabled \
-is false. Do not helpfully invent an end card.
-"""
-
-
-def _fallback(raw: str) -> BriefAnalysis:
-    """Split the brief without a model.
-
-    Cuts at the first copy heading and treats everything above it as intent.
-    Crude, and it does not recover timings — but it stops copy reaching Veo,
-    which is the failure that matters.
-    """
-    match = _COPY_HEADING.search(raw)
-    intent = raw[: match.start()].strip() if match else raw.strip()
-    if match:
-        log.info("No model configured; split the brief at %r.", match.group(0).strip())
-    return BriefAnalysis(intent=intent or raw.strip(), unsupported=_unsupported_in(raw))
-
-
-def _unsupported_in(raw: str) -> list[str]:
-    return [note for pattern, note in _UNSUPPORTED if pattern.search(raw)]
-
-
-_POSITIONS = frozenset(
-    {"upper-left", "upper-centre", "lower-left", "lower-centre", "centre"}
-)
-
-
-def _coerce_supers(items: object, seconds: int) -> list[SuperSpec]:
-    """Build ``SuperSpec``s from model output, dropping anything malformed.
-
-    A super with a broken time window is worse than a missing one: it either
-    never appears or sits on screen for the whole film.
-    """
-    if not isinstance(items, list):
-        return []
-
-    supers: list[SuperSpec] = []
-    for entry in items:
-        if not isinstance(entry, dict):
-            continue
-        text = str(entry.get("text") or "").strip()
-        if not text:
-            continue
-        try:
-            start = max(0.0, float(entry.get("start", 0)))
-            end = min(float(seconds), float(entry.get("end", 0)))
-        except (TypeError, ValueError):
-            continue
-        if end <= start:
-            continue
-        position = entry.get("position")
-        supers.append(
-            SuperSpec(
-                text=text,
-                start=start,
-                end=end,
-                position=position if position in _POSITIONS else "upper-left",  # type: ignore[arg-type]
-            )
-        )
-    return supers
-
-
-def _coerce_end_card(value: object) -> EndCard:
-    if not isinstance(value, dict) or not value.get("enabled"):
-        return EndCard(enabled=False)
-    mark = value.get("mark")
-    return EndCard(
-        enabled=True,
-        headline=(str(value["headline"]).strip() if value.get("headline") else None),
-        subline=(str(value["subline"]).strip() if value.get("subline") else None),
-        mark=mark if mark in {"wordmark", "icon", "none"} else "wordmark",
-        seconds=float(value.get("seconds") or 4.0),
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=[str(path) for path in _ENV_FILES],
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
     )
 
+    # --- Server -----------------------------------------------------------
+    host: str = "0.0.0.0"
+    port: int = 8787
+    public_base_url: str = "http://localhost:8787"
+    cors_origins: str = "http://localhost:5173,http://localhost:8080"
+    log_level: str = "INFO"
 
-async def analyse_brief(raw: str, *, seconds: int) -> BriefAnalysis:
-    """Split a raw brief into intent, copy, constraints and refusals.
+    # --- Brand -------------------------------------------------------------
+    #: Which brand guardrails to enforce. "indigo" applies app/brand/policy.py to
+    #: every storyboard, scene prompt and audit. "none" turns enforcement off and
+    #: leaves the craft layer alone.
+    brand: str = "indigo"
+    #: TrueType/OpenType file used for burnt-in supers. Veo is never asked to
+    #: render type, so this font is the only one a viewer ever sees. Left unset,
+    #: `brand.assets.font_path()` picks the best available geometric sans for the
+    #: platform — Futura on macOS, Century Gothic on Windows.
+    brand_font_path: str | None = None
+    #: Refuse to render when the storyboard audit still has `error`-severity
+    #: issues. The audit exists to stop broken prompts reaching Veo; leaving this
+    #: off makes it advisory, which is how misspelt supers shipped.
+    brand_enforce_audit: bool = True
 
-    Falls back to a deterministic split when no model is configured, so the
-    pipeline still boots and still keeps copy away from Veo.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return BriefAnalysis(intent="")
+    # --- Azure OpenAI: the writing brain ----------------------------------
+    azure_openai_base_url: str | None = None
+    azure_openai_key: str | None = None
+    #: The deployment name, which is what actually goes in the URL path.
+    azure_openai_deployment_name: str | None = None
+    #: Underlying model behind the deployment. Decides the parameter dialect.
+    azure_openai_model: str = "gpt-4.1"
+    azure_openai_version: str = "2024-10-21"
+    #: Optional second deployment for cheap passes. Falls back to the main one.
+    azure_openai_fast_deployment_name: str | None = None
+    #: Optional TTS deployment for voiceover. Voiceover is disabled without it.
+    azure_openai_tts_deployment_name: str | None = None
+    azure_openai_tts_voice: str = "alloy"
+    azure_openai_max_output_tokens: int = 16000
+    azure_openai_timeout_seconds: float = 180.0
 
-    messages: list[ChatMessage] = [
-        {"role": "system", "content": _SYSTEM + brand_system_block(safety_only=True)},
+    # --- Google: Veo + image ----------------------------------------------
+    #: The Google AI Studio key. Named for the image model in this product's
+    #: existing config; the same key authenticates Veo. GEMINI_API_KEY is an alias.
+    gemini_image_api_key: str | None = None
+    gemini_api_key: str | None = None
+    gemini_api_base: str = "https://generativelanguage.googleapis.com/v1beta"
+    #: Image model, used for optional scene keyframes fed to Veo as first frames.
+    gemini_image_model_name: str = "gemini-2.5-flash-image"
+    veo_model: str = "veo-3.1-generate-preview"
+    veo_fast_model: str = "veo-3.1-fast-generate-preview"
+
+    # --- Veo behaviour ------------------------------------------------------
+    #: Longest single Veo generation, in seconds. Veo accepts 4, 6 or 8.
+    veo_max_clip_seconds: int = Field(default=8, ge=4, le=8)
+    #: Seconds added by one ``extend`` call on a Veo-produced video.
+    veo_extend_seconds: int = 7
+    #: Hard ceiling on extends per video, per the Veo API.
+    veo_max_extensions: int = 20
+    veo_resolution: Literal["720p", "1080p"] = "1080p"
+    veo_person_generation: Literal["allow_all", "allow_adult", "dont_allow"] = "allow_all"
+    veo_poll_interval_seconds: float = 10.0
+    veo_poll_timeout_seconds: float = 900.0
+    #: How many Veo generations may be in flight at once.
+    veo_concurrency: int = 3
+    #: Attempts per clip before it is marked failed.
+    veo_max_attempts: int = 2
+    #: Render a still keyframe per scene with the Gemini image model and pass it
+    #: to Veo as the first frame. One image call per clip, large continuity win.
+    veo_use_keyframes: bool = False
+    #: Seed each clip with the LAST FRAME of the previous clip, so the face,
+    #: wardrobe and grade carry across a cut instead of being re-guessed. Costs
+    #: nothing extra per clip, but forces generation to run in story order rather
+    #: than `veo_concurrency` at a time — a 7-clip film goes from ~3 rounds to 7.
+    #: Worth it when characters recur; pointless for a montage of unrelated shots.
+    veo_chain_keyframes: bool = False
+
+    # --- Guard rails --------------------------------------------------------
+    max_video_seconds: int = 180
+    max_segments: int = 30
+
+    # --- Media / storage ----------------------------------------------------
+    storage_dir: str = "./storage"
+    ffmpeg_path: str | None = None
+    ffprobe_path: str | None = None
+    render_fps: int = 24
+    #: Gain applied to the music bed under the clip audio.
+    music_gain: float = 0.28
+    voiceover_gain: float = 1.0
+
+    # --- Optional music providers ------------------------------------------
+    music_provider: Literal["none", "elevenlabs", "vertex-lyria"] = "none"
+    elevenlabs_api_key: str | None = None
+    elevenlabs_music_model: str = "music_v1"
+    google_cloud_project: str | None = None
+    google_cloud_location: str = "us-central1"
+    google_access_token: str | None = None
+    vertex_lyria_model: str = "lyria-002"
+
+    @field_validator(
+        "azure_openai_base_url",
+        "azure_openai_key",
+        "azure_openai_deployment_name",
+        "azure_openai_fast_deployment_name",
+        "azure_openai_tts_deployment_name",
+        "gemini_image_api_key",
+        "gemini_api_key",
+        "elevenlabs_api_key",
+        "google_cloud_project",
+        "google_access_token",
+        "ffmpeg_path",
+        "ffprobe_path",
+        mode="before",
+    )
+    @classmethod
+    def _blank_to_none(cls, value: object) -> object:
+        """Treat ``KEY=`` in a .env file as "not set" rather than an empty string."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    # --- Derived ------------------------------------------------------------
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def storage_path(self) -> Path:
+        path = Path(self.storage_dir)
+        return path if path.is_absolute() else (SERVER_ROOT / path).resolve()
+
+    @property
+    def google_key(self) -> str | None:
+        """The Google key, under either accepted name."""
+        return self.gemini_image_api_key or self.gemini_api_key
+
+    @property
+    def azure_configured(self) -> bool:
+        return bool(
+            self.azure_openai_base_url
+            and self.azure_openai_key
+            and self.azure_openai_deployment_name
+        )
+
+    @property
+    def allowed_clip_seconds(self) -> list[int]:
+        """Durations Veo accepts for a single generation, capped by config."""
+        allowed = [s for s in (4, 6, 8) if s <= self.veo_max_clip_seconds]
+        return allowed or [4]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()
+
+
+def capabilities() -> list[dict[str, object]]:
+    """What this server can actually do right now, given the keys it has."""
+    google = settings.google_key
+    return [
         {
-            "role": "user",
-            "content": f"Runtime: {seconds} seconds.\n\n--- BRIEF ---\n{raw}\n--- END ---",
+            "id": "storyboard",
+            "ready": settings.azure_configured,
+            "detail": (
+                f"Azure OpenAI {settings.azure_openai_model} "
+                f"(deployment {settings.azure_openai_deployment_name})"
+                if settings.azure_configured
+                else "Set AZURE_OPENAI_BASE_URL, AZURE_OPENAI_KEY and "
+                "AZURE_OPENAI_DEPLOYMENT_NAME to plan storyboards."
+            ),
+        },
+        {
+            "id": "clips",
+            "ready": bool(google),
+            "detail": (
+                f"{settings.veo_model}, max {settings.veo_max_clip_seconds}s per generation"
+                if google
+                else "Set GEMINI_IMAGE_API_KEY to generate video clips with Veo."
+            ),
+        },
+        {
+            "id": "keyframes",
+            "ready": bool(google) and settings.veo_use_keyframes,
+            "detail": (
+                "Set GEMINI_IMAGE_API_KEY to generate scene keyframes."
+                if not google
+                else f"{settings.gemini_image_model_name} first-frame keyframes are on"
+                if settings.veo_use_keyframes
+                else "Set VEO_USE_KEYFRAMES=true to lock continuity with generated first frames."
+            ),
+        },
+        {
+            "id": "voiceover",
+            "ready": settings.azure_configured and bool(settings.azure_openai_tts_deployment_name),
+            "detail": (
+                f"Azure OpenAI TTS deployment {settings.azure_openai_tts_deployment_name}"
+                if settings.azure_openai_tts_deployment_name
+                else "Set AZURE_OPENAI_TTS_DEPLOYMENT_NAME for voiceover. Veo still "
+                "generates in-scene dialogue without it."
+            ),
+        },
+        {
+            "id": "music",
+            "ready": (
+                settings.music_provider == "elevenlabs" and bool(settings.elevenlabs_api_key)
+            )
+            or (
+                settings.music_provider == "vertex-lyria"
+                and bool(settings.google_cloud_project and settings.google_access_token)
+            ),
+            "detail": (
+                "No music generator configured — upload a track instead, or set MUSIC_PROVIDER."
+                if settings.music_provider == "none"
+                else f"Provider {settings.music_provider}"
+            ),
         },
     ]
-
-    try:
-        payload = await chat_json(messages)
-    except Exception as error:  # noqa: BLE001 - any upstream failure degrades the same way
-        log.warning("Brief analysis failed, falling back to a heading split. %s", error)
-        return _fallback(raw)
-
-    if not isinstance(payload, dict):
-        return _fallback(raw)
-
-    intent = str(payload.get("intent") or "").strip()
-    if not intent:
-        log.warning("Brief analysis returned no intent; keeping the raw brief.")
-        intent = raw
-
-    avoid = [str(item).strip() for item in payload.get("avoid") or [] if str(item).strip()]
-    music = payload.get("music")
-
-    analysis = BriefAnalysis(
-        intent=intent,
-        supers=_coerce_supers(payload.get("supers"), seconds),
-        end_card=_coerce_end_card(payload.get("endCard")),
-        avoid=avoid,
-        unsupported=_unsupported_in(raw),
-        music=str(music).strip() if music else None,
-    )
-
-    log.info(
-        "Brief split: intent %d chars (from %d), %d super(s), end card %s, %d unsupported.",
-        len(analysis.intent), len(raw), len(analysis.supers),
-        "on" if analysis.end_card.enabled else "off", len(analysis.unsupported),
-    )
-    return analysis
