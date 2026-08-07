@@ -1,213 +1,513 @@
-"""Decompose a raw brief before anything else reads it.
+"""The dramaturgy and three-detail checks, enforced in code.
 
-The pipeline used to treat the brief as one opaque string and hand it to the
-scene writer whole. That is the root of several unrelated-looking failures:
+The skill says its two checks — the six-point dramaturgy check and the
+three-detail audit — are the step writers skip, and that skipping them silently
+degrades everything downstream. An LLM asked to self-check will cheerfully claim
+it did.
 
-  * "On-Screen Text: A new horizon awaits." reached Veo as an instruction to
-    render type, and came back as "A new horizon awasts."
-  * "4K HDR" was silently ignored, because nothing in the pipeline is allowed
-    to say "no".
-  * Music direction competed for the scene writer's attention with camera
-    direction, and neither the composer nor Veo ever saw it.
-
-Splitting the brief is what lets each of those go to the right place — or be
-refused out loud. Only ``intent`` is ever allowed into a prompt.
+So the check runs here, against the structured scene the model returned.
+Anything at ``error`` severity is fed back to the model as a repair brief;
+warnings are surfaced in the UI but do not block.
 """
 
 from __future__ import annotations
 
 import re
 
-from ..brand import brand_system_block
-from ..domain.models import BriefAnalysis, EndCard, SuperSpec
-from ..logging_setup import get_logger
-from .llm import ChatMessage, chat_json
+from ..brand import brand_issues
+from ..domain.models import AuditIssue, AuditReport, Scene, StoryOption
 
-log = get_logger("brief")
+#: Words that mark an absent detail. Section 7 of PIPELINE.md.
+BANNED_PHRASES = [
+    "cinematic masterpiece",
+    "professional",
+    "high quality",
+    "highest quality",
+    "masterpiece",
+    "stunning",
+    "epic",
+    "amazing",
+    "beautiful lighting",
+    "beautiful light",
+    "dynamic camera",
+    "intense moment",
+    "powerful scene",
+    "breathtaking",
+    "award-winning",
+    "award winning",
+    "hyperrealistic",
+    "ultra realistic",
+    "ultra-realistic",
+    "photorealistic masterpiece",
+    "8k",
+    "4k",
+    "best quality",
+    "highly detailed",
+]
 
-#: Headings a human writes above the copy they want burnt in. Matching these is
-#: the deterministic fallback for when no model is configured — crude, but it
-#: catches the common shape and is better than passing copy through to Veo.
-_COPY_HEADING = re.compile(
-    r"^\s*(?:on[- ]screen\s+text|on[- ]screen\s+copy|supers?|captions?|titles?|"
-    r"text\s+overlay|end\s?card|final\s+frame|copy)\s*[:\-]?\s*$",
-    re.IGNORECASE | re.MULTILINE,
+#: "cinematic" alone is banned, but "cinematic naturalism" is a named grade the
+#: skill's own worked examples use. Allow the compound, reject the adjective.
+ALLOWED_CINEMATIC_COMPOUNDS = ("cinematic naturalism", "cinematic widescreen")
+
+TELL_NOT_SHOW = re.compile(
+    r"\b(?:he|she|they|the (?:man|woman|hero|subject|character)|it)\s+"
+    r"(?:is|are|was|were|looks?|seems?|feels?)\s+(?:very\s+|really\s+|so\s+)?"
+    r"(?:sad|angry|afraid|scared|happy|excited|nervous|anxious|joyful|frustrated|"
+    r"lonely|proud|confident|surprised)\b",
+    re.IGNORECASE,
 )
 
-#: Asks that read as achievable but are not, on this pipeline. Kept short and
-#: specific: a false positive here tells the user "no" about something we could
-#: in fact do, which is worse than staying quiet.
-_UNSUPPORTED = (
-    (re.compile(r"\b(?:4k|uhd|2160p|8k)\b", re.IGNORECASE),
-     "4K/8K delivery — Veo renders at 1080p maximum. The film will be 1080p."),
-    (re.compile(r"\bhdr\b|\bdolby\s+vision\b", re.IGNORECASE),
-     "HDR — Veo output is SDR. The grade will be delivered in SDR."),
-    (re.compile(r"\b(?:60|120)\s?fps\b", re.IGNORECASE),
-     "High frame rate — clips are conformed to the project frame rate."),
+LENS_PATTERN = re.compile(
+    r"\b(?:\d{2,3}\s?mm|macro|anamorphic|telephoto|wide-angle|wide angle)\b", re.IGNORECASE
 )
 
-
-_SYSTEM = """\
-You split an advertising brief into parts that go to different systems. You do \
-not write, improve, critique or expand the brief. You sort it.
-
-Return JSON with exactly these keys:
-
-  intent      string. The creative brief: story, subject, mood, setting, casting, \
-camera and grade direction. Everything a director needs and nothing else. \
-Remove on-screen copy, duration/resolution/aspect specification, music \
-direction, and prohibition lists — those are captured separately below. Keep \
-the user's own wording wherever you can; you are deleting, not rewriting.
-
-  supers      array. Every piece of text the VIEWER READS ON SCREEN. Each item: \
-{"text": string, "start": number, "end": number, "position": one of \
-"upper-left"|"upper-centre"|"lower-left"|"lower-centre"|"centre"}. If the brief \
-gives timings, use them. If it gives a range like "0-10 sec", use it. If it \
-gives no timing, distribute the lines evenly across the runtime. Copy the text \
-EXACTLY as written, including capitalisation. Do not invent copy that is not \
-in the brief. Empty array if the brief asks for no on-screen text.
-POSITION: unless the brief actually specifies placement, use "upper-left". \
-Narrative supers sit in a corner so they do not cover the face or the action; \
-dead-centre type over a subject is what an amateur edit looks like. Reserve \
-"centre" for the end card, which is handled separately below.
-
-  endCard     object. The closing brand frame, if the brief describes one: \
-{"enabled": bool, "headline": string|null, "subline": string|null, \
-"mark": "wordmark"|"icon"|"none", "seconds": number}. A "final frame" or "logo \
-reveal" instruction belongs here, not in supers. enabled=false if absent.
-
-  avoid       array of strings. Things the brief says must NOT appear. Split a \
-comma-separated negative prompt into individual items.
-
-  music       string or null. Music and sound-design direction, verbatim.
-
-Rules:
-- Text a CHARACTER reads (a sign, a boarding pass, a phone screen) is NOT a \
-super. It stays in intent. Supers are only what is composited over the picture.
-- Never put copy in both intent and supers.
-- If the brief contains no on-screen text at all, supers is [] and endCard.enabled \
-is false. Do not helpfully invent an end card.
-"""
-
-
-def _fallback(raw: str) -> BriefAnalysis:
-    """Split the brief without a model.
-
-    Cuts at the first copy heading and treats everything above it as intent.
-    Crude, and it does not recover timings — but it stops copy reaching Veo,
-    which is the failure that matters.
-    """
-    match = _COPY_HEADING.search(raw)
-    intent = raw[: match.start()].strip() if match else raw.strip()
-    if match:
-        log.info("No model configured; split the brief at %r.", match.group(0).strip())
-    return BriefAnalysis(intent=intent or raw.strip(), unsupported=_unsupported_in(raw))
-
-
-def _unsupported_in(raw: str) -> list[str]:
-    return [note for pattern, note in _UNSUPPORTED if pattern.search(raw)]
-
-
-_POSITIONS = frozenset(
-    {"upper-left", "upper-centre", "lower-left", "lower-centre", "centre"}
+CAMERA_MOVE_PATTERN = re.compile(
+    r"\b(?:static camera|locked[- ]off|slow push[- ]in|fast push[- ]in|push[- ]in|pull[- ]back|"
+    r"dolly[- ](?:in|out)|tracking|lateral track|handheld|whip pan|snap zoom|rack focus|"
+    r"tilt (?:up|down)|orbit|gimbal|crane|aerial|dolly[- ]zoom|pan (?:left|right)|drift|glide|"
+    r"arc|steadicam|FPV|top[- ]down)\b",
+    re.IGNORECASE,
 )
 
+LIGHT_PATTERN = re.compile(
+    r"\b(?:key(?:\s?light)?|rim(?:\s?light)?|backlight|back light|fill|bounce|practical|"
+    r"underlight|top light|side light|spill|silhouette|motivated)\b",
+    re.IGNORECASE,
+)
 
-def _coerce_supers(items: object, seconds: int) -> list[SuperSpec]:
-    """Build ``SuperSpec``s from model output, dropping anything malformed.
+LIGHT_DIRECTION_PATTERN = re.compile(
+    r"\b(?:frame[- ](?:left|right)|from (?:left|right|behind|above|below|"
+    r"the (?:window|door|screen|street))|overhead|off[- ]screen (?:left|right)|"
+    r"camera[- ](?:left|right)|three[- ]quarter)\b",
+    re.IGNORECASE,
+)
 
-    A super with a broken time window is worse than a missing one: it either
-    never appears or sits on screen for the whole film.
-    """
-    if not isinstance(items, list):
-        return []
+COLOUR_PATTERN = re.compile(
+    r"\b(?:red|orange|amber|gold(?:en)?|yellow|green|teal|cyan|blue|indigo|violet|magenta|pink|"
+    r"crimson|scarlet|sepia|ochre|beige|cream|ivory|white|grey|gray|black|brown|tan|rust|bronze|"
+    r"copper|silver|charcoal|slate|desaturated|monochrome|warm|cool|cold)\b",
+    re.IGNORECASE,
+)
 
-    supers: list[SuperSpec] = []
-    for entry in items:
-        if not isinstance(entry, dict):
-            continue
-        text = str(entry.get("text") or "").strip()
-        if not text:
-            continue
-        try:
-            start = max(0.0, float(entry.get("start", 0)))
-            end = min(float(seconds), float(entry.get("end", 0)))
-        except (TypeError, ValueError):
-            continue
-        if end <= start:
-            continue
-        position = entry.get("position")
-        supers.append(
-            SuperSpec(
-                text=text,
-                start=start,
-                end=end,
-                position=position if position in _POSITIONS else "upper-left",  # type: ignore[arg-type]
+AUDIO_LINE = re.compile(r"^\s*audio\s*:", re.IGNORECASE | re.MULTILINE)
+
+FINAL_IMAGE_PATTERN = re.compile(
+    r"\b(?:ends? on|final frame|final image|closes? on|last frame|holds? on|freezes? on|out on)\b",
+    re.IGNORECASE,
+)
+
+DIALOGUE_PATTERN = re.compile(
+    r"(?:says|whispers|shouts|mutters|asks|replies|answers)\s*[:,]\s*[\"“]([^\"”]+)",
+    re.IGNORECASE,
+)
+
+#: Words per second of natural speech; Veo caps spoken audio at ~8s.
+WORDS_PER_SECOND = 2.5
+
+
+def _contains_banned(text: str) -> list[str]:
+    lower = text.lower()
+    hits = [phrase for phrase in BANNED_PHRASES if phrase in lower]
+
+    # "cinematic" on its own, but not as part of an allowed compound.
+    for match in re.finditer(r"cinematic", lower):
+        index = match.start()
+        allowed = any(lower.startswith(compound, index) for compound in ALLOWED_CINEMATIC_COMPOUNDS)
+        if not allowed and "cinematic" not in hits:
+            hits.append("cinematic")
+            break
+
+    return hits
+
+
+def _filled(value: str | None, min_length: int = 12) -> bool:
+    return bool(value and len(value.strip()) >= min_length)
+
+
+def _significant_token(phrase: str) -> str | None:
+    """Longest word in a phrase, lowercased — a cheap proxy for "was this restated"."""
+    words = [word for word in re.sub(r"[^a-z0-9\s-]", " ", phrase.lower()).split() if len(word) > 4]
+    return max(words, key=len) if words else None
+
+
+def _audit_scene(scene: Scene, story: StoryOption) -> list[AuditIssue]:
+    issues: list[AuditIssue] = []
+
+    def at(rule: str, severity: str, message: str) -> None:
+        issues.append(
+            AuditIssue(
+                sceneId=scene.id,
+                sceneOrder=scene.order,
+                rule=rule,
+                severity=severity,  # type: ignore[arg-type]
+                message=message,
             )
         )
-    return supers
 
-
-def _coerce_end_card(value: object) -> EndCard:
-    if not isinstance(value, dict) or not value.get("enabled"):
-        return EndCard(enabled=False)
-    mark = value.get("mark")
-    return EndCard(
-        enabled=True,
-        headline=(str(value["headline"]).strip() if value.get("headline") else None),
-        subline=(str(value["subline"]).strip() if value.get("subline") else None),
-        mark=mark if mark in {"wordmark", "icon", "none"} else "wordmark",
-        seconds=float(value.get("seconds") or 4.0),
+    prompt = scene.prompt or ""
+    card = scene.shot_card
+    haystack = "\n".join(
+        [prompt, *(str(value) for value in card.model_dump().values() if isinstance(value, str))]
     )
 
+    if len(prompt.strip()) < 120:
+        at("prompt-substance", "error", "Prompt is too thin to direct a shot.")
 
-async def analyse_brief(raw: str, *, seconds: int) -> BriefAnalysis:
-    """Split a raw brief into intent, copy, constraints and refusals.
+    # --- Details Law: the three-detail check --------------------------------
+    if not _filled(card.environmental_pressure):
+        at(
+            "three-detail/environment",
+            "error",
+            "No environmental pressure. Name a physical fact of the space that carries the emotion.",
+        )
+    if not _filled(card.micro_action):
+        at(
+            "three-detail/micro-action",
+            "error",
+            "No physical micro-action. Translate the emotion onto the body — jaw, hands, breath, eyes.",
+        )
+    if not _filled(card.sound_anchor, 8):
+        at(
+            "three-detail/motif",
+            "error",
+            "No sound anchor or visual motif tying this shot to the spine of the piece.",
+        )
 
-    Falls back to a deterministic split when no model is configured, so the
-    pipeline still boots and still keeps copy away from Veo.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return BriefAnalysis(intent="")
+    # --- Banned vocabulary --------------------------------------------------
+    banned = _contains_banned(haystack)
+    if banned:
+        at(
+            "banned-vocabulary",
+            "error",
+            f"Placeholder words instead of detail: {', '.join(banned)}. "
+            "Replace each with a concrete physical fact.",
+        )
 
-    messages: list[ChatMessage] = [
-        {"role": "system", "content": _SYSTEM + brand_system_block(safety_only=True)},
-        {
-            "role": "user",
-            "content": f"Runtime: {seconds} seconds.\n\n--- BRIEF ---\n{raw}\n--- END ---",
-        },
+    if TELL_NOT_SHOW.search(haystack):
+        at("show-dont-tell", "error", "An emotion is named without a body. Render it as an action.")
+
+    # --- Camera and light ---------------------------------------------------
+    if not LENS_PATTERN.search(haystack):
+        at("lens", "error", "No lens stated. Add a focal length (24/35/50/85/100mm macro).")
+    if not CAMERA_MOVE_PATTERN.search(haystack):
+        at(
+            "camera-move",
+            "error",
+            "No camera direction. Name one primary move, or state 'static camera'.",
+        )
+    if not _filled(card.movement_reason, 6):
+        at("motivated-camera", "warning", "Camera move has no stated reason. Answer 'what changed?'")
+    if not LIGHT_PATTERN.search(haystack):
+        at("light-source", "error", "No named light source or role (key, rim, fill, practical).")
+    if not LIGHT_DIRECTION_PATTERN.search(haystack):
+        at("light-direction", "warning", "Light has no direction. Say where it comes from.")
+    if not COLOUR_PATTERN.search(f"{card.palette} {prompt}"):
+        at("palette", "warning", "Palette is not defined with concrete colours.")
+
+    # --- Composition and gaze -----------------------------------------------
+    if not _filled(card.eye_trace, 6):
+        at("controlled-gaze", "warning", "No eye-trace. Say where the viewer looks in the first 0.3s.")
+
+    # --- Veo specifics ------------------------------------------------------
+    if not AUDIO_LINE.search(prompt):
+        at(
+            "veo/audio-line",
+            "error",
+            "No `Audio:` line. Veo will not generate sound unless it is labelled explicitly.",
+        )
+    if not FINAL_IMAGE_PATTERN.search(prompt):
+        at(
+            "final-image",
+            "error",
+            "No explicit final frame. The model needs an emotional destination.",
+        )
+    if not re.search(rf"duration\s*:\s*{scene.seconds}\b", prompt, re.IGNORECASE):
+        at(
+            "duration-discipline",
+            "warning",
+            f'Prompt does not state "Duration: {scene.seconds} seconds", which is what this '
+            "segment will be generated at.",
+        )
+
+    # Dialogue budget — Veo speeds up delivery when a line does not fit.
+    for match in DIALOGUE_PATTERN.finditer(prompt):
+        line = match.group(1).strip()
+        words = len([word for word in line.split() if word])
+        budget = int(min(scene.seconds, 8) * WORDS_PER_SECOND)
+        if words > budget:
+            at(
+                "dialogue-budget",
+                "error",
+                f'"{line[:48]}…" is {words} words but this {scene.seconds}s shot only holds '
+                f"about {budget}. Cut the line.",
+            )
+
+    # --- Continuity ---------------------------------------------------------
+    # Two different bars, because they mean different things. Palette and
+    # lighting are the film's grade — every scene shares them, no exceptions.
+    # Characters and wardrobe are a roster — a multi-character story naturally
+    # has scenes that feature only some of them (a ground-crew scene has no
+    # reason to mention the flight attendant), so the bar is "at least one
+    # locked identity is present", not "the whole cast is present every time".
+    continuity = story.continuity
+    lower_prompt = prompt.lower()
+
+    universal_tokens = [
+        token
+        for token in (_significant_token(v) for v in (continuity.palette, continuity.lighting_constant))
+        if token
+    ]
+    missing_universal = [token for token in universal_tokens if token not in lower_prompt]
+    if missing_universal:
+        at(
+            "continuity-block",
+            "error",
+            "The locked palette or lighting constant is not restated in this prompt. These are "
+            "the two things that must be identical in every scene — Veo has no memory between "
+            "generations.",
+        )
+
+    roster_tokens = [
+        token
+        for token in (
+            _significant_token(v) for v in (*continuity.characters, *continuity.wardrobe)
+        )
+        if token
+    ]
+    if roster_tokens and not any(token in lower_prompt for token in roster_tokens):
+        at(
+            "continuity-block",
+            "error",
+            "None of the story's locked characters or wardrobe are referenced in this prompt. "
+            "Every scene should feature — and describe consistently with — at least one "
+            "identity from the continuity block, not a new unlocked person.",
+        )
+
+    if not _filled(scene.continuity_note, 10):
+        at(
+            "cut-match",
+            "warning",
+            "No note on how this scene joins the previous one. State the matching pose, light and "
+            "lens height.",
+        )
+
+    return issues
+
+
+def _audit_story(story: StoryOption) -> list[AuditIssue]:
+    issues: list[AuditIssue] = []
+
+    def push(rule: str, severity: str, message: str) -> None:
+        issues.append(AuditIssue(rule=rule, severity=severity, message=message))  # type: ignore[arg-type]
+
+    # --- The five anchors ---------------------------------------------------
+    anchors = story.anchors
+    missing = [
+        name
+        for name, value in (
+            ("emotion", anchors.emotion),
+            ("motif", anchors.motif),
+            ("object", anchors.object),
+            ("break", anchors.break_),
+            ("finalImage", anchors.final_image),
+        )
+        if not _filled(value, 3)
+    ]
+    if missing:
+        push("five-anchors", "error", f"Missing anchors: {', '.join(missing)}. Commit to all five.")
+
+    # --- Continuity block ---------------------------------------------------
+    continuity = story.continuity
+    if not continuity.characters:
+        push("continuity/characters", "warning", "No character identity locked for this story.")
+    if not _filled(continuity.palette, 8):
+        push("continuity/palette", "error", "No palette defined with concrete colours.")
+    if not _filled(continuity.lighting_constant, 8):
+        push(
+            "continuity/lighting",
+            "error",
+            "No lighting constant. Name the dominant source and direction.",
+        )
+
+    # --- The motif must actually recur --------------------------------------
+    motif_token = _significant_token(anchors.motif)
+    if motif_token and len(story.scenes) > 2:
+        recurrences = sum(
+            1
+            for scene in story.scenes
+            if motif_token in f"{scene.prompt} {scene.shot_card.sound_anchor}".lower()
+        )
+        if recurrences < 2:
+            push(
+                "motif-recurrence",
+                "warning",
+                f'The motif "{anchors.motif}" appears in {recurrences} scene(s). '
+                "A motif that does not recur is decoration.",
+            )
+
+    # --- The arc must be complete -------------------------------------------
+    beats = {scene.beat for scene in story.scenes}
+    for required in ("crack", "impact"):
+        if required not in beats:
+            push(
+                "beat-map",
+                "warning",
+                f'No "{required}" beat in the cut. Never skip the Crack or the Impact.',
+            )
+
+    # --- Every shot must do a job -------------------------------------------
+    functions = [scene.shot_function for scene in story.scenes]
+    if len(functions) > 3 and len(set(functions)) < 3:
+        push(
+            "three-jobs",
+            "warning",
+            "Nearly every shot has the same function. Vary establish / power / pressure / detail / "
+            "reaction / shift / impact.",
+        )
+
+    return issues
+
+
+#: Two conditions, both required, because either alone misfires.
+#:
+#: Ratio alone punishes legitimate work: a 12-clip product montage on one set
+#: shares its lighting and lens block across every prompt and scores ~0.69, and
+#: that repetition is correct — the set really is constant. Flagging it would
+#: tell a writer to break continuity that the film depends on.
+#:
+#: Absolute mass alone is too blunt for long prompts that are genuinely dense.
+#:
+#: Together they separate the cases. A shared 45-word style anchor is craft. A
+#: shared 430-word essay — cast list, location list, prop inventory, rules — is
+#: what collapsed a 7-shot film into one repeated framing.
+_BOILERPLATE_LIMIT = 0.45
+_BOILERPLATE_WORDS = 120
+
+_SENTENCE = re.compile(r"[^.;\n]+[.;]?")
+
+
+def _sentences(text: str) -> list[str]:
+    """Prompt sentences, normalised enough that whitespace noise is not a diff."""
+    return [
+        " ".join(part.split())
+        for part in _SENTENCE.findall(text or "")
+        if len(part.strip()) > 24
     ]
 
-    try:
-        payload = await chat_json(messages)
-    except Exception as error:  # noqa: BLE001 - any upstream failure degrades the same way
-        log.warning("Brief analysis failed, falling back to a heading split. %s", error)
-        return _fallback(raw)
 
-    if not isinstance(payload, dict):
-        return _fallback(raw)
+def _audit_boilerplate(story: StoryOption) -> list[AuditIssue]:
+    """Flag scenes that are mostly copies of the other scenes.
 
-    intent = str(payload.get("intent") or "").strip()
-    if not intent:
-        log.warning("Brief analysis returned no intent; keeping the raw brief.")
-        intent = raw
+    Restating identity across clips is required — Veo has no memory. Restating
+    the palette, the camera grammar, the whole cast and every location is not,
+    and it is what collapses a multi-shot film into one repeated composition.
+    Instructions alone did not hold this line, so it is measured here.
+    """
+    scenes = [scene for scene in story.scenes if (scene.prompt or "").strip()]
+    if len(scenes) < 3:
+        return []
 
-    avoid = [str(item).strip() for item in payload.get("avoid") or [] if str(item).strip()]
-    music = payload.get("music")
+    issues: list[AuditIssue] = []
+    per_scene = {scene.id: _sentences(scene.prompt) for scene in scenes}
 
-    analysis = BriefAnalysis(
-        intent=intent,
-        supers=_coerce_supers(payload.get("supers"), seconds),
-        end_card=_coerce_end_card(payload.get("endCard")),
-        avoid=avoid,
-        unsupported=_unsupported_in(raw),
-        music=str(music).strip() if music else None,
-    )
+    for scene in scenes:
+        own = per_scene[scene.id]
+        # A very short prompt trips the ratio on almost any shared sentence, and
+        # the real fault there is thinness — which `prompt-depth` already
+        # reports. Diagnosing it as boilerplate would send the repair pass off
+        # cutting detail from a prompt that needs more of it.
+        if len(own) < 4 or len((scene.prompt or "").split()) < 60:
+            continue
+        elsewhere = {
+            sentence
+            for other in scenes
+            if other.id != scene.id
+            for sentence in per_scene[other.id]
+        }
+        shared = [sentence for sentence in own if sentence in elsewhere]
+        if not shared:
+            continue
 
-    log.info(
-        "Brief split: intent %d chars (from %d), %d super(s), end card %s, %d unsupported.",
-        len(analysis.intent), len(raw), len(analysis.supers),
-        "on" if analysis.end_card.enabled else "off", len(analysis.unsupported),
-    )
-    return analysis
+        total = sum(len(sentence) for sentence in own)
+        repeated = sum(len(sentence) for sentence in shared)
+        share = repeated / total if total else 0.0
+        repeated_words = sum(len(sentence.split()) for sentence in shared)
+
+        if share > _BOILERPLATE_LIMIT and repeated_words > _BOILERPLATE_WORDS:
+            issues.append(
+                AuditIssue(
+                    sceneId=scene.id,
+                    sceneOrder=scene.order,
+                    rule="craft/boilerplate",
+                    severity="error",
+                    message=(
+                        f"{repeated_words} words of this prompt ({share:.0%} of it) are "
+                        f"repeated verbatim in other scenes — {len(shared)} of "
+                        f"{len(own)} sentences. Veo weights the repeated mass, so every shot "
+                        "converges on the same framing. A shared style anchor is fine; this "
+                        "is an essay. Keep the identity of whoever is in THIS shot and the "
+                        "lighting key; cut the restated palette, camera grammar, prop list, "
+                        "location list and rules, and spend the words on what this shot does."
+                    ),
+                )
+            )
+
+    return issues
+
+
+def audit_story_option(story: StoryOption) -> AuditReport:
+    issues = _audit_story(story)
+    for scene in story.scenes:
+        issues.extend(_audit_scene(scene, story))
+    issues.extend(_audit_boilerplate(story))
+
+    # Craft and brand are separate axes, but they share one report and one repair
+    # loop — a beautifully directed film in the wrong blue is still a reshoot.
+    issues.extend(brand_issues(story))
+
+    errors = sum(1 for issue in issues if issue.severity == "error")
+    warnings = len(issues) - errors
+
+    # A clean story scores 100; each error costs 6 points, each warning 1.5.
+    score = max(0, round(100 - errors * 6 - warnings * 1.5))
+
+    return AuditReport(passed=errors == 0, score=score, issues=issues)
+
+
+def build_repair_brief(story: StoryOption, report: AuditReport) -> str:
+    """Turn failed checks into a brief the model can act on, grouped by scene."""
+    errors = [issue for issue in report.issues if issue.severity == "error"]
+    if not errors:
+        return ""
+
+    story_level = [issue for issue in errors if issue.scene_order is None]
+    by_scene: dict[int, list[AuditIssue]] = {}
+    for issue in errors:
+        if issue.scene_order is None:
+            continue
+        by_scene.setdefault(issue.scene_order, []).append(issue)
+
+    lines = [
+        "The automated dramaturgy, three-detail and brand audit rejected this storyboard.",
+        "Fix every item below and return the corrected storyboard in the same JSON schema.",
+        "Rules prefixed `brand/` are brand-book violations and are not negotiable — never "
+        "satisfy one by removing the scene's substance.",
+        "Keep the scene count, the per-scene `seconds`, the beats and the shot functions exactly "
+        "as they are — only the writing changes.",
+        "",
+    ]
+
+    if story_level:
+        lines.append("## Story level")
+        lines.extend(f"- [{issue.rule}] {issue.message}" for issue in story_level)
+        lines.append("")
+
+    scenes_by_order = {scene.order: scene for scene in story.scenes}
+    for order in sorted(by_scene):
+        scene = scenes_by_order.get(order)
+        suffix = f" — {scene.title} ({scene.seconds}s, {scene.beat})" if scene else ""
+        lines.append(f"## Scene {order}{suffix}")
+        lines.extend(f"- [{issue.rule}] {issue.message}" for issue in by_scene[order])
+        lines.append("")
+
+    return "\n".join(lines)
