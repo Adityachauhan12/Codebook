@@ -8,10 +8,10 @@
 [  ok  ] ffmpeg has drawtext
 [  ok  ] Font for supers
            C:\Windows\Fonts\GOTHIC.TTF
-[ FAIL ] Brand marks present
-           Missing: wordmark-white.png, wordmark-blue.png, icon-white.png, icon-blue.png — copy these as BINARY, not text.
-[ warn ] Brand reference images
-           none found — only affects future keyframe conditioning
+[  ok  ] Brand marks present
+           wordmark-white.png 28,553B, wordmark-blue.png 28,666B, icon-white.png 57,778B, icon-blue.png 58,360B
+[  ok  ] Brand reference images
+           8 found
 [ FAIL ] Super compositing smoke test
            UpstreamError: brand failed (exit 4294967274).
 
@@ -27,6 +27,6 @@ Settings:
     render_fps             = 24
 
 --------------------------------------------------------------
-2 check(s) FAILED: Brand marks present, Super compositing smoke test
+1 check(s) FAILED: Super compositing smoke test
 
 (venv) C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server>
