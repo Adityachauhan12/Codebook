@@ -1,152 +1,151 @@
-"""Optional scene keyframes, via the Gemini image model.
+# ---------------------------------------------------------------------------
+# AI Video studio — backend configuration
+#
+# Copy to server/.env and fill in. Nothing here is required for the server to
+# boot: it starts either way and reports which capabilities are live at
+# GET /api/health, so you can wire up the UI before the keys arrive.
+# ---------------------------------------------------------------------------
 
-Veo has no memory between generations, so the strongest continuity lever
-available is image-to-video: render the scene's opening frame as a still, then
-hand that still to Veo as the first frame. The character, wardrobe, location and
-grade are then fixed by pixels rather than by hoping twelve independent prompts
-converge.
-
-Off by default (``VEO_USE_KEYFRAMES``) because it adds one image call per clip.
-"""
-
-from __future__ import annotations
-
-import base64
-import re
-from pathlib import Path
-
-import httpx
-
-from ..config import settings
-from ..domain.models import Scene, StoryOption, VeoAspectRatio
-from ..logging_setup import get_logger
-from .veo import InlineAsset
-
-log = get_logger("imagegen")
-
-_MIME_BY_SUFFIX = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-}
+# --- Server ----------------------------------------------------------------
+HOST=0.0.0.0
+PORT=8787
+# Used to build absolute media URLs handed to the browser.
+PUBLIC_BASE_URL=http://localhost:8787
+CORS_ORIGINS=http://localhost:5173,http://localhost:8080
+LOG_LEVEL=INFO
 
 
-def asset_from_image(path: Path) -> InlineAsset | None:
-    """Read an image file as a Veo inline asset. ``None`` if unusable.
+# ---------------------------------------------------------------------------
+# Azure OpenAI — the writing brain
+#
+# Storyboards, scene prompts, repair passes, audio direction. Everything that
+# produces text. Without these, /api/video/plan still works but nothing can be
+# written.
+# ---------------------------------------------------------------------------
+AZURE_OPENAI_BASE_URL=https://<your-resource>.openai.azure.com
+AZURE_OPENAI_KEY=
+# The deployment name — this is what goes in the request URL.
+AZURE_OPENAI_DEPLOYMENT_NAME=
+# The model behind that deployment. Used to pick the parameter dialect:
+# o-series / gpt-5 deployments take max_completion_tokens and reject temperature.
+AZURE_OPENAI_MODEL=gpt-4.1
+AZURE_OPENAI_VERSION=2024-10-21
 
-    Used for tail-frame chaining: the last frame of clip N becomes the first
-    frame of clip N+1, which is the only continuity mechanism that costs no
-    extra generation and carries a face across a cut exactly.
-    """
-    try:
-        data = path.read_bytes()
-    except OSError as error:
-        log.warning("Could not read keyframe %s: %s", path.name, error)
-        return None
-    if not data:
-        return None
-    return InlineAsset(
-        mime_type=_MIME_BY_SUFFIX.get(path.suffix.lower(), "image/png"),
-        data=base64.b64encode(data).decode("ascii"),
-    )
+# Optional. A cheaper deployment for low-stakes passes (audio direction).
+# Falls back to AZURE_OPENAI_DEPLOYMENT_NAME when unset.
+AZURE_OPENAI_FAST_DEPLOYMENT_NAME=
 
-#: Strip camera movement out of the shot card's camera field — a still has none.
-_MOVEMENT = re.compile(
-    r"\b(push[- ]in|pull[- ]back|tracking|pan|tilt|orbit|dolly|handheld|whip|crane|glide)\b.*",
-    re.IGNORECASE,
-)
+# Optional. A TTS deployment enables voiceover. Veo still generates in-scene
+# dialogue without it.
+AZURE_OPENAI_TTS_DEPLOYMENT_NAME=
+AZURE_OPENAI_TTS_VOICE=alloy
 
-
-def _keyframe_prompt(scene: Scene, story: StoryOption, aspect: VeoAspectRatio) -> str:
-    """Direct a still, not a shot.
-
-    The image model must not be told about camera movement or audio, and it must
-    be told to leave the frame clean.
-    """
-    card = scene.shot_card
-    continuity = story.continuity
-    lens = _MOVEMENT.sub("", card.camera).strip() or "50mm"
-
-    return "\n".join(
-        [
-            f"A single film frame, {aspect} aspect ratio. This is the opening frame of a shot.",
-            "",
-            f"Framing: {card.frame}. {card.composition}",
-            f"Lens: {lens}.",
-            f"Subject and action at the start of the shot: {card.action}",
-            f"On the body: {card.micro_action}",
-            f"In the space: {card.environmental_pressure}",
-            "",
-            f"Characters: {' | '.join(continuity.characters) or '—'}",
-            f"Wardrobe: {' | '.join(continuity.wardrobe) or '—'}",
-            f"Location: {continuity.location}",
-            f"Lighting: {card.lighting or continuity.lighting_constant}",
-            f"Palette: {card.palette or continuity.palette}",
-            "",
-            "Photographic, natural skin texture, motivated lighting. No text, no captions, "
-            "no watermark, no logos, no borders, no collage, no split frames.",
-        ]
-    )
+# A 12-scene storyboard is a large JSON payload. Too low and it truncates.
+AZURE_OPENAI_MAX_OUTPUT_TOKENS=16000
+AZURE_OPENAI_TIMEOUT_SECONDS=180
 
 
-async def generate_keyframe(
-    scene: Scene, story: StoryOption, aspect: VeoAspectRatio
-) -> InlineAsset | None:
-    """Render the scene's first frame. Returns ``None`` on any failure.
+# ---------------------------------------------------------------------------
+# Google — Veo (video) and the Gemini image model (keyframes)
+#
+# One Google AI Studio key authenticates both. GEMINI_API_KEY is accepted as an
+# alias if you prefer that name.
+# ---------------------------------------------------------------------------
+GEMINI_IMAGE_API_KEY=
+GEMINI_API_BASE=https://generativelanguage.googleapis.com/v1beta
 
-    A keyframe is an optimisation, never a reason to fail a clip.
-    """
-    key = settings.google_key
-    if not key:
-        return None
+# Image model. Only used when VEO_USE_KEYFRAMES=true.
+GEMINI_IMAGE_MODEL_NAME=gemini-2.5-flash-image
 
-    url = f"{settings.gemini_api_base.rstrip('/')}/models/{settings.gemini_image_model_name}:generateContent"
+# Video model.
+VEO_MODEL=veo-3.1-generate-preview
+# Used when a project is created with quality=draft.
+VEO_FAST_MODEL=veo-3.1-fast-generate-preview
 
-    try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            response = await client.post(
-                url,
-                headers={"x-goog-api-key": key, "content-type": "application/json"},
-                json={
-                    "contents": [
-                        {"role": "user", "parts": [{"text": _keyframe_prompt(scene, story, aspect)}]}
-                    ],
-                    "generationConfig": {
-                        "responseModalities": ["IMAGE"],
-                        "imageConfig": {"aspectRatio": aspect},
-                    },
-                },
-            )
 
-        if response.status_code >= 400:
-            log.warning(
-                "Keyframe for scene %d failed (%s): %s",
-                scene.order, response.status_code, response.text[:200],
-            )
-            return None
+# ---------------------------------------------------------------------------
+# Veo behaviour
+#
+# THE CORE CONSTRAINT: Veo renders 4, 6 or 8 seconds per generation and nothing
+# longer. A 90 second video is 12 generations that ffmpeg accumulates into one
+# file. The planner in app/domain/duration.py owns that arithmetic — see
+# GET /api/video/plan?seconds=90 to inspect it without spending a token.
+# ---------------------------------------------------------------------------
+VEO_MAX_CLIP_SECONDS=8
+VEO_RESOLUTION=1080p
+VEO_PERSON_GENERATION=allow_all
 
-        payload = response.json()
+# How many generations run at once. Raise it if your quota allows; a 12-clip
+# film at concurrency 3 is roughly 4 sequential rounds.
+VEO_CONCURRENCY=3
+# Attempts per clip before it is marked failed in the UI.
+VEO_MAX_ATTEMPTS=2
+VEO_POLL_INTERVAL_SECONDS=10
+VEO_POLL_TIMEOUT_SECONDS=900
 
-        block_reason = (payload.get("promptFeedback") or {}).get("blockReason")
-        if block_reason:
-            log.warning("Keyframe for scene %d was blocked (%s).", scene.order, block_reason)
-            return None
+# Generate a still first frame per scene with the image model and feed it to
+# Veo. Costs one image call per clip; buys a large jump in cross-clip
+# continuity, because identity is then fixed by pixels rather than by hoping
+# twelve independent prompts converge.
+VEO_USE_KEYFRAMES=false
 
-        candidates = payload.get("candidates") or []
-        parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
-        inline = next((part.get("inlineData") for part in parts if part.get("inlineData")), None)
+# Seed each clip with the LAST FRAME of the previous clip, so a face, a costume
+# and a grade survive a cut instead of being re-guessed. Costs no extra API
+# calls, but forces clips to generate in story order rather than
+# VEO_CONCURRENCY at a time — a 7-clip film takes 7 rounds instead of 3.
+# Turn on when characters recur across shots; leave off for a montage.
+VEO_CHAIN_KEYFRAMES=false
 
-        if not inline or not inline.get("data"):
-            log.warning(
-                "Keyframe for scene %d returned no image; continuing text-to-video.", scene.order
-            )
-            return None
+# Font for burnt-in supers. Veo is never asked to render type, so this is the
+# only font a viewer sees. Left blank, the best available geometric sans is
+# picked per platform: Futura on macOS, Century Gothic on Windows. Drop a .ttf
+# into server/app/brand/assets/fonts/ to override without editing config.
+# BRAND_FONT_PATH=C:\Windows\Fonts\GOTHIC.TTF
 
-        return InlineAsset(mime_type=inline.get("mimeType") or "image/png", data=inline["data"])
+# Refuse to render when the storyboard audit still has error-severity issues.
+# With this off the audit is advisory, which is how misspelt supers and a
+# mangled wordmark reached a finished film.
+BRAND_ENFORCE_AUDIT=true
 
-    except Exception as error:  # noqa: BLE001 — never fail a clip over a keyframe
-        log.warning(
-            "Keyframe for scene %d failed; falling back to text-to-video: %s", scene.order, error
-        )
-        return None
+# Extension is implemented (app/services/veo.py extend_clip) but not used by the
+# stitch pipeline. These describe the API's limits: +7s per extend, 20 max.
+VEO_EXTEND_SECONDS=7
+VEO_MAX_EXTENSIONS=20
+
+
+# --- Guard rails -----------------------------------------------------------
+# Cost ceilings. 30 segments at 8s is 240 seconds of Veo per render.
+MAX_VIDEO_SECONDS=180
+MAX_SEGMENTS=30
+
+
+# --- Media / storage -------------------------------------------------------
+STORAGE_DIR=./storage
+RENDER_FPS=24
+# Leave blank to use whatever ffmpeg/ffprobe is on PATH.
+FFMPEG_PATH=
+FFPROBE_PATH=
+
+# Mix levels. Music sits under the clips' native Veo audio.
+MUSIC_GAIN=0.28
+VOICEOVER_GAIN=1.0
+
+
+# ---------------------------------------------------------------------------
+# Music (optional)
+#
+# Veo already generates room tone, texture and dialogue per clip. This is only
+# for the score laid underneath. Leave as `none` and upload a track instead if
+# you have no provider.
+# ---------------------------------------------------------------------------
+MUSIC_PROVIDER=none
+
+# MUSIC_PROVIDER=elevenlabs
+ELEVENLABS_API_KEY=
+ELEVENLABS_MUSIC_MODEL=music_v1
+
+# MUSIC_PROVIDER=vertex-lyria  (token from `gcloud auth print-access-token`)
+GOOGLE_CLOUD_PROJECT=
+GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_ACCESS_TOKEN=
+VERTEX_LYRIA_MODEL=lyria-002
