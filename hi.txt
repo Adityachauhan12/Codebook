@@ -1,132 +1,176 @@
-"""Brand master files and the exact colours sampled from them.
+"""Turn a project's copy into positioned, branded compositing instructions.
 
-The composite-in-post design in ``policy.py`` only works if there is a master
-file to composite. This module is that file's address, plus the colour values
-taken from the artwork itself rather than from a brand deck nobody can find.
+``domain.models`` holds *what* a super says and roughly where it sits;
+``services.ffmpeg`` knows how to draw one. This is the layer between: it owns
+type scale, safe areas, and the brand's own end-card composition.
 
-Marks are straight (unpremultiplied) RGBA PNGs, trimmed to their alpha bounding
-box, so ``overlay`` in ffmpeg places them without a halo and without guesswork
-about padding.
+Sizes are expressed as a fraction of frame height so a 1080p render and a 720p
+render look identical rather than one of them looking like a ransom note.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from ..domain.models import EndCard, SuperPosition, SuperSpec
+from ..services.ffmpeg import Lockup, Super
+from . import active_brand
+from .assets import icon, wordmark
 
-from ..config import settings
+__all__ = ["build_supers", "build_lockups"]
 
-__all__ = [
-    "INDIGO_BLUE",
-    "INDIGO_BLUE_HEX",
-    "INDIGO_SKY",
-    "INDIGO_SKY_HEX",
-    "INDIGO_MID_BLUE_HEX",
-    "MARKS_DIR",
-    "REFERENCES_DIR",
-    "FONTS_DIR",
-    "wordmark",
-    "icon",
-    "reference_images",
-    "font_path",
-]
+#: Broadcast-style safe area. Copy inside this margin survives the crop that
+#: social platforms apply to a 16:9 master.
+_MARGIN = 0.062
 
-ASSETS_DIR = Path(__file__).parent / "assets"
-MARKS_DIR = ASSETS_DIR / "marks"
-REFERENCES_DIR = ASSETS_DIR / "references"
-FONTS_DIR = ASSETS_DIR / "fonts"
-
-#: Sampled from ``marks/wordmark-blue.png`` and ``marks/icon.svg`` — both give
-#: exactly this value. This is the brand's primary deep blue.
-INDIGO_BLUE = (0, 0, 153)
-INDIGO_BLUE_HEX = "#000099"
-
-#: The secondary light blue, sampled from the BluChip campaign headline.
-INDIGO_SKY = (151, 201, 234)
-INDIGO_SKY_HEX = "#97C9EA"
-
-#: The mid blue used in mailer headers. Useful for gradients, never for type.
-INDIGO_MID_BLUE_HEX = "#0058AC"
+#: Type scale, as a fraction of frame height.
+_BODY = 0.041
+_HEADLINE = 0.055
+_SUBLINE = 0.030
 
 
-def wordmark(*, on_dark: bool = True) -> Path:
-    """The full IndiGo lockup — wordmark plus 20-dot device. 1543x466.
+#: Multiplier from type size to baseline-to-baseline distance.
+_LINE_HEIGHT = 1.34
 
-    ``on_dark`` picks the white cut, which is what an end card over sky or
-    cloud wants. The blue cut is for light plates only.
+
+def _x(position: SuperPosition, height: int) -> str:
+    """The ffmpeg x expression. ``tw`` is the measured text width."""
+    if position in {"upper-centre", "lower-centre", "centre"}:
+        return "(W-tw)/2"
+    return str(int(height * _MARGIN))
+
+
+def _y(position: SuperPosition, *, line: int, lines: int, size: int, height: int) -> str:
+    """The ffmpeg y expression for one line of a stacked block.
+
+    Line height is computed from the type size rather than read back from
+    ffmpeg's ``th``, because ``th`` measures whatever that single line happens
+    to contain — a line of all-caps and a line with descenders would other‑wise
+    sit at different pitches inside the same super.
     """
-    name = "wordmark-white.png" if on_dark else "wordmark-blue.png"
-    return MARKS_DIR / name
+    margin = int(height * _MARGIN)
+    step = int(size * _LINE_HEIGHT)
+
+    if position in {"upper-left", "upper-centre"}:
+        return str(margin + line * step)
+    if position in {"lower-left", "lower-centre"}:
+        return f"H-{margin + (lines - line) * step}"
+    return f"(H-{lines * step})/2+{line * step}"
 
 
-def icon(*, on_dark: bool = True) -> Path:
-    """The 20-dot arrow-plane device on its own. 835x832."""
-    return MARKS_DIR / ("icon-white.png" if on_dark else "icon-blue.png")
+def _stack(
+    text: str,
+    *,
+    position: SuperPosition,
+    start: float,
+    end: float,
+    size: int,
+    height: int,
+    fade: float = 0.5,
+    y_offset: int = 0,
+) -> list[Super]:
+    """One ``Super`` per line.
 
-
-#: Ordered best-first. IndiGo's own typeface is not redistributable and is not in
-#: the asset drop, so these are the closest widely installed geometric sans
-#: faces. Anything dropped into ``assets/fonts`` wins over all of them.
-_FONT_CANDIDATES: dict[str, tuple[str, ...]] = {
-    "darwin": (
-        "/System/Library/Fonts/Supplemental/Futura.ttc",
-        "/System/Library/Fonts/Avenir Next.ttc",
-        "/System/Library/Fonts/HelveticaNeue.ttc",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-    ),
-    "win32": (
-        r"C:\Windows\Fonts\GOTHIC.TTF",
-        r"C:\Windows\Fonts\Futura.ttf",
-        r"C:\Windows\Fonts\segoeui.ttf",
-        r"C:\Windows\Fonts\arial.ttf",
-    ),
-    "linux": (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    ),
-}
-
-
-def font_path() -> Path | None:
-    """The font file for burnt-in supers, or ``None`` if nothing usable exists.
-
-    Order: the configured override, then anything bundled in ``assets/fonts``,
-    then the platform's best geometric sans. Returning ``None`` rather than
-    raising lets the caller decide — a film with no supers is still a film.
+    drawtext will not render a multi-line block cleanly: with ``expansion=none``
+    it breaks the line *and* draws a tofu glyph where the newline was. Splitting
+    here is what stops a box appearing mid-super, and it buys exact control over
+    leading as a side effect.
     """
-    configured = (settings.brand_font_path or "").strip()
-    if configured:
-        candidate = Path(configured)
-        return candidate if candidate.is_file() else None
-
-    if FONTS_DIR.is_dir():
-        bundled = sorted(
-            path
-            for path in FONTS_DIR.iterdir()
-            if path.suffix.lower() in {".ttf", ".otf", ".ttc"}
-        )
-        if bundled:
-            return bundled[0]
-
-    platform = "win32" if sys.platform.startswith("win") else sys.platform
-    for name in _FONT_CANDIDATES.get(platform, _FONT_CANDIDATES["linux"]):
-        path = Path(name)
-        if path.is_file():
-            return path
-    return None
-
-
-def reference_images() -> list[Path]:
-    """Brand reference art, for conditioning keyframes on real pixels.
-
-    Type, palette and product-photography tone only — this set carries no
-    aircraft livery or cabin interior, so it cannot fix how Veo draws an
-    aeroplane. See ``imagegen.generate_keyframe``.
-    """
-    if not REFERENCES_DIR.is_dir():
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
         return []
-    return sorted(
-        path
-        for path in REFERENCES_DIR.iterdir()
-        if path.suffix.lower() in {".png", ".jpg", ".jpeg"}
-    )
+
+    drawn: list[Super] = []
+    for index, line in enumerate(lines):
+        y = _y(position, line=index, lines=len(lines), size=size, height=height)
+        if y_offset:
+            y = f"{y}+{y_offset}"
+        drawn.append(
+            Super(
+                text=line,
+                start=start,
+                end=end,
+                x=_x(position, height),
+                y=y,
+                size=size,
+                fade=fade,
+            )
+        )
+    return drawn
+
+
+def build_supers(
+    items: list[SuperSpec],
+    end_card: EndCard,
+    *,
+    seconds: float,
+    height: int,
+) -> list[Super]:
+    """Every line of burnt-in copy for the film, in timeline order."""
+    supers: list[Super] = []
+
+    for item in items:
+        supers += _stack(
+            item.text,
+            position=item.position,
+            start=max(0.0, item.start),
+            end=min(seconds, item.end),
+            size=int(height * _BODY),
+            height=height,
+        )
+
+    if not end_card.enabled:
+        return supers
+
+    # The card resolves over the tail of the film. The mark sits optically
+    # above centre and the copy below it, so neither fights the other.
+    start = max(0.0, seconds - end_card.seconds)
+
+    if end_card.headline:
+        supers += _stack(
+            end_card.headline,
+            position="centre",
+            start=start + 0.6,
+            end=seconds,
+            size=int(height * _HEADLINE),
+            height=height,
+            fade=0.7,
+            y_offset=int(height * 0.085),
+        )
+    if end_card.subline:
+        supers += _stack(
+            end_card.subline,
+            position="centre",
+            start=start + 1.0,
+            end=seconds,
+            size=int(height * _SUBLINE),
+            height=height,
+            fade=0.7,
+            y_offset=int(height * 0.165),
+        )
+
+    return supers
+
+
+def build_lockups(end_card: EndCard, *, seconds: float, width: int) -> list[Lockup]:
+    """The brand mark for the end card, or nothing when brand is off.
+
+    White cut only: the card resolves over sky, cloud or runway, all of which
+    are mid-to-bright but never light enough for the blue cut to hold.
+    """
+    if not end_card.enabled or end_card.mark == "none" or active_brand() != "indigo":
+        return []
+
+    file = wordmark(on_dark=True) if end_card.mark == "wordmark" else icon(on_dark=True)
+    # The lockup reads at about a quarter of frame width; smaller and the
+    # 20-dot device closes up, larger and it stops feeling like a sign-off.
+    target = int(width * (0.26 if end_card.mark == "wordmark" else 0.10))
+
+    return [
+        Lockup(
+            file=file,
+            start=max(0.0, seconds - end_card.seconds),
+            width=target,
+            x="(W-w)/2",
+            y="(H-h)/2-" + str(int(width * 0.035)),
+            fade=0.8,
+        )
+    ]
