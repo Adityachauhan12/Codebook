@@ -1,827 +1,369 @@
-"""Two-pass storyboarding.
+"""Audio has three sources, in descending order of importance:
 
-  Pass 1 — treatments. Four genuinely different directions in one call, each
-           committing to the five anchors and a continuity block. Cheap, and it
-           is all the UI needs to render the story cards.
-  Pass 2 — scenes. Run per story, on demand, because writing 4 x 12 shot cards
-           up front burns tokens on three directions the user will discard.
+  1. Veo's native audio, baked into every clip. Room tone, texture, body sound,
+     dialogue. This is the bed the film actually sits on.
+  2. A music track, either generated (when a provider is configured) or
+     uploaded. Mixed underneath at ``MUSIC_GAIN``.
+  3. A voiceover, synthesised from a script by the Azure TTS deployment.
 
-Every pass-2 result goes through the programmatic audit; failures come back as a
-repair brief rather than shipping mush to Veo.
+Only (1) is guaranteed. Everything here degrades to "upload your own" rather
+than blocking the render.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-import re
-from typing import Any, Awaitable, Callable
+from pathlib import Path
+from urllib.parse import quote
 
-from pydantic import BaseModel, Field, ValidationError
+import httpx
+from pydantic import BaseModel, Field
 
-from ..brand import brand_beat_label, brand_brief_block, brand_negative_prompt
-from ..domain.duration import beat_label
-from ..domain.models import (
-    ContinuityBlock,
-    DurationPlan,
-    ProjectBrief,
-    Scene,
-    ShotCard,
-    StoryAnchors,
-    StoryOption,
-)
 from ..config import settings
-from ..errors import BadRequest, UpstreamError
+from ..domain.models import AudioKind, AudioTrack, Project, ProjectBrief, StoryOption
+from ..errors import BadRequest, Unavailable, UpstreamError
 from ..ids import short_id
 from ..logging_setup import get_logger
-from ..skills.audit import audit_story_option, build_repair_brief
 from ..skills.registry import compose_skill
-from .llm import ChatMessage, chat_json
+from ..storage import audio_dir, ensure_dir, media_url, to_storage_relative
+from .ffmpeg import probe
+from .llm import chat_json
+from .store import require_project, update_project
 
-log = get_logger("storyboard")
-
-MAX_REPAIR_PASSES = 2
-
-_CRAFT_NEGATIVE = (
-    "subtitles, on-screen text, watermark, logos, extra characters, changing clothes, "
-    "changing face, distorted hands, extra fingers, melted features, background music, "
-    "random camera drift"
-)
-
-#: Craft defaults plus whatever the active brand forbids in frame.
-DEFAULT_NEGATIVE = ", ".join(part for part in (_CRAFT_NEGATIVE, brand_negative_prompt()) if part)
-
-ProgressFn = Callable[[float, str], Awaitable[None] | None]
+log = get_logger("audio")
 
 
-# ---------------------------------------------------------------------------
-# Schemas for what the model returns
-# ---------------------------------------------------------------------------
-
-
-class _Treatment(BaseModel):
-    title: str = ""
-    summary: str = ""
-    treatment: str = ""
-    angle: str = ""
-    anchors: StoryAnchors = Field(default_factory=StoryAnchors)
-    continuity: ContinuityBlock = Field(default_factory=ContinuityBlock)
-
-
-class _TreatmentsResponse(BaseModel):
-    stories: list[_Treatment] = Field(default_factory=list)
-
-
-class _WrittenScene(BaseModel):
-    order: int
-    title: str = ""
-    summary: str = ""
-    continuity_note: str = Field(default="", alias="continuityNote")
-    transition_out: str = Field(default="hardcut", alias="transitionOut")
-    shot_card: ShotCard = Field(default_factory=ShotCard, alias="shotCard")
+class _MusicIdea(BaseModel):
+    label: str = ""
     prompt: str = ""
-    #: Sound direction only — no `Audio:` label, no duration. Both are spliced
-    #: on deterministically in `_materialise_scenes` (see the comment there for
-    #: why this is a separate field instead of trusting the model to keep two
-    #: fixed boilerplate lines inside a long freeform prompt).
-    audio: str = ""
-    negative_prompt: str = Field(default="", alias="negativePrompt")
-
-    model_config = {"populate_by_name": True}
 
 
-class _ScenesResponse(BaseModel):
-    scenes: list[_WrittenScene] = Field(default_factory=list)
+class _Voiceover(BaseModel):
+    label: str = "Voiceover"
+    script: str = ""
 
 
-# ---------------------------------------------------------------------------
-# Prompt building
-# ---------------------------------------------------------------------------
+class _Suggestions(BaseModel):
+    music: list[_MusicIdea] = Field(default_factory=list)
+    voiceover: _Voiceover | None = None
 
 
-def _brief_block(brief: ProjectBrief, plan: DurationPlan) -> str:
-    # `creative()`, never `brief`. The raw brief carries on-screen copy, and a
-    # scene writer that can see copy will ask Veo to render it — which is how
-    # four of five cards shipped misspelt. Copy is composited after the render;
-    # see `services.brief` and `brand.supers`.
-    lines = [
-        "## The brief",
-        "",
-        f"Idea: {brief.creative()}",
-        f"Deliverable: {plan.target_seconds} seconds, {brief.ratio}, "
-        f'style preset "{brief.style}", pacing "{brief.pacing}".',
-        f"Response language for titles/summaries/treatments: {brief.language}. "
-        "Prompts stay in English.",
-    ]
+async def suggest_tracks(
+    brief: ProjectBrief, story: StoryOption, target_seconds: int
+) -> list[AudioTrack]:
+    """Write music direction for the cut.
 
-    if brief.references:
-        lines += ["", "Reference material the user attached:"]
-        lines += [f"- {item}" for item in brief.references]
-    if brief.avoid:
-        lines += ["", "Must not appear:"]
-        lines += [f"- {item}" for item in brief.avoid]
-
-    lines += [
-        "",
-        "## The delivery constraint",
-        "",
-        f"Veo renders 4, 6 or 8 second clips. This film is {len(plan.segments)} separate "
-        f"generations accumulated by ffmpeg into one {plan.target_seconds}s file.",
-        *[f"- {note}" for note in plan.notes],
-    ]
-
-    brand = brand_brief_block()
-    if brand:
-        lines += ["", brand]
-
-    return "\n".join(lines)
-
-
-def _segment_table(plan: DurationPlan) -> str:
-    # The brand may recolour a beat without changing the structure — see
-    # `brand.brand_beat_label`. Falls back to the craft label when brand is off.
-    rows = [
-        f"| {segment.index + 1} | {segment.starts_at}s–{segment.starts_at + segment.seconds}s "
-        f"| {segment.seconds}s | {segment.beat} | {segment.shot_function} "
-        f"| {brand_beat_label(segment.beat) or beat_label(segment.beat)} |"
-        for segment in plan.segments
-    ]
-    return "\n".join(
-        [
-            "| Scene | Timecode | Seconds | Beat | Shot function | What this beat is for |",
-            "|---|---|---|---|---|---|",
-            *rows,
-        ]
-    )
-
-
-def _veo_skeleton(seconds: int) -> str:
-    """The `prompt` field's shape. Sound and duration are NOT part of it.
-
-    Both are 100% mechanical — duration is already fixed by the plan, and the
-    `Audio:`/`Duration:` lines are boilerplate the writer kept dropping under
-    narrative pressure across a long freeform string. So the split moved them
-    to their own JSON field / plan value and `_materialise_scenes` appends both
-    deterministically. That guarantees every scene carries them regardless of
-    what the model does — see the audit rules `veo/audio-line` and
-    `duration-discipline`, which exist to catch exactly this failure mode.
+    The skill's sound vocabulary is loaded so the briefs come back as texture and
+    instrumentation rather than adjectives.
     """
-    return "\n".join(
-        [
-            "```text",
-            "<Camera framing, lens, one primary move>. <Character identity block> "
-            "<physical action> in <environment>.",
-            "<Environmental pressure sentence>. <Physical micro-action sentence>.",
-            "Lighting. <named source> as key from <direction>, <secondary source> as <role>.",
-            "Palette. <the two or three colours in THIS frame>.",
-            "Continuity. <identity and wardrobe of whoever is in THIS shot — nobody else>.",
-            "Ends on <the exact final frame>.",
-            "```",
-            "",
-            "Aim for 120-200 words. A scene prompt is mostly the shot in front of you: the "
-            "framing, the move, the action, the pressure. If more than about a third of it "
-            "could be pasted unchanged into a different scene, it is boilerplate, and "
-            "boilerplate is what makes every shot look the same.",
-            "",
-            f"(Sound direction — room tone, texture, motif, SFX with timing, dialogue if any — "
-            f"goes in the separate `audio` field, not here. This scene is fixed at {seconds} "
-            "seconds; do not write a Duration line either — both are appended for you.)",
-        ]
-    )
-
-
-def _story_context(story: StoryOption) -> str:
-    c = story.continuity
-    return "\n".join(
-        [
-            "## The story you are shooting",
-            "",
-            f"Title: {story.title}",
-            f"Angle: {story.angle}",
-            f"Treatment: {story.treatment}",
-            "",
-            "### The five anchors — every scene serves these",
-            f"- Emotion: {story.anchors.emotion}",
-            f"- Visual motif: {story.anchors.motif}",
-            f"- Anchor object: {story.anchors.object}",
-            f"- The break: {story.anchors.break_}",
-            f"- Final image: {story.anchors.final_image}",
-            "",
-            "### Continuity — restate what is IN THE SHOT, not the whole block",
-            "",
-            "Veo has no memory between clips, so anything the camera can see has to be "
-            "described again in that clip's prompt. That is not the same as pasting this "
-            "whole block into every scene. Two failure modes come from over-restating, and "
-            "both are worse than a small continuity drift:",
-            "",
-            "1. When most of a prompt is identical to the previous prompt, the model weights "
-            "the repeated mass and every shot converges on the same composition. A film of "
-            "eight identical framings is a failed film even if continuity is perfect.",
-            "2. A character described in a prompt gets RENDERED. Describe the whole cast in "
-            "every scene and people who are not in the scene turn up as bystanders — a flight "
-            "attendant standing in a train carriage, a child in an empty boardroom.",
-            "",
-            "So in each scene prompt, restate only:",
-            "- the identity and wardrobe of characters PHYSICALLY PRESENT in that shot, in "
-            "full detail (face, hair, skin tone, exact garments) — and nobody else",
-            "- the lighting key, because it must not drift",
-            "- the two or three palette colours actually in that frame",
-            "",
-            "Everything else in this block is reference for YOU, to keep the film coherent. "
-            "It is not text to copy into prompts.",
-            "",
-            f"- Characters: {' | '.join(c.characters) or '—'}",
-            f"- Wardrobe: {' | '.join(c.wardrobe) or '—'}",
-            f"- Location: {c.location or '—'}",
-            f"- Palette: {c.palette or '—'}",
-            f"- Lighting constant: {c.lighting_constant or '—'}",
-            f"- Camera language: {c.camera_language or '—'}",
-            f"- Props: {', '.join(c.props) or '—'}",
-            f"- Rules: {' | '.join(c.rules) or '—'}",
-            "",
-            "The rules line is a constraint on YOUR writing, not a line to quote. Prohibitions "
-            "belong in the negative prompt: naming a thing in order to forbid it inside a "
-            "positive prompt is one of the most reliable ways to summon it.",
-        ]
-    )
-
-
-_TREATMENT_SHAPE = {
-    "stories": [
-        {
-            "title": "Short label, e.g. 'The last boarding call'",
-            "summary": "One line for the story card.",
-            "treatment": "3-5 sentences: core idea, emotional arc, rhythm, ending image.",
-            "angle": "The directorial angle in a short phrase.",
-            "anchors": {
-                "emotion": "",
-                "motif": "",
-                "object": "",
-                "break": "",
-                "finalImage": "",
-            },
-            "continuity": {
-                "characters": ["Full identity block per character"],
-                "wardrobe": ["Exact garments"],
-                "location": "",
-                "palette": "Named colours, plus any banned colours",
-                "lightingConstant": "Source, role, direction",
-                "cameraLanguage": "The dominant grammar of the whole piece",
-                "props": [],
-                "rules": ["Anything that must stay constant across every clip"],
-            },
-        }
-    ]
-}
-
-_SCENE_SHAPE = {
-    "scenes": [
-        {
-            "order": 1,
-            "title": "Short label for the storyboard row",
-            "summary": "One line describing what happens.",
-            "continuityNote": "How this cuts against the previous scene.",
-            "transitionOut": "hardcut",
-            "shotCard": {
-                "frame": "wide / medium / close-up / macro insert",
-                "composition": "",
-                "camera": "",
-                "movementReason": 'Answers "what changed?"',
-                "action": "The exact physical event",
-                "eyeTrace": "Where the eye lands in the first 0.3s",
-                "environmentalPressure": "",
-                "microAction": "",
-                "soundAnchor": "",
-                "lighting": "",
-                "palette": "",
-                "cutType": "match cut / smash cut / cut on action / J-cut / L-cut",
-            },
-            "prompt": (
-                "The full shot description — camera, identity, action, environment, lighting, "
-                "palette, continuity, final frame. Do NOT include an `Audio:` line or a "
-                "`Duration:` line — those are appended automatically from the `audio` field "
-                "below and this scene's fixed length."
-            ),
-            "audio": (
-                "Sound direction only: room tone, texture, body sound, the motif, SFX with "
-                "timing, dialogue if any. No music — a score is mixed in afterwards."
-            ),
-            "negativePrompt": "Comma-separated things that must not appear.",
-        }
-    ]
-}
-
-
-# ---------------------------------------------------------------------------
-# Pass 1 — treatments
-# ---------------------------------------------------------------------------
-
-
-async def generate_treatments(
-    brief: ProjectBrief, plan: DurationPlan, count: int = 4
-) -> list[StoryOption]:
-    user = "\n".join(
-        [
-            _brief_block(brief, plan),
-            "",
-            "## Your task — director treatments only",
-            "",
-            f"Produce {count} genuinely different director treatments for this film. Not four "
-            "rewordings of one idea: different emotional spine, different obstacle, different "
-            "visual motif, different ending image.",
-            "",
-            "For each one commit to the five anchors (one emotion, one motif, one anchor object, "
-            "one break, one final image) and to a continuity block precise enough that twelve "
-            "independent generations produce the same person in the same clothes under the same "
-            "light. Identity means face shape, eye colour, skin tone, hair, facial hair, exact "
-            "garments. Palette means named colours. Lighting constant means source, role and "
-            "direction.",
-            "",
-            "Do not write scene prompts yet.",
-            "",
-            "## Output",
-            "",
-            "Return JSON only, this exact shape:",
-            "```json",
-            json.dumps(_TREATMENT_SHAPE, indent=2),
-            "```",
-        ]
-    )
-
-    messages: list[ChatMessage] = [
-        {"role": "system", "content": compose_skill("storyboard")},
-        {"role": "user", "content": user},
-    ]
-
-    raw = await chat_json(messages, label="treatments", temperature=0.95)
-
-    try:
-        parsed = _TreatmentsResponse.model_validate(raw)
-    except ValidationError as error:
-        raise UpstreamError(
-            "The storyboard model returned a treatment payload we could not read.",
-            details=error.errors()[:5],
-        ) from error
-
-    if not parsed.stories:
-        raise UpstreamError("The storyboard model returned no treatments.")
-
-    return [
-        StoryOption(
-            id=short_id("story"),
-            title=story.title or f"Story {index + 1}",
-            summary=story.summary,
-            treatment=story.treatment,
-            angle=story.angle,
-            anchors=story.anchors,
-            continuity=story.continuity,
-            scenes=[],
-        )
-        for index, story in enumerate(parsed.stories[:count])
-    ]
-
-
-async def regenerate_treatment(
-    brief: ProjectBrief, plan: DurationPlan, existing: list[StoryOption], replace_id: str
-) -> StoryOption:
-    """Regenerate one treatment, told what to avoid so it lands somewhere new."""
-    others = [story for story in existing if story.id != replace_id]
+    max_words = int(target_seconds * 2.5)
 
     user = "\n".join(
         [
-            _brief_block(brief, plan),
+            "## The film",
             "",
-            "## Your task — one replacement treatment",
+            f"Brief: {brief.creative()}",
+            *(
+                [f"The brief's own music direction, to honour: {brief.music_direction}"]
+                if brief.music_direction
+                else []
+            ),
+            f"Length: {target_seconds}s. Style preset: {brief.style}. Ratio: {brief.ratio}.",
+            f"Story: {story.title} — {story.treatment}",
+            f"Emotion: {story.anchors.emotion}. Motif: {story.anchors.motif}. "
+            f"Ends on: {story.anchors.final_image}",
             "",
-            "The user rejected one of the directions. Write a single new treatment that is "
-            "clearly different from these:",
+            "The clips already carry native audio — room tone, body sound, and the sound motif. "
+            "What you are writing is the score that sits UNDER that, plus an optional voiceover.",
             "",
-            *[
-                f'- "{story.title}" — {story.angle}. Emotion: {story.anchors.emotion}. '
-                f"Motif: {story.anchors.motif}. Ends on: {story.anchors.final_image}"
-                for story in others
-            ],
+            "## Task",
             "",
-            "Change the emotional spine, the motif and the ending image. Same five anchors and "
-            "continuity discipline as before.",
+            "Write 5 distinct music directions. Each one names instrumentation, tempo in BPM, "
+            "texture, and where it lifts or drops against the beat map. No adjective soup — "
+            "'warm cinematic build' is not a direction.",
+            "",
+            f"Then write one optional voiceover script that fits {target_seconds} seconds at "
+            f"roughly 2.5 words per second (about {max_words} words maximum). Leave it empty if "
+            "the film is stronger without narration.",
             "",
             "## Output",
             "",
-            'Return JSON only: {"stories": [ <one treatment object, same shape as before> ]}',
+            "Return JSON only:",
+            '{"music":[{"label":"","prompt":""}],"voiceover":{"label":"","script":""}}',
         ]
     )
 
     raw = await chat_json(
         [
-            {"role": "system", "content": compose_skill("storyboard")},
+            {"role": "system", "content": compose_skill("audio")},
             {"role": "user", "content": user},
         ],
-        label="treatment-regenerate",
-        temperature=1.0,
+        label="audio-directions",
+        fast=True,
+        temperature=0.9,
+        max_output_tokens=2000,
     )
-
-    parsed = _TreatmentsResponse.model_validate(raw)
-    if not parsed.stories:
-        raise UpstreamError("The storyboard model did not return a replacement treatment.")
-
-    story = parsed.stories[0]
-    return StoryOption(
-        id=replace_id,
-        title=story.title,
-        summary=story.summary,
-        treatment=story.treatment,
-        angle=story.angle,
-        anchors=story.anchors,
-        continuity=story.continuity,
-        scenes=[],
-    )
-
-
-# ---------------------------------------------------------------------------
-# Pass 2 — scenes
-# ---------------------------------------------------------------------------
-
-
-def _repair_context(plan: DurationPlan, story: StoryOption) -> str:
-    """The spine a repair pass needs, without the brief that caused the fault.
-
-    A repair conversation that replays the original brief is asking the model to
-    satisfy two instructions that disagree — the brief wants a thing, the repair
-    brief says remove it. It keeps the thing. The story, the shot plan and the
-    named failures are enough to rewrite against, and none of them can argue
-    with the fix.
-    """
-    return "\n".join(
-        [
-            _story_context(story),
-            "",
-            "## The shot plan — fixed, do not change it",
-            "",
-            _segment_table(plan),
-            "",
-            f"There are exactly {len(plan.segments)} scenes. Keep every scene's seconds, beat, "
-            "shot function and order exactly as they are. You are rewriting prompts in place, "
-            "not re-planning the film.",
-        ]
-    )
-
-
-def _scenes_task(brief: ProjectBrief, plan: DurationPlan, story: StoryOption) -> str:
-    first_seconds = plan.segments[0].seconds if plan.segments else 8
-    return "\n".join(
-        [
-            _brief_block(brief, plan),
-            "",
-            _story_context(story),
-            "",
-            "## The shot plan — fixed, do not change it",
-            "",
-            _segment_table(plan),
-            "",
-            f"Write exactly {len(plan.segments)} scenes, one per row, in order. The seconds, beat "
-            "and shot function of each row are already decided by the renderer — write to them. "
-            "Do not merge, split, add or drop a scene.",
-            "",
-            "## How each prompt must be written",
-            "",
-            "Open with camera and lens: the model drops camera direction that arrives late. Then "
-            "the identity block, then the action.",
-            "Every scene carries, without exception: one environmental pressure, one physical "
-            "micro-action on a body, one sound anchor or visual motif, a stated focal length, "
-            "exactly one primary camera move with a reason, a named light source with its "
-            "direction, the colours actually in that frame, the identity of whoever is in that "
-            "shot, and an explicit final frame.",
-            "",
-            "Skeleton to fill, per scene (this example is sized for one scene — use that scene's "
-            "own seconds):",
-            _veo_skeleton(first_seconds),
-            "",
-            "Budget the action to the seconds: a 4s shot holds one action and a reaction, an 8s "
-            "shot holds two or three with a pause.",
-            "Dialogue is optional and must fit the clip — roughly 2.5 words per second, never "
-            "more than 8 seconds of speech.",
-            "Do not ask Veo for music; a score is mixed in afterwards. Ask it for room tone, "
-            "texture and the motif.",
-            "",
-            "`continuityNote` states how this scene joins the previous one — the matching pose, "
-            "light and lens height that make the cut work. Scene 1's note describes the opening "
-            "frame instead.",
-            "",
-            "## Output",
-            "",
-            "Return JSON only, this exact shape:",
-            "```json",
-            json.dumps(_SCENE_SHAPE, indent=2),
-            "```",
-        ]
-    )
-
-
-#: Strips a model-written `Audio:`/`Duration:` line if one slipped into `prompt`
-#: anyway, so composing our own copy can never double them up.
-#:
-#: `SFX:` and `Says:` are deliberately NOT stripped. They are content, not
-#: boilerplate — nothing regenerates them, so removing them silently destroyed
-#: every punctual sound cue and every line of dialogue the model wrote, and Veo
-#: received a silent scene. Only strip what you can put back.
-_BOILERPLATE_LINE = re.compile(r"^\s*(?:audio|duration)\s*:.*$\n?", re.IGNORECASE | re.MULTILINE)
-
-_DEFAULT_AUDIO = "room tone and ambient texture consistent with the scene, no music."
-
-
-def _compose_negative(written: str) -> str:
-    """The model's negative prompt, with the brand's own bans forced back in.
-
-    The model writes a per-scene negative, so brand terms cannot live in the
-    fallback alone — a scene where the model wrote anything at all would ship
-    without them. The brand bans are the reason the plate stays clean enough to
-    composite a real logo onto, so they are appended unconditionally.
-    """
-    parts = [written.strip() or _CRAFT_NEGATIVE]
-    brand = brand_negative_prompt()
-    if brand:
-        existing = parts[0].lower()
-        parts += [term for term in (t.strip() for t in brand.split(",")) if term.lower() not in existing]
-    return ", ".join(part for part in parts if part)
-
-
-def _compose_prompt(base_prompt: str, audio: str, seconds: int) -> str:
-    """Assemble the final Veo prompt from the model's shot description plus the
-    two boilerplate lines it kept dropping — `Audio:` and `Duration:` — added
-    here deterministically instead of trusted to survive a long freeform
-    string. See the comment on `_veo_skeleton` for why.
-    """
-    body = _BOILERPLATE_LINE.sub("", base_prompt).strip()
-    sound = audio.strip() or _DEFAULT_AUDIO
-    return f"{body}\n\nAudio: {sound}\n\nDuration: {seconds} seconds."
-
-
-def _materialise_scenes(
-    plan: DurationPlan, story: StoryOption, written: list[_WrittenScene]
-) -> list[Scene]:
-    by_order = {scene.order: scene for scene in written}
-    scenes: list[Scene] = []
-
-    for index, segment in enumerate(plan.segments):
-        order = index + 1
-        # Fall back to positional matching when the model mislabels `order`.
-        entry = by_order.get(order) or (written[index] if index < len(written) else None)
-        if entry is None:
-            raise UpstreamError(
-                f"The storyboard model returned {len(written)} scenes but the plan needs "
-                f"{len(plan.segments)}."
-            )
-
-        previous = story.scenes[index] if index < len(story.scenes) else None
-        transition = entry.transition_out if entry.transition_out in ("hardcut", "crossfade") else "hardcut"
-
-        scenes.append(
-            Scene(
-                id=previous.id if previous else short_id("scene"),
-                order=order,
-                title=entry.title or f"Scene {order}",
-                beat=segment.beat,
-                shotFunction=segment.shot_function,
-                seconds=segment.seconds,
-                startsAt=segment.starts_at,
-                summary=entry.summary,
-                prompt=_compose_prompt(entry.prompt, entry.audio, segment.seconds),
-                shotCard=entry.shot_card,
-                negativePrompt=_compose_negative(entry.negative_prompt),
-                transitionOut=transition,  # type: ignore[arg-type]
-                continuityNote=entry.continuity_note,
-            )
-        )
-
-    return scenes
-
-
-async def _run_scene_pass(
-    messages: list[ChatMessage], story: StoryOption, plan: DurationPlan, label: str
-) -> StoryOption:
-    raw = await chat_json(messages, label=label, temperature=0.85)
 
     try:
-        parsed = _ScenesResponse.model_validate(raw)
-    except ValidationError as error:
-        raise UpstreamError(
-            "The storyboard model returned a scene payload we could not read.",
-            details=error.errors()[:5],
-        ) from error
+        parsed = _Suggestions.model_validate(raw)
+    except Exception as error:  # noqa: BLE001
+        raise UpstreamError("The model returned audio directions we could not read.") from error
 
-    if not parsed.scenes:
-        raise UpstreamError("The storyboard model returned no scenes.")
-
-    candidate = story.model_copy(deep=True)
-    candidate.scenes = _materialise_scenes(plan, story, parsed.scenes)
-    return candidate
-
-
-def _to_model_shape(story: StoryOption) -> list[dict[str, Any]]:
-    """Feed the previous draft back to the model in the shape it produced it."""
-    return [
-        {
-            "order": scene.order,
-            "title": scene.title,
-            "summary": scene.summary,
-            "continuityNote": scene.continuity_note,
-            "transitionOut": scene.transition_out,
-            "shotCard": scene.shot_card.model_dump(by_alias=True),
-            "prompt": scene.prompt,
-            "negativePrompt": scene.negative_prompt,
-        }
-        for scene in story.scenes
+    tracks = [
+        AudioTrack(
+            id=short_id("track"),
+            kind="music",
+            label=idea.label,
+            prompt=idea.prompt,
+            selected=index == 0,
+            status="idle",
+            gain=settings.music_gain,
+        )
+        for index, idea in enumerate(parsed.music[:5])
     ]
 
-
-async def _emit(callback: ProgressFn | None, fraction: float, message: str) -> None:
-    if callback is None:
-        return
-    result = callback(fraction, message)
-    if asyncio.iscoroutine(result):
-        await result
-
-
-async def generate_scenes(
-    brief: ProjectBrief,
-    plan: DurationPlan,
-    story: StoryOption,
-    on_progress: ProgressFn | None = None,
-) -> tuple[StoryOption, int]:
-    """Write the scene prompts, audit them, repair what fails.
-
-    Returns ``(story_with_scenes, repair_passes_used)``.
-    """
-    if not plan.segments:
-        raise BadRequest("The duration plan has no segments.")
-
-    task = _scenes_task(brief, plan, story)
-    messages: list[ChatMessage] = [
-        {"role": "system", "content": compose_skill("storyboard")},
-        {"role": "user", "content": task},
-    ]
-
-    await _emit(on_progress, 0.1, f"Writing {len(plan.segments)} scene prompts…")
-
-    candidate = await _run_scene_pass(messages, story, plan, "scenes")
-    report = audit_story_option(candidate)
-    repair_passes = 0
-
-    while not report.passed and repair_passes < MAX_REPAIR_PASSES:
-        repair_passes += 1
-        errors = sum(1 for issue in report.issues if issue.severity == "error")
-        log.info(
-            'Story "%s": audit found %d blocking issue(s), running repair pass %d/%d',
-            story.title, errors, repair_passes, MAX_REPAIR_PASSES,
-        )
-        await _emit(
-            on_progress,
-            min(0.9, 0.4 + repair_passes * 0.2),
-            f"Audit found {errors} issue{'' if errors == 1 else 's'} — rewriting…",
+    if parsed.voiceover and parsed.voiceover.script.strip():
+        tracks.append(
+            AudioTrack(
+                id=short_id("track"),
+                kind="voiceover",
+                label=parsed.voiceover.label or "Voiceover",
+                prompt=parsed.voiceover.script.strip(),
+                selected=False,
+                status="idle",
+                gain=settings.voiceover_gain,
+            )
         )
 
-        # Deliberately NOT the original `task`. Replaying the full brief here
-        # puts the repair model in an argument with itself: the brief asks for
-        # something, the repair brief says remove it, and the model splits the
-        # difference and keeps it — which is how supers survived two repair
-        # passes and reached Veo. The repair pass gets the story spine and the
-        # specific failures, and nothing that can contradict them.
-        repair_messages: list[ChatMessage] = [
-            {"role": "system", "content": compose_skill("repair")},
-            {"role": "user", "content": _repair_context(plan, story)},
-            {
-                "role": "assistant",
-                "content": json.dumps({"scenes": _to_model_shape(candidate)}),
+    return tracks
+
+
+# ---------------------------------------------------------------------------
+# Music providers
+# ---------------------------------------------------------------------------
+
+
+async def _music_elevenlabs(prompt: str, seconds: int) -> tuple[bytes, str]:
+    if not settings.elevenlabs_api_key:
+        raise Unavailable("ELEVENLABS_API_KEY is not set.")
+
+    length_ms = round(min(max(seconds, 10), 300) * 1000)
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        response = await client.post(
+            "https://api.elevenlabs.io/v1/music",
+            headers={
+                "xi-api-key": settings.elevenlabs_api_key,
+                "content-type": "application/json",
             },
-            {"role": "user", "content": build_repair_brief(candidate, report)},
+            json={
+                "prompt": prompt,
+                "music_length_ms": length_ms,
+                "model_id": settings.elevenlabs_music_model,
+            },
+        )
+
+    if response.status_code >= 400:
+        raise UpstreamError(
+            f"ElevenLabs music generation failed ({response.status_code}).",
+            details=response.text[:400],
+        )
+
+    return response.content, "mp3"
+
+
+async def _music_lyria(prompt: str) -> tuple[bytes, str]:
+    if not (settings.google_cloud_project and settings.google_access_token):
+        raise Unavailable(
+            "Vertex Lyria needs GOOGLE_CLOUD_PROJECT and GOOGLE_ACCESS_TOKEN "
+            "(run `gcloud auth print-access-token`)."
+        )
+
+    location = settings.google_cloud_location
+    url = (
+        f"https://{location}-aiplatform.googleapis.com/v1/projects/"
+        f"{settings.google_cloud_project}/locations/{location}/publishers/google/models/"
+        f"{settings.vertex_lyria_model}:predict"
+    )
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        response = await client.post(
+            url,
+            headers={
+                "authorization": f"Bearer {settings.google_access_token}",
+                "content-type": "application/json",
+            },
+            json={"instances": [{"prompt": prompt}], "parameters": {}},
+        )
+
+    if response.status_code >= 400:
+        raise UpstreamError(
+            f"Lyria music generation failed ({response.status_code}).", details=response.text[:400]
+        )
+
+    predictions = response.json().get("predictions") or []
+    encoded = None
+    if predictions:
+        encoded = predictions[0].get("bytesBase64Encoded") or predictions[0].get("audioContent")
+    if not encoded:
+        raise UpstreamError("Lyria returned no audio.")
+
+    import base64
+
+    return base64.b64decode(encoded), "wav"
+
+
+# ---------------------------------------------------------------------------
+# Voiceover
+# ---------------------------------------------------------------------------
+
+
+async def _synthesise_voiceover(script: str) -> tuple[bytes, str]:
+    deployment = settings.azure_openai_tts_deployment_name
+    if not deployment:
+        raise Unavailable(
+            "Voiceover needs AZURE_OPENAI_TTS_DEPLOYMENT_NAME. Veo still generates in-scene "
+            "dialogue without it."
+        )
+    if not settings.azure_configured:
+        raise Unavailable("Azure OpenAI is not configured.")
+
+    assert settings.azure_openai_base_url and settings.azure_openai_key
+    url = (
+        f"{settings.azure_openai_base_url.rstrip('/')}/openai/deployments/{quote(deployment)}"
+        f"/audio/speech?api-version={quote(settings.azure_openai_version)}"
+    )
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        response = await client.post(
+            url,
+            headers={"api-key": settings.azure_openai_key, "content-type": "application/json"},
+            json={
+                "model": deployment,
+                "input": script,
+                "voice": settings.azure_openai_tts_voice,
+                "response_format": "mp3",
+            },
+        )
+
+    if response.status_code >= 400:
+        raise UpstreamError(
+            f"Voiceover synthesis failed ({response.status_code}).", details=response.text[:400]
+        )
+
+    return response.content, "mp3"
+
+
+# ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
+
+
+async def _patch_track(project_id: str, track_id: str, **patch) -> None:
+    def mutate(project: Project) -> Project:
+        project.audio = [
+            track.model_copy(update=patch) if track.id == track_id else track
+            for track in project.audio
         ]
+        return project
+
+    await update_project(project_id, mutate)
+
+
+async def generate_track(project: Project, track_id: str) -> AudioTrack:
+    track = next((candidate for candidate in project.audio if candidate.id == track_id), None)
+    if track is None:
+        raise BadRequest(f"Audio track {track_id} not found.")
+
+    await _patch_track(project.id, track_id, status="generating", error=None)
+
+    try:
+        seconds = project.plan.target_seconds
+
+        if track.kind == "voiceover":
+            payload, extension = await _synthesise_voiceover(track.prompt)
+        elif settings.music_provider == "elevenlabs":
+            payload, extension = await _music_elevenlabs(track.prompt, seconds)
+        elif settings.music_provider == "vertex-lyria":
+            payload, extension = await _music_lyria(track.prompt)
+        else:
+            raise Unavailable(
+                "No music provider is configured. Set MUSIC_PROVIDER to `elevenlabs` or "
+                "`vertex-lyria`, or upload a track instead."
+            )
+
+        destination = Path(audio_dir(project.id)) / f"{track_id}.{extension}"
+        ensure_dir(destination.parent)
+        destination.write_bytes(payload)
 
         try:
-            candidate = await _run_scene_pass(
-                repair_messages, story, plan, f"scenes-repair-{repair_passes}"
-            )
-        except UpstreamError as error:
-            log.warning("Repair pass failed; keeping the previous draft. %s", error)
-            break
+            info = await probe(destination)
+            duration = info.seconds
+        except Exception:  # noqa: BLE001 — duration is informational
+            duration = None
 
-        report = audit_story_option(candidate)
-
-    await _emit(
-        on_progress, 1.0, "Storyboard ready." if report.passed else "Storyboard ready with warnings."
-    )
-
-    candidate.audit = report
-
-    if not report.passed:
-        blocking = [issue for issue in report.issues if issue.severity == "error"]
-        log.warning(
-            'Story "%s" finished with %d unresolved issue(s), score %d.',
-            story.title, len(blocking), report.score,
+        relative = to_storage_relative(destination)
+        await _patch_track(
+            project.id,
+            track_id,
+            status="ready",
+            file=relative,
+            url=media_url(relative),
+            seconds=duration,
+            source="generated",
+            error=None,
         )
 
-        # An audit that logs and ships is decoration. Every blocking rule here
-        # costs real Veo time and comes back as a defect that cannot be fixed in
-        # post — misspelt supers, a mangled wordmark, eight identical framings.
-        # Refuse, and say exactly what to change.
-        if settings.brand_enforce_audit:
-            summary = "; ".join(
-                f"scene {issue.scene_order}: {issue.message}"
-                if issue.scene_order
-                else issue.message
-                for issue in blocking[:4]
-            )
-            more = f" (+{len(blocking) - 4} more)" if len(blocking) > 4 else ""
-            raise BadRequest(
-                f'"{story.title}" still fails {len(blocking)} blocking check(s) after '
-                f"{repair_passes} repair pass(es), so it has not been sent to Veo. {summary}{more}"
-            )
+        log.info("Generated %s track %s.", track.kind, track_id)
+        refreshed = await require_project(project.id)
+        return next(candidate for candidate in refreshed.audio if candidate.id == track_id)
 
-    return candidate, repair_passes
+    except Exception as error:
+        await _patch_track(project.id, track_id, status="failed", error=str(error))
+        raise
 
 
-# ---------------------------------------------------------------------------
-# Single-scene rewrite
-# ---------------------------------------------------------------------------
+async def save_uploaded_track(
+    project: Project, filename: str, payload: bytes, kind: AudioKind = "music"
+) -> AudioTrack:
+    suffix = Path(filename).suffix.lower() or ".mp3"
+    suffix = "".join(char for char in suffix if char.isalnum() or char == ".")
 
+    track_id = short_id("track")
+    destination = Path(audio_dir(project.id)) / f"{track_id}{suffix}"
+    ensure_dir(destination.parent)
+    destination.write_bytes(payload)
 
-async def rewrite_scene(
-    brief: ProjectBrief, story: StoryOption, scene: Scene, instruction: str
-) -> Scene:
-    neighbours = [other for other in story.scenes if abs(other.order - scene.order) == 1]
+    try:
+        info = await probe(destination)
+        duration = info.seconds
+    except Exception:  # noqa: BLE001
+        duration = None
 
-    lines = [
-        _story_context(story),
-        "",
-        "## The scene to rewrite",
-        "",
-        f"Scene {scene.order} of {len(story.scenes)} — {scene.seconds}s, "
-        f'beat "{scene.beat}", shot function "{scene.shot_function}".',
-        f'Delivery ratio {brief.ratio}, style preset "{brief.style}".',
-        "",
-        "Current prompt:",
-        "```text",
-        scene.prompt,
-        "```",
-        "",
-    ]
+    relative = to_storage_relative(destination)
+    track = AudioTrack(
+        id=track_id,
+        kind=kind,
+        label=Path(filename).stem,
+        prompt="Uploaded track",
+        selected=True,
+        status="ready",
+        gain=settings.voiceover_gain if kind == "voiceover" else settings.music_gain,
+        seconds=duration,
+        file=relative,
+        url=media_url(relative),
+        source="uploaded",
+    )
 
-    if neighbours:
-        lines += [
-            "Neighbouring scenes, so the cut still matches:",
-            *[
-                f"- Scene {other.order}: {other.summary} ({other.continuity_note})"
-                for other in neighbours
-            ],
-            "",
+    def mutate(current: Project) -> Project:
+        # An uploaded track of the same kind takes over the selection.
+        current.audio = [
+            existing.model_copy(update={"selected": False})
+            if existing.kind == kind
+            else existing
+            for existing in current.audio
         ]
+        current.audio.append(track)
+        return current
 
-    lines += [
-        "## What the user asked for",
-        "",
-        instruction.strip() or "Make it stronger without changing what happens.",
-        "",
-        "Keep the duration, the beat and the shot function. Keep the continuity block intact — "
-        "the other scenes still depend on it. All the per-scene hard requirements still apply.",
-        "",
-        "Write sound direction in the separate `audio` field, not inside `prompt`. Do not write "
-        "an `Audio:` or `Duration:` line in `prompt` — both are appended automatically.",
-        "",
-        "## Output",
-        "",
-        'Return JSON only: {"scenes": [ <one scene object, same shape as the storyboard schema, '
-        f"order {scene.order}> ]}}",
-    ]
-
-    raw = await chat_json(
-        [
-            {"role": "system", "content": compose_skill("scene")},
-            {"role": "user", "content": "\n".join(lines)},
-        ],
-        label="scene-rewrite",
-        temperature=0.9,
-    )
-
-    parsed = _ScenesResponse.model_validate(raw)
-    if not parsed.scenes:
-        raise UpstreamError("The model did not return a rewritten scene.")
-
-    written = parsed.scenes[0]
-    transition = (
-        written.transition_out
-        if written.transition_out in ("hardcut", "crossfade")
-        else scene.transition_out
-    )
-
-    updated = scene.model_copy(deep=True)
-    updated.title = written.title or scene.title
-    updated.summary = written.summary or scene.summary
-    updated.prompt = (
-        _compose_prompt(written.prompt, written.audio, scene.seconds)
-        if written.prompt.strip()
-        else scene.prompt
-    )
-    updated.shot_card = written.shot_card
-    updated.negative_prompt = _compose_negative(written.negative_prompt or scene.negative_prompt)
-    updated.transition_out = transition  # type: ignore[assignment]
-    updated.continuity_note = written.continuity_note or scene.continuity_note
-    return updated
+    await update_project(project.id, mutate)
+    return track
