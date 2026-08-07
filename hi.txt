@@ -1,272 +1,139 @@
-"""Brand compliance, enforced in code.
+"""The dramaturgy and three-detail checks, enforced in code.
 
-Same reasoning as ``app/skills/audit.py``: a model asked whether it followed the
-brand book will say yes. These rules run against the structured storyboard the
-model actually returned, and anything at ``error`` severity is fed back as a
-repair brief before a single second of Veo time is spent.
+The skill says its two checks — the six-point dramaturgy check and the
+three-detail audit — are the step writers skip, and that skipping them silently
+degrades everything downstream. An LLM asked to self-check will cheerfully claim
+it did.
 
-The rules here encode ``policy.INDIGO_VIDEO_BRAND_POLICY``. When that document
-changes, this file changes with it — a guardrail nobody checks is decoration.
+So the check runs here, against the structured scene the model returned.
+Anything at ``error`` severity is fed back to the model as a repair brief;
+warnings are surfaced in the UI but do not block.
 """
 
 from __future__ import annotations
 
 import re
 
-from ..domain.models import AuditIssue, StoryOption
+from ..brand import brand_issues
+from ..domain.models import AuditIssue, AuditReport, Scene, StoryOption
 
-# ---------------------------------------------------------------------------
-# Brand name
-# ---------------------------------------------------------------------------
+#: Words that mark an absent detail. Section 7 of PIPELINE.md.
+BANNED_PHRASES = [
+    "cinematic masterpiece",
+    "professional",
+    "high quality",
+    "highest quality",
+    "masterpiece",
+    "stunning",
+    "epic",
+    "amazing",
+    "beautiful lighting",
+    "beautiful light",
+    "dynamic camera",
+    "intense moment",
+    "powerful scene",
+    "breathtaking",
+    "award-winning",
+    "award winning",
+    "hyperrealistic",
+    "ultra realistic",
+    "ultra-realistic",
+    "photorealistic masterpiece",
+    "8k",
+    "4k",
+    "best quality",
+    "highly detailed",
+]
 
-_INDIGO_TOKEN = re.compile(r"\bindigo\b", re.IGNORECASE)
+#: "cinematic" alone is banned, but "cinematic naturalism" is a named grade the
+#: skill's own worked examples use. Allow the compound, reject the adjective.
+ALLOWED_CINEMATIC_COMPOUNDS = ("cinematic naturalism", "cinematic widescreen")
 
-#: "indigo" is also a legitimate colour word, and the approved palette language
-#: ("deep indigo navy-blue") depends on it. Colour usage is allowed; brand usage
-#: must be the exact IndiGo casing.
-_COLOUR_BEFORE = re.compile(
-    r"\b(?:deep|dark|pale|light|rich|soft|muted|bright|colour|color|shade|tint|tone|hue)\s*[-,]?\s*$",
-    re.IGNORECASE,
-)
-_COLOUR_AFTER = re.compile(
-    r"^\s*[-,]?\s*(?:blue|navy|violet|dye|tone|hue|tint|shade|grade|palette|wash|cast)\b",
-    re.IGNORECASE,
-)
-
-#: Name forms the brand book explicitly forbids.
-_BANNED_NAME_FORMS = re.compile(
-    r"\b(?:air\s+indigo|indigo\s+airways|indigo\s+airlines|goindigo(?!\.in\b)|"
-    r"indigoing|indigoes|indigone|indiwent)\b",
-    re.IGNORECASE,
-)
-
-#: The URL must carry both capitals.
-_URL_TOKEN = re.compile(r"\bgo\s?indigo\s?\.\s?in\b", re.IGNORECASE)
-
-
-def _brand_name_issues(text: str) -> list[str]:
-    """Return the misspelt brand-name occurrences in ``text``."""
-    problems: list[str] = []
-
-    for match in _INDIGO_TOKEN.finditer(text):
-        token = match.group(0)
-        if token == "IndiGo":
-            continue
-        before = text[max(0, match.start() - 24) : match.start()]
-        after = text[match.end() : match.end() + 24]
-        if _COLOUR_BEFORE.search(before) or _COLOUR_AFTER.match(after):
-            continue  # the colour, not the brand
-        problems.append(token)
-
-    return problems
-
-
-# ---------------------------------------------------------------------------
-# Frame content
-# ---------------------------------------------------------------------------
-
-#: Asking Veo for any of these produces a mangled mark or unreadable type.
-#: Policy section 2 — all marks and type are composited after the render.
-_MARK_OR_TYPE = re.compile(
-    r"\b(?:logo|logotype|wordmark|brand\s?mark|arrow[- ]plane|20[- ]dot|twenty[- ]dot|"
-    # "supers" plural only — "Super 35" and "super wide" are legitimate craft terms.
-    r"subtitle|caption|supers\b|lower[- ]third|end\s?card|title\s?card|"
-    # The original pattern matched "on-screen text" only, so a scene reading
-    # "Final on-screen message ... as clean brand-safe typography" sailed
-    # through and Veo drew the end card itself. Cover the synonyms.
-    r"on[- ]screen\s+(?:text|message|copy|type|typography|graphic|line)|"
-    r"typograph(?:y|ic)|typeface|"
-    # "<copy> appears/reads/remains" is how a writer smuggles in a super
-    # without ever using the word "text".
-    r"(?:text|message|copy|headline|tagline|wording|lettering)\s+"
-    r"(?:appears|appear|reads|read|remains|remain|sits|fades|holds)|"
-    r"text\s+overlay|overlay\s+text|tail\s+letter|fuselage\s+letter|livery\s+letter|"
-    r"signage\s+read|readable\s+(?:text|signage|lettering))\b",
+TELL_NOT_SHOW = re.compile(
+    r"\b(?:he|she|they|the (?:man|woman|hero|subject|character)|it)\s+"
+    r"(?:is|are|was|were|looks?|seems?|feels?)\s+(?:very\s+|really\s+|so\s+)?"
+    r"(?:sad|angry|afraid|scared|happy|excited|nervous|anxious|joyful|frustrated|"
+    r"lonely|proud|confident|surprised)\b",
     re.IGNORECASE,
 )
 
-#: Banned dominant palettes. Policy section 3.
-_BANNED_COLOURS = re.compile(
-    r"\b(?:red|crimson|scarlet|maroon|purple|violet|magenta|fuchsia)\b", re.IGNORECASE
+LENS_PATTERN = re.compile(
+    r"\b(?:\d{2,3}\s?mm|macro|anamorphic|telephoto|wide-angle|wide angle)\b", re.IGNORECASE
 )
 
-#: A prompt that correctly restates the palette *names* the banned colours in
-#: order to forbid them ("no red, no purple") — the guardrails ask for exactly
-#: that. Negation is therefore scoped to the clause, so "no red, crimson,
-#: magenta" clears the whole list while "crimson sunset" in its own clause does
-#: not. Getting this wrong would flag the very compliance we asked for.
-_NEGATION_CUE = re.compile(
-    r"\b(?:no|not|never|avoid|avoiding|without|banned?|ban|excluding|exclude|free\s+of|"
-    r"absent|zero|minus|prohibited|forbidden)\b",
-    re.IGNORECASE,
-)
-_CLAUSE_SPLIT = re.compile(r"[.;\n]")
-
-
-#: How far back a negation can reach. Long enough to cover "banned: red,
-#: crimson, purple, violet", short enough that an unrelated "not" earlier in a
-#: sentence does not silently excuse a colour genuinely in frame.
-_NEGATION_WINDOW = 60
-
-
-def _unnegated(pattern: re.Pattern[str], text: str) -> list[str]:
-    """Matches of ``pattern`` that are asserted, not forbidden.
-
-    Compliant prompts name the banned things in order to ban them — the
-    continuity block says "no logo, wordmark or on-screen text in frame", and
-    that block is restated in every scene. Matching naively would flag the exact
-    compliance the guardrails demand, on every single scene. A negation only
-    covers what follows it, so "crimson and gold, no blue" is still crimson.
-    """
-    found: list[str] = []
-    for clause in _CLAUSE_SPLIT.split(text):
-        for match in pattern.finditer(clause):
-            lookback = clause[max(0, match.start() - _NEGATION_WINDOW) : match.start()]
-            if not _NEGATION_CUE.search(lookback):
-                found.append(match.group(0).lower())
-    return found
-
-
-def _banned_colour_hits(text: str) -> set[str]:
-    return set(_unnegated(_BANNED_COLOURS, text))
-
-#: The brand's own blues. The first cut of this accepted any word containing
-#: "blue", and real output sailed through on "cobalt blue" — a bright greenish
-#: blue that is not Pantone 2738 C. Checking for *a* blue is not checking for
-#: *the* blue.
-#: Named ``_REQUIRED_BLUE`` because that is what the two call sites ask for. It
-#: was previously defined as ``_BRAND_BLUE`` and referenced as ``_REQUIRED_BLUE``
-#: — a half-applied rename that left `brand_issues()` raising ``NameError`` on
-#: every story with scenes, which took the whole brand audit down with it.
-_REQUIRED_BLUE = re.compile(
-    r"\b(?:indigo|navy|sky\s+blue|pale\s+blue|powder\s+blue)\b", re.IGNORECASE
-)
-
-#: Blues that are recognisably not IndiGo's.
-_OFF_BRAND_BLUE = re.compile(
-    r"\b(?:cobalt|azure|cyan|turquoise|teal|cerulean|electric\s+blue|royal\s+blue|"
-    r"baby\s+blue|periwinkle|sapphire)\b",
+CAMERA_MOVE_PATTERN = re.compile(
+    r"\b(?:static camera|locked[- ]off|slow push[- ]in|fast push[- ]in|push[- ]in|pull[- ]back|"
+    r"dolly[- ](?:in|out)|tracking|lateral track|handheld|whip pan|snap zoom|rack focus|"
+    r"tilt (?:up|down)|orbit|gimbal|crane|aerial|dolly[- ]zoom|pan (?:left|right)|drift|glide|"
+    r"arc|steadicam|FPV|top[- ]down)\b",
     re.IGNORECASE,
 )
 
-#: The brand name itself, correctly spelled. Naming the airline in a prompt is
-#: what makes Veo draw the wordmark on cabin walls and seat-backs — the exact
-#: thing the composite-in-post design exists to prevent. Describe the cabin by
-#: its colour instead.
-_BRAND_NAME_IN_PROMPT = re.compile(r"\bIndiGo\b")
-
-#: A gold-drenched grade. The brand wants clean, bright, generous daylight; a
-#: sunrise-soaked frame reads as warm nostalgia, not IndiGo, however blue the
-#: palette line claims to be. Lighting beats palette in a render.
-_WARM_GRADE = re.compile(
-    r"\b(?:golden\s+hour|sunset|sunrise|amber|golden|gold(?:en)?\s+light|honey\s+light|"
-    r"warm\s+gold|orange\s+glow|burnt\s+orange|sodium|firelight|candlelit)\b",
+LIGHT_PATTERN = re.compile(
+    r"\b(?:key(?:\s?light)?|rim(?:\s?light)?|backlight|back light|fill|bounce|practical|"
+    r"underlight|top light|side light|spill|silhouette|motivated)\b",
     re.IGNORECASE,
 )
 
-#: Camera behaviour that contradicts "effortless". Policy section 4.
-_FRANTIC_CAMERA = re.compile(
-    r"\b(?:whip\s?pan|snap\s?zoom|crash\s?zoom|speed\s?ramp|shaky|frantic|chaotic|"
-    r"jerky|violent\s+(?:shake|movement))\b",
+LIGHT_DIRECTION_PATTERN = re.compile(
+    r"\b(?:frame[- ](?:left|right)|from (?:left|right|behind|above|below|"
+    r"the (?:window|door|screen|street))|overhead|off[- ]screen (?:left|right)|"
+    r"camera[- ](?:left|right)|three[- ]quarter)\b",
     re.IGNORECASE,
 )
 
-# ---------------------------------------------------------------------------
-# Safety. Policy section 9 — zero tolerance.
-# ---------------------------------------------------------------------------
-
-_SAFETY_TERMS = re.compile(
-    r"\b(?:crash(?:es|ing|ed)?|collision|colliding|mid[- ]air|emergency\s+landing|"
-    r"crash[- ]land|aircraft\s+(?:on\s+fire|in\s+distress)|uncontrolled\s+descent|"
-    r"nose[- ]dive|nosedive|runway\s+(?:incident|overrun)|oxygen\s+mask|evacuation\s+slide|"
-    r"emergency\s+slide|evacuat(?:e|ing|ion)|severe\s+turbulence|explosion|exploding|"
-    r"detonat|terroris|sabotage|hijack|wreckage|debris\s+field|casualt|fatalit)\b",
+COLOUR_PATTERN = re.compile(
+    r"\b(?:red|orange|amber|gold(?:en)?|yellow|green|teal|cyan|blue|indigo|violet|magenta|pink|"
+    r"crimson|scarlet|sepia|ochre|beige|cream|ivory|white|grey|gray|black|brown|tan|rust|bronze|"
+    r"copper|silver|charcoal|slate|desaturated|monochrome|warm|cool|cold)\b",
     re.IGNORECASE,
 )
 
-# ---------------------------------------------------------------------------
-# Tone. Policy sections 1 and 6.
-# ---------------------------------------------------------------------------
+AUDIO_LINE = re.compile(r"^\s*audio\s*:", re.IGNORECASE | re.MULTILINE)
 
-_CHEAP_TONE = re.compile(
-    r"\b(?:cheap(?:est)?|dirt[- ]cheap|bargain|discount|rock[- ]bottom|slash(?:ed|ing)?\s+(?:price|fare)|"
-    r"unbeatable\s+(?:price|fare|deal)|lowest\s+(?:price|fare)\s+ever)\b",
+FINAL_IMAGE_PATTERN = re.compile(
+    r"\b(?:ends? on|final frame|final image|closes? on|last frame|holds? on|freezes? on|out on)\b",
     re.IGNORECASE,
 )
 
-#: "routes"/"sectors" are trade words; the brand book says "flights".
-_TRADE_WORDS = re.compile(r"\b(?:routes|sectors)\b", re.IGNORECASE)
-
-_ALL_CAPS_RUN = re.compile(r"\b[A-Z]{4,}\b")
-
-#: Acronyms and codes that are legitimately upper case.
-_CAPS_ALLOWLIST = {
-    "FPV", "SFX", "LED", "HDR", "IMAX", "JSON", "MMKG", "USB", "IFE", "ATC", "VFX",
-}
-
-#: Distress. Policy section 3b — nobody in an IndiGo film is frightened. The
-#: craft beat map pushes hard toward tension, so this is the backstop that
-#: catches it when the rebranded beat labels do not.
-_DISTRESS = re.compile(
-    r"\b(?:frightened|afraid|fear(?:ful)?|scared|terrified|panic(?:ked|king)?|anxious|anxiety|"
-    r"dread|nervous|distress(?:ed)?|desperate|despair|helpless|overwhelmed|trembl(?:e|ing)|"
-    r"shak(?:y|ing)\s+hands|tears?\s+of\s+(?:fear|grief)|sob(?:bing)?|weep(?:ing)?|grief|"
-    r"clench(?:ed|ing)?\s+jaw|white[- ]knuckle|brac(?:e|ing)\s+for|flinch|cower|"
-    r"stress(?:ed|ful)?|worried|worry|uneasy|apprehensive)\b",
+DIALOGUE_PATTERN = re.compile(
+    r"(?:says|whispers|shouts|mutters|asks|replies|answers)\s*[:,]\s*[\"“]([^\"”]+)",
     re.IGNORECASE,
 )
 
-#: Friction blamed on the journey itself. Policy section 3b — the obstacle is
-#: never IndiGo and never flying.
-_JOURNEY_FRICTION = re.compile(
-    r"\b(?:delay(?:ed|s)?|cancelled\s+flight|long\s+quel?ue|queue\s+snak|lost\s+(?:bag|luggage)|"
-    r"missed\s+(?:the\s+)?(?:flight|connection)|cramped|crowded\s+(?:cabin|gate)|turbulence|"
-    r"stuffy|delayed\s+boarding|rush(?:ing|ed)\s+through\s+security)\b",
-    re.IGNORECASE,
-)
-
-#: Things Veo *can* render that read as IndiGo. Policy section 2b — with the
-#: mark banned, a scene carrying none of these has no brand in it at all.
-_BRAND_SURFACE = re.compile(
-    r"\b(?:cabin|aisle|seat[- ]?back|seat\s+fabric|headrest|tray\s+table|overhead\s+bin|"
-    r"cabin\s+window|porthole|crew|attendant|steward(?:ess)?|pilot|uniform|lanyard|"
-    r"boarding\s+pass|bag\s+tag|baggage\s+tag|aircraft|airplane|aeroplane|plane|jet|"
-    r"fuselage|wing(?:tip)?|tail|livery|jet\s?bridge|air\s?bridge|tarmac|runway|"
-    r"gate|terminal|departure\s+board|trolley)\b",
-    re.IGNORECASE,
-)
-
-#: A hero shot of hardware with nobody in it. Policy section 5 — a warning, not
-#: a block: aviation settings are legitimate in a brand film, the cliché is not.
-_AVIATION_SUBJECT = re.compile(
-    r"\b(?:aircraft|airplane|aeroplane|plane|jet|airbus|a320|a321|runway|tarmac|"
-    r"airport|terminal|apron|taxiway)\b",
-    re.IGNORECASE,
-)
-_HUMAN_PRESENCE = re.compile(
-    r"\b(?:passenger|traveller|traveler|child|kid|boy|girl|man|woman|mother|father|"
-    r"crew|attendant|pilot|hand|face|eyes|shoulder|family|couple|person|people|"
-    r"grandmother|grandfather|daughter|son|figure|silhouette\s+of\s+a)\b",
-    re.IGNORECASE,
-)
+#: Words per second of natural speech; Veo caps spoken audio at ~8s.
+WORDS_PER_SECOND = 2.5
 
 
-def _all_caps_hits(text: str) -> list[str]:
-    return [
-        word
-        for word in _ALL_CAPS_RUN.findall(text)
-        if word not in _CAPS_ALLOWLIST and not word.isdigit()
-    ]
+def _contains_banned(text: str) -> list[str]:
+    lower = text.lower()
+    hits = [phrase for phrase in BANNED_PHRASES if phrase in lower]
+
+    # "cinematic" on its own, but not as part of an allowed compound.
+    for match in re.finditer(r"cinematic", lower):
+        index = match.start()
+        allowed = any(lower.startswith(compound, index) for compound in ALLOWED_CINEMATIC_COMPOUNDS)
+        if not allowed and "cinematic" not in hits:
+            hits.append("cinematic")
+            break
+
+    return hits
 
 
-def brand_issues(story: StoryOption) -> list[AuditIssue]:
-    """Audit one story option against the IndiGo video guardrails."""
+def _filled(value: str | None, min_length: int = 12) -> bool:
+    return bool(value and len(value.strip()) >= min_length)
+
+
+def _significant_token(phrase: str) -> str | None:
+    """Longest word in a phrase, lowercased — a cheap proxy for "was this restated"."""
+    words = [word for word in re.sub(r"[^a-z0-9\s-]", " ", phrase.lower()).split() if len(word) > 4]
+    return max(words, key=len) if words else None
+
+
+def _audit_scene(scene: Scene, story: StoryOption) -> list[AuditIssue]:
     issues: list[AuditIssue] = []
 
-    def push(rule: str, severity: str, message: str) -> None:
-        issues.append(AuditIssue(rule=rule, severity=severity, message=message))  # type: ignore[arg-type]
-
-    def at(scene, rule: str, severity: str, message: str) -> None:
+    def at(rule: str, severity: str, message: str) -> None:
         issues.append(
             AuditIssue(
                 sceneId=scene.id,
@@ -277,250 +144,359 @@ def brand_issues(story: StoryOption) -> list[AuditIssue]:
             )
         )
 
-    # --- Story level --------------------------------------------------------
-    story_text = " ".join(
-        [story.title, story.summary, story.treatment, story.angle, *story.continuity.rules]
+    prompt = scene.prompt or ""
+    card = scene.shot_card
+    haystack = "\n".join(
+        [prompt, *(str(value) for value in card.model_dump().values() if isinstance(value, str))]
     )
 
-    misspelt = _brand_name_issues(story_text)
-    if misspelt:
-        push(
-            "brand/name",
+    if len(prompt.strip()) < 120:
+        at("prompt-substance", "error", "Prompt is too thin to direct a shot.")
+
+    # --- Details Law: the three-detail check --------------------------------
+    if not _filled(card.environmental_pressure):
+        at(
+            "three-detail/environment",
             "error",
-            f"The brand name is written as {', '.join(sorted(set(misspelt)))}. "
-            "It is always IndiGo — capital I, capital G.",
+            "No environmental pressure. Name a physical fact of the space that carries the emotion.",
+        )
+    if not _filled(card.micro_action):
+        at(
+            "three-detail/micro-action",
+            "error",
+            "No physical micro-action. Translate the emotion onto the body — jaw, hands, breath, eyes.",
+        )
+    if not _filled(card.sound_anchor, 8):
+        at(
+            "three-detail/motif",
+            "error",
+            "No sound anchor or visual motif tying this shot to the spine of the piece.",
         )
 
-    if _BANNED_NAME_FORMS.search(story_text):
-        push(
-            "brand/name-form",
+    # --- Banned vocabulary --------------------------------------------------
+    banned = _contains_banned(haystack)
+    if banned:
+        at(
+            "banned-vocabulary",
             "error",
-            "Forbidden name form. Never Air IndiGo, IndiGo Airways, IndiGo Airlines, or "
-            "goindigo, and never the name as a verb.",
+            f"Placeholder words instead of detail: {', '.join(banned)}. "
+            "Replace each with a concrete physical fact.",
         )
 
-    for url in _URL_TOKEN.findall(story_text):
-        if url != "goindigo.in":
-            push(
-                "brand/url",
-                "warning",
-                f'The website is written as "{url}". It is goindigo.in — one word, lowercase, '
-                "no space before the dot.",
-            )
-            break
+    if TELL_NOT_SHOW.search(haystack):
+        at("show-dont-tell", "error", "An emotion is named without a body. Render it as an action.")
 
-    palette = story.continuity.palette
-    if palette:
-        if not _REQUIRED_BLUE.search(palette):
-            push(
-                "brand/palette-blue",
-                "error",
-                "The locked palette does not name a blue. Deep indigo navy-blue "
-                "(Pantone 2738 C) must dominate, with pale sky blue (Pantone 291 C) secondary.",
-            )
-        banned = _banned_colour_hits(palette)
-        if banned:
-            push(
-                "brand/palette-banned",
-                "error",
-                f"The locked palette contains prohibited colours: {', '.join(sorted(banned))}. "
-                "Red and purple palettes are banned.",
-            )
+    # --- Camera and light ---------------------------------------------------
+    if not LENS_PATTERN.search(haystack):
+        at("lens", "error", "No lens stated. Add a focal length (24/35/50/85/100mm macro).")
+    if not CAMERA_MOVE_PATTERN.search(haystack):
+        at(
+            "camera-move",
+            "error",
+            "No camera direction. Name one primary move, or state 'static camera'.",
+        )
+    if not _filled(card.movement_reason, 6):
+        at("motivated-camera", "warning", "Camera move has no stated reason. Answer 'what changed?'")
+    if not LIGHT_PATTERN.search(haystack):
+        at("light-source", "error", "No named light source or role (key, rim, fill, practical).")
+    if not LIGHT_DIRECTION_PATTERN.search(haystack):
+        at("light-direction", "warning", "Light has no direction. Say where it comes from.")
+    if not COLOUR_PATTERN.search(f"{card.palette} {prompt}"):
+        at("palette", "warning", "Palette is not defined with concrete colours.")
 
-    if not any(
-        _MARK_OR_TYPE.search(rule) or "text" in rule.lower() for rule in story.continuity.rules
-    ):
-        push(
-            "brand/no-mark-rule",
+    # --- Composition and gaze -----------------------------------------------
+    if not _filled(card.eye_trace, 6):
+        at("controlled-gaze", "warning", "No eye-trace. Say where the viewer looks in the first 0.3s.")
+
+    # --- Veo specifics ------------------------------------------------------
+    if not AUDIO_LINE.search(prompt):
+        at(
+            "veo/audio-line",
+            "error",
+            "No `Audio:` line. Veo will not generate sound unless it is labelled explicitly.",
+        )
+    if not FINAL_IMAGE_PATTERN.search(prompt):
+        at(
+            "final-image",
+            "error",
+            "No explicit final frame. The model needs an emotional destination.",
+        )
+    if not re.search(rf"duration\s*:\s*{scene.seconds}\b", prompt, re.IGNORECASE):
+        at(
+            "duration-discipline",
             "warning",
-            "The continuity block does not state that no logo, wordmark, or on-screen text "
-            "appears in frame. Lock it there so every scene inherits it.",
+            f'Prompt does not state "Duration: {scene.seconds} seconds", which is what this '
+            "segment will be generated at.",
         )
 
-    caps = _all_caps_hits(f"{story.title} {story.summary}")
-    if caps:
-        push(
-            "brand/sentence-case",
-            "warning",
-            f"ALL CAPS in story copy: {', '.join(sorted(set(caps))[:4])}. "
-            "IndiGo is always sentence case.",
-        )
+    # Dialogue budget — Veo speeds up delivery when a line does not fit.
+    for match in DIALOGUE_PATTERN.finditer(prompt):
+        line = match.group(1).strip()
+        words = len([word for word in line.split() if word])
+        budget = int(min(scene.seconds, 8) * WORDS_PER_SECOND)
+        if words > budget:
+            at(
+                "dialogue-budget",
+                "error",
+                f'"{line[:48]}…" is {words} words but this {scene.seconds}s shot only holds '
+                f"about {budget}. Cut the line.",
+            )
 
-    if _CHEAP_TONE.search(story_text):
-        push(
-            "brand/tone",
+    # --- Continuity ---------------------------------------------------------
+    # Two different bars, because they mean different things. Palette and
+    # lighting are the film's grade — every scene shares them, no exceptions.
+    # Characters and wardrobe are a roster — a multi-character story naturally
+    # has scenes that feature only some of them (a ground-crew scene has no
+    # reason to mention the flight attendant), so the bar is "at least one
+    # locked identity is present", not "the whole cast is present every time".
+    continuity = story.continuity
+    lower_prompt = prompt.lower()
+
+    universal_tokens = [
+        token
+        for token in (_significant_token(v) for v in (continuity.palette, continuity.lighting_constant))
+        if token
+    ]
+    missing_universal = [token for token in universal_tokens if token not in lower_prompt]
+    if missing_universal:
+        at(
+            "continuity-block",
             "error",
-            "Discount-led language. Low-cost must never read as cheap — sell effortlessness, "
-            "not price.",
+            "The locked palette or lighting constant is not restated in this prompt. These are "
+            "the two things that must be identical in every scene — Veo has no memory between "
+            "generations.",
         )
 
-    if _TRADE_WORDS.search(story_text):
-        push("brand/vocabulary", "warning", 'Use "flights", never "routes" or "sectors".')
-
-    # --- Scene level --------------------------------------------------------
-    for scene in story.scenes:
-        prompt = scene.prompt or ""
-        card = scene.shot_card
-        haystack = "\n".join(
-            [
-                prompt,
-                scene.summary,
-                *(value for value in card.model_dump().values() if isinstance(value, str)),
-            ]
+    roster_tokens = [
+        token
+        for token in (
+            _significant_token(v) for v in (*continuity.characters, *continuity.wardrobe)
+        )
+        if token
+    ]
+    if roster_tokens and not any(token in lower_prompt for token in roster_tokens):
+        at(
+            "continuity-block",
+            "error",
+            "None of the story's locked characters or wardrobe are referenced in this prompt. "
+            "Every scene should feature — and describe consistently with — at least one "
+            "identity from the continuity block, not a new unlocked person.",
         )
 
-        marks = _unnegated(_MARK_OR_TYPE, haystack)
-        if marks:
-            at(
-                scene,
-                "brand/generated-mark",
-                "error",
-                f'This scene asks the model to render "{marks[0]}". Veo cannot render a '
-                "wordmark or type legibly — it will come back misspelt and off-colour. Remove it; "
-                "the mark is composited from the master file after the render.",
-            )
+    if not _filled(scene.continuity_note, 10):
+        at(
+            "cut-match",
+            "warning",
+            "No note on how this scene joins the previous one. State the matching pose, light and "
+            "lens height.",
+        )
 
-        scene_misspelt = _brand_name_issues(haystack)
-        if scene_misspelt:
-            at(
-                scene,
-                "brand/name",
-                "error",
-                f"Brand name written as {', '.join(sorted(set(scene_misspelt)))}. It is always "
-                "IndiGo. Better still: describe the colour as deep indigo navy-blue and keep the "
-                "brand name out of the prompt entirely.",
-            )
+    return issues
 
-        # Even correctly spelled, the name in a prompt is what makes Veo paint a
-        # wordmark on the fuselage and the seat-backs — and it comes back as
-        # "IndlGo" with a mangled device beside it. The mark is composited from
-        # the master file; the prompt describes colour and form only.
-        named = _BRAND_NAME_IN_PROMPT.findall(prompt)
-        if named:
-            at(
-                scene,
-                "brand/name-in-prompt",
-                "error",
-                f"This prompt names IndiGo {len(named)} time(s). Veo renders a named brand as "
-                "drawn lettering, and it cannot spell — that is where the broken fuselage "
-                "wordmark comes from. Describe it instead: 'deep indigo navy-blue tail and "
-                "engine accents, pearl white fuselage'. The mark is composited after the render.",
-            )
 
-        off_blue = _unnegated(_OFF_BRAND_BLUE, haystack)
-        if off_blue:
-            at(
-                scene,
-                "brand/off-brand-blue",
+def _audit_story(story: StoryOption) -> list[AuditIssue]:
+    issues: list[AuditIssue] = []
+
+    def push(rule: str, severity: str, message: str) -> None:
+        issues.append(AuditIssue(rule=rule, severity=severity, message=message))  # type: ignore[arg-type]
+
+    # --- The five anchors ---------------------------------------------------
+    anchors = story.anchors
+    missing = [
+        name
+        for name, value in (
+            ("emotion", anchors.emotion),
+            ("motif", anchors.motif),
+            ("object", anchors.object),
+            ("break", anchors.break_),
+            ("finalImage", anchors.final_image),
+        )
+        if not _filled(value, 3)
+    ]
+    if missing:
+        push("five-anchors", "error", f"Missing anchors: {', '.join(missing)}. Commit to all five.")
+
+    # --- Continuity block ---------------------------------------------------
+    continuity = story.continuity
+    if not continuity.characters:
+        push("continuity/characters", "warning", "No character identity locked for this story.")
+    if not _filled(continuity.palette, 8):
+        push("continuity/palette", "error", "No palette defined with concrete colours.")
+    if not _filled(continuity.lighting_constant, 8):
+        push(
+            "continuity/lighting",
+            "error",
+            "No lighting constant. Name the dominant source and direction.",
+        )
+
+    # --- The motif must actually recur --------------------------------------
+    motif_token = _significant_token(anchors.motif)
+    if motif_token and len(story.scenes) > 2:
+        recurrences = sum(
+            1
+            for scene in story.scenes
+            if motif_token in f"{scene.prompt} {scene.shot_card.sound_anchor}".lower()
+        )
+        if recurrences < 2:
+            push(
+                "motif-recurrence",
                 "warning",
-                f"Off-brand blue in frame: {', '.join(sorted(set(off_blue)))}. Checking for *a* "
-                "blue is not checking for *the* blue — use deep indigo navy-blue, with pale sky "
-                "blue secondary.",
+                f'The motif "{anchors.motif}" appears in {recurrences} scene(s). '
+                "A motif that does not recur is decoration.",
             )
 
-        # Lighting beats palette in a render: a frame can name indigo in its
-        # palette line and still come back entirely amber if the key is a
-        # sunrise. Warn only when nothing pulls the other way.
-        warm = _unnegated(_WARM_GRADE, haystack)
-        if warm and not _REQUIRED_BLUE.search(f"{card.lighting} {card.palette}"):
-            at(
-                scene,
-                "brand/warm-grade",
+    # --- The arc must be complete -------------------------------------------
+    beats = {scene.beat for scene in story.scenes}
+    for required in ("crack", "impact"):
+        if required not in beats:
+            push(
+                "beat-map",
                 "warning",
-                f"The grade is carried by warm light ({', '.join(sorted(set(warm))[:3])}) with no "
-                "brand blue in the lighting or palette line. Lighting beats palette in a render — "
-                "this frame will come back gold, which reads as nostalgia rather than IndiGo.",
+                f'No "{required}" beat in the cut. Never skip the Crack or the Impact.',
             )
 
-        if not _REQUIRED_BLUE.search(f"{card.palette} {prompt}"):
-            at(
-                scene,
-                "brand/palette-blue",
-                "error",
-                "No blue in this scene. Blue must dominate every frame, not just the average of "
-                "the film — Veo has no memory between clips, so the palette must be restated here.",
-            )
+    # --- Every shot must do a job -------------------------------------------
+    functions = [scene.shot_function for scene in story.scenes]
+    if len(functions) > 3 and len(set(functions)) < 3:
+        push(
+            "three-jobs",
+            "warning",
+            "Nearly every shot has the same function. Vary establish / power / pressure / detail / "
+            "reaction / shift / impact.",
+        )
 
-        banned = _banned_colour_hits(f"{card.palette}. {prompt}")
-        if banned:
-            at(
-                scene,
-                "brand/palette-banned",
-                "error",
-                f"Prohibited colours in frame: {', '.join(sorted(banned))}. "
-                "Red and purple palettes are banned.",
-            )
+    return issues
 
-        if _SAFETY_TERMS.search(haystack):
-            at(
-                scene,
-                "brand/safety",
-                "error",
-                "This scene depicts an aviation incident, emergency, or destruction. Absolutely "
-                "prohibited — rewrite the beat entirely rather than softening it.",
-            )
 
-        if _FRANTIC_CAMERA.search(haystack):
-            at(
-                scene,
-                "brand/camera-calm",
-                "warning",
-                "Frantic camera work contradicts effortless. Prefer a calm, motivated move — "
-                "slow push-in, gentle track, or locked-off.",
-            )
+#: Above this share of a prompt being reused verbatim in other scenes, the
+#: repeated mass starts to dominate what the model renders. Set from measured
+#: output: the film that prompted this check ran at roughly 0.67 and produced
+#: six near-identical framings out of seven.
+_BOILERPLATE_LIMIT = 0.45
 
-        if _CHEAP_TONE.search(haystack):
-            at(scene, "brand/tone", "error", "Discount-led language. Never frame IndiGo as cheap.")
+_SENTENCE = re.compile(r"[^.;\n]+[.;]?")
 
-        distress = _unnegated(_DISTRESS, haystack)
-        if distress:
-            at(
-                scene,
-                "brand/distress",
-                "error",
-                f'This scene plays as distress ("{distress[0]}"). Nobody in an IndiGo film is '
-                "frightened or stressed — an airline cannot advertise anxiety. Express the same "
-                "beat as longing, anticipation, or relief instead.",
-            )
 
-        friction = _unnegated(_JOURNEY_FRICTION, haystack)
-        if friction:
-            at(
-                scene,
-                "brand/journey-friction",
-                "error",
-                f'This scene blames the journey ("{friction[0]}"). The obstacle is never IndiGo '
-                "and never flying — flying is what resolves the story. Distance and time apart "
-                "are fair game; delays, queues, and cramped cabins are not.",
-            )
+def _sentences(text: str) -> list[str]:
+    """Prompt sentences, normalised enough that whitespace noise is not a diff."""
+    return [
+        " ".join(part.split())
+        for part in _SENTENCE.findall(text or "")
+        if len(part.strip()) > 24
+    ]
 
-        if not _BRAND_SURFACE.search(haystack):
-            at(
-                scene,
-                "brand/no-brand-surface",
-                "error",
-                "Nothing in this scene reads as IndiGo. With the logo and all type banned from "
-                "the plate, brand has to be carried by what Veo can render — cabin interior, "
-                "crew uniform, aircraft form, or a blue brand object. Otherwise this is stock "
-                "footage with a blue grade.",
-            )
 
-        caps = _all_caps_hits(prompt)
-        if caps:
-            at(
-                scene,
-                "brand/sentence-case",
-                "warning",
-                f"ALL CAPS in the prompt: {', '.join(sorted(set(caps))[:4])}.",
-            )
+def _audit_boilerplate(story: StoryOption) -> list[AuditIssue]:
+    """Flag scenes that are mostly copies of the other scenes.
 
-        if _AVIATION_SUBJECT.search(haystack) and not _HUMAN_PRESENCE.search(haystack):
-            at(
-                scene,
-                "brand/aviation-cliche",
-                "warning",
-                "An aircraft, runway, or terminal with no human presence is a stock aviation "
-                "shot, not a scene. Put a person and a feeling in the frame.",
+    Restating identity across clips is required — Veo has no memory. Restating
+    the palette, the camera grammar, the whole cast and every location is not,
+    and it is what collapses a multi-shot film into one repeated composition.
+    Instructions alone did not hold this line, so it is measured here.
+    """
+    scenes = [scene for scene in story.scenes if (scene.prompt or "").strip()]
+    if len(scenes) < 3:
+        return []
+
+    issues: list[AuditIssue] = []
+    per_scene = {scene.id: _sentences(scene.prompt) for scene in scenes}
+
+    for scene in scenes:
+        own = per_scene[scene.id]
+        # A very short prompt trips the ratio on almost any shared sentence, and
+        # the real fault there is thinness — which `prompt-depth` already
+        # reports. Diagnosing it as boilerplate would send the repair pass off
+        # cutting detail from a prompt that needs more of it.
+        if len(own) < 4 or len((scene.prompt or "").split()) < 60:
+            continue
+        elsewhere = {
+            sentence
+            for other in scenes
+            if other.id != scene.id
+            for sentence in per_scene[other.id]
+        }
+        shared = [sentence for sentence in own if sentence in elsewhere]
+        if not shared:
+            continue
+
+        total = sum(len(sentence) for sentence in own)
+        repeated = sum(len(sentence) for sentence in shared)
+        share = repeated / total if total else 0.0
+
+        if share > _BOILERPLATE_LIMIT:
+            issues.append(
+                AuditIssue(
+                    sceneId=scene.id,
+                    sceneOrder=scene.order,
+                    rule="craft/boilerplate",
+                    severity="error",
+                    message=(
+                        f"{share:.0%} of this prompt is text repeated verbatim in other "
+                        f"scenes ({len(shared)} of {len(own)} sentences). Veo weights the "
+                        "repeated mass, so every shot converges on the same framing. Keep "
+                        "the identity of whoever is in THIS shot and the lighting key; cut "
+                        "the restated palette, camera grammar, prop list, location list and "
+                        "rules, and spend the words on what this shot actually does."
+                    ),
+                )
             )
 
     return issues
+
+
+def audit_story_option(story: StoryOption) -> AuditReport:
+    issues = _audit_story(story)
+    for scene in story.scenes:
+        issues.extend(_audit_scene(scene, story))
+    issues.extend(_audit_boilerplate(story))
+
+    # Craft and brand are separate axes, but they share one report and one repair
+    # loop — a beautifully directed film in the wrong blue is still a reshoot.
+    issues.extend(brand_issues(story))
+
+    errors = sum(1 for issue in issues if issue.severity == "error")
+    warnings = len(issues) - errors
+
+    # A clean story scores 100; each error costs 6 points, each warning 1.5.
+    score = max(0, round(100 - errors * 6 - warnings * 1.5))
+
+    return AuditReport(passed=errors == 0, score=score, issues=issues)
+
+
+def build_repair_brief(story: StoryOption, report: AuditReport) -> str:
+    """Turn failed checks into a brief the model can act on, grouped by scene."""
+    errors = [issue for issue in report.issues if issue.severity == "error"]
+    if not errors:
+        return ""
+
+    story_level = [issue for issue in errors if issue.scene_order is None]
+    by_scene: dict[int, list[AuditIssue]] = {}
+    for issue in errors:
+        if issue.scene_order is None:
+            continue
+        by_scene.setdefault(issue.scene_order, []).append(issue)
+
+    lines = [
+        "The automated dramaturgy, three-detail and brand audit rejected this storyboard.",
+        "Fix every item below and return the corrected storyboard in the same JSON schema.",
+        "Rules prefixed `brand/` are brand-book violations and are not negotiable — never "
+        "satisfy one by removing the scene's substance.",
+        "Keep the scene count, the per-scene `seconds`, the beats and the shot functions exactly "
+        "as they are — only the writing changes.",
+        "",
+    ]
+
+    if story_level:
+        lines.append("## Story level")
+        lines.extend(f"- [{issue.rule}] {issue.message}" for issue in story_level)
+        lines.append("")
+
+    scenes_by_order = {scene.order: scene for scene in story.scenes}
+    for order in sorted(by_scene):
+        scene = scenes_by_order.get(order)
+        suffix = f" — {scene.title} ({scene.seconds}s, {scene.beat})" if scene else ""
+        lines.append(f"## Scene {order}{suffix}")
+        lines.extend(f"- [{issue.rule}] {issue.message}" for issue in by_scene[order])
+        lines.append("")
+
+    return "\n".join(lines)
