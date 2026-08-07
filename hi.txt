@@ -1,10 +1,12 @@
-"""Pre-flight check for the video pipeline. Run from `server/`:
+"""Pinpoint why drawtext fails. Run from `server/`:
 
-    python verify_setup.py
+    python diagnose_drawtext.py
 
-Checks the things that fail silently or fail late — a missing font, an ffmpeg
-built without freetype, a half-copied brand asset, the `_REQUIRED_BLUE` crash.
-Exits non-zero if anything is broken, so it can gate a deploy.
+Builds a ladder of increasingly complex drawtext calls and reports the first
+rung that breaks, then tries font-path escaping variants. ffmpeg's exit code
+alone (-22 / 4294967274 = EINVAL) does not say which argument it disliked, and
+`_filter_path()` only does anything on Windows — so it has never actually run
+until now.
 """
 
 from __future__ import annotations
@@ -16,198 +18,117 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-PASS, FAIL, WARN = "PASS", "FAIL", "WARN"
-results: list[tuple[str, str, str]] = []
-
-
-def record(status: str, name: str, detail: str = "") -> None:
-    results.append((status, name, detail))
-    mark = {PASS: "  ok  ", FAIL: " FAIL ", WARN: " warn "}[status]
-    print(f"[{mark}] {name}" + (f"\n           {detail}" if detail else ""))
-
-
-# --- 1. Modules import -----------------------------------------------------
-
-try:
-    from app.brand import brand_issues
-    from app.brand.assets import font_path, icon, reference_images, wordmark
-    from app.config import settings
-    from app.services.ffmpeg import FFMPEG, FFPROBE, Lockup, Super, burn_brand
-    from app.services.brief import analyse_brief  # noqa: F401
-    from app.services.clips import _generate_chained  # noqa: F401
-    from app.skills.audit import _audit_boilerplate  # noqa: F401
-
-    record(PASS, "Python modules import")
-except Exception as error:  # noqa: BLE001
-    record(FAIL, "Python modules import", f"{type(error).__name__}: {error}")
-    print("\nStop here — nothing else can be checked. Copy the files again.")
-    raise SystemExit(1)
-
-
-# --- 2. The NameError that took the whole brand audit down -----------------
-
-try:
-    from app.domain.models import ContinuityBlock, Scene, ShotCard, StoryOption
-
-    probe_scene = Scene(
-        id="v1", order=1, seconds=8, startsAt=0, beat="context", shotFunction="establish",
-        title="verify", summary="verify",
-        prompt="Anamorphic 40mm. Deep indigo navy cabin, pearl white surfaces.",
-        shotCard=ShotCard(palette="deep indigo navy-blue", lighting="pale sky blue key"),
-    )
-    probe_story = StoryOption(
-        id="v", title="verify", summary="s", treatment="t", angle="a", scenes=[probe_scene],
-        continuity=ContinuityBlock(palette="Deep indigo navy-blue, pearl white"),
-    )
-    issues = brand_issues(probe_story)
-    record(PASS, "Brand audit runs", f"returned {len(issues)} issue(s) on the probe story")
-except NameError as error:
-    record(FAIL, "Brand audit runs",
-           f"{error} — this is the bug that silently disabled ALL brand checks. "
-           "Re-copy server/app/brand/checks.py.")
-except Exception as error:  # noqa: BLE001
-    record(FAIL, "Brand audit runs", f"{type(error).__name__}: {error}")
-
-
-# --- 3. ffmpeg, and specifically drawtext ----------------------------------
-
-
-def run(args: list[str]) -> tuple[int, str]:
-    try:
-        done = subprocess.run(args, capture_output=True, text=True, timeout=60)
-        return done.returncode, (done.stdout or "") + (done.stderr or "")
-    except FileNotFoundError:
-        return 127, "not found"
-    except Exception as error:  # noqa: BLE001
-        return 1, str(error)
-
-
-code, out = run([FFMPEG, "-hide_banner", "-version"])
-if code != 0:
-    record(FAIL, "ffmpeg present", f"{FFMPEG} — {out[:120]}. Set FFMPEG_PATH in .env.")
-else:
-    record(PASS, "ffmpeg present", out.splitlines()[0][:90] if out else "")
-
-code, out = run([FFPROBE, "-hide_banner", "-version"])
-record(PASS if code == 0 else FAIL, "ffprobe present",
-       "" if code == 0 else f"{FFPROBE} — set FFPROBE_PATH in .env.")
-
-# drawtext needs libfreetype compiled in. Some minimal Windows builds omit it,
-# and the failure mode is an ffmpeg error only at render time.
-code, out = run([FFMPEG, "-hide_banner", "-filters"])
-if code == 0 and "drawtext" in out:
-    record(PASS, "ffmpeg has drawtext")
-else:
-    record(FAIL, "ffmpeg has drawtext",
-           "This build cannot draw text, so every super will be dropped. "
-           "Install a full build (gyan.dev 'full' or 'essentials' both include it).")
-
-
-# --- 4. Font ---------------------------------------------------------------
+from app.brand.assets import font_path, wordmark  # noqa: E402
+from app.services.ffmpeg import FFMPEG, _fade_alpha, _filter_path  # noqa: E402
 
 font = font_path()
 if font is None:
-    record(FAIL, "Font for supers",
-           "No usable font found. Set BRAND_FONT_PATH in .env, or drop a .ttf into "
-           "server/app/brand/assets/fonts/.")
+    raise SystemExit("No font resolved — fix that first.")
+
+print(f"ffmpeg    : {FFMPEG}")
+print(f"font      : {font}")
+print(f"escaped   : {_filter_path(font)}")
+print()
+
+work = Path(tempfile.mkdtemp(prefix="dtdiag-"))
+plate = work / "plate.mp4"
+copy_file = work / "copy.txt"
+copy_file.write_text("IndiGo x Japan - 100% ready", encoding="utf-8")
+
+subprocess.run(
+    [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+     "-f", "lavfi", "-i", "color=c=navy:s=320x180:d=1", str(plate)],
+    capture_output=True,
+)
+if not plate.is_file():
+    raise SystemExit("Could not even create a test plate — ffmpeg is not usable.")
+
+
+def attempt(label: str, video_filter: str, extra_inputs: list[str] | None = None) -> bool:
+    """Run one filtergraph. Print PASS, or FAIL with ffmpeg's own words."""
+    out = work / "out.mp4"
+    out.unlink(missing_ok=True)
+    args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", str(plate)]
+    args += extra_inputs or []
+    args += ["-filter_complex", video_filter, "-map", "[v]",
+             "-c:v", "libx264", "-crf", "30", "-pix_fmt", "yuv420p", str(out)]
+
+    done = subprocess.run(args, capture_output=True, text=True)
+    ok = done.returncode == 0 and out.is_file()
+    print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
+    if not ok:
+        stderr = (done.stderr or "").strip().splitlines()
+        for line in stderr[-4:]:
+            print(f"         {line[:150]}")
+        if not stderr:
+            print(f"         (no stderr; exit {done.returncode})")
+    return ok
+
+
+FONT = _filter_path(font)
+TEXTFILE = _filter_path(copy_file)
+
+print("--- Ladder: each rung adds one option --------------------------------")
+rungs: list[tuple[str, str]] = [
+    ("1 minimal text=",
+     f"[0:v]drawtext=fontfile={FONT}:text=hello:fontcolor=white:fontsize=24:x=20:y=20[v]"),
+    ("2 + expansion=none",
+     f"[0:v]drawtext=fontfile={FONT}:text=hello:expansion=none:fontcolor=white:"
+     f"fontsize=24:x=20:y=20[v]"),
+    ("3 textfile= instead of text=",
+     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
+     f"fontsize=24:x=20:y=20[v]"),
+    ("4 + enable=between()",
+     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
+     f"fontsize=24:x=20:y=20:enable=between(t\\,0.1\\,0.9)[v]"),
+    ("5 + alpha= expression",
+     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
+     f"fontsize=24:x=20:y=20:enable=between(t\\,0.1\\,0.9):"
+     f"alpha={_fade_alpha(0.1, 0.9, 0.2)}[v]"),
+    ("6 + shadow",
+     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
+     f"fontsize=24:x=20:y=20:shadowcolor=black@0.35:shadowx=0:shadowy=2[v]"),
+    ("7 + line_spacing",
+     f"[0:v]drawtext=fontfile={FONT}:textfile={TEXTFILE}:expansion=none:fontcolor=white:"
+     f"fontsize=24:x=20:y=20:line_spacing=10[v]"),
+]
+first_bad = None
+for label, graph in rungs:
+    if not attempt(label, graph):
+        first_bad = label
+        break
+
+print()
+print("--- Font path escaping variants (only matter on Windows) -------------")
+raw = str(font)
+variants = {
+    "A current  C\\:/x/y": _filter_path(font),
+    "B double   C\\\\:/x/y": raw.replace("\\", "/").replace(":", "\\\\:"),
+    "C quoted  'C\\:/x/y'": "'" + raw.replace("\\", "/").replace(":", "\\:") + "'",
+    "D plain    C:/x/y": raw.replace("\\", "/"),
+    "E native   C:\\x\\y": raw,
+}
+working = []
+for label, value in variants.items():
+    graph = f"[0:v]drawtext=fontfile={value}:text=hello:fontcolor=white:fontsize=24:x=20:y=20[v]"
+    if attempt(label, graph):
+        working.append(label)
+
+print()
+print("--- Overlay of the brand mark ----------------------------------------")
+mark = wordmark(on_dark=True)
+if mark.is_file():
+    attempt(
+        "overlay + fade",
+        "[1:v]scale=120:-1,format=rgba,fade=t=in:st=0.2:d=0.3:alpha=1,setpts=PTS-STARTPTS[m];"
+        "[0:v][m]overlay=x=(W-w)/2:y=(H-h)/2:enable='gte(t\\,0.2)'[v]",
+        extra_inputs=["-loop", "1", "-t", "1.0", "-i", str(mark)],
+    )
 else:
-    record(PASS, "Font for supers", str(font))
+    print("  (mark missing, skipped)")
 
-
-# --- 5. Brand artwork ------------------------------------------------------
-
-if settings.brand.strip().lower() not in {"indigo"}:
-    record(WARN, f"Brand enforcement is OFF (BRAND={settings.brand!r})",
-           "Every IndiGo guardrail is a no-op and the end card gets NO logo, because "
-           "brand.supers.build_lockups() gates on the active brand. Set BRAND=indigo "
-           "in .env to switch the brand layer on.")
-
-marks = [wordmark(on_dark=True), wordmark(on_dark=False), icon(on_dark=True), icon(on_dark=False)]
-missing = [path for path in marks if not path.is_file()]
-have_marks = not missing
-if missing:
-    record(FAIL, "Brand marks present",
-           "Missing: " + ", ".join(path.name for path in missing) +
-           f" — expected in {marks[0].parent}. Copy the whole "
-           "server/app/brand/assets/ folder as BINARY, not text.")
-else:
-    # A PNG truncated by a text-mode copy still exists but is unreadable.
-    sizes = {path.name: path.stat().st_size for path in marks}
-    tiny = [name for name, size in sizes.items() if size < 2000]
-    if tiny:
-        have_marks = False
-        record(FAIL, "Brand marks present",
-               f"Suspiciously small, likely corrupted by a text-mode copy: {', '.join(tiny)}")
-    else:
-        record(PASS, "Brand marks present", ", ".join(f"{n} {s:,}B" for n, s in sizes.items()))
-
-record(PASS if reference_images() else WARN, "Brand reference images",
-       f"{len(reference_images())} found" if reference_images()
-       else "none found — only affects future keyframe conditioning")
-
-
-# --- 6. The real test: burn a super onto a frame ---------------------------
-
-if font is not None:
-    import asyncio
-
-    async def smoke() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            work = Path(tmp)
-            plate, out = work / "plate.mp4", work / "out.mp4"
-            code, message = run([
-                FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-                "-f", "lavfi", "-i", "color=c=navy:s=640x360:d=2", str(plate),
-            ])
-            if code != 0:
-                record(FAIL, "Super compositing smoke test", message[:160])
-                return
-            # Only composite the mark if it is actually there. Otherwise a
-            # missing PNG fails the whole step and hides whether drawtext — the
-            # part that matters for spelling — works at all.
-            lockups = [Lockup(file=wordmark(on_dark=True), start=0.5, width=200)] if have_marks else []
-            await burn_brand(
-                plate, out, seconds=2.0,
-                supers=[Super(text="IndiGo x Japan - 100% ready", start=0.1, end=1.9,
-                              x="20", y="20", size=28)],
-                lockups=lockups, font=font, work_dir=work / "supers",
-            )
-            if out.is_file() and out.stat().st_size > 1000:
-                what = "text and lockup" if have_marks else "text only (marks missing)"
-                record(PASS, "Super compositing smoke test",
-                       f"rendered {out.stat().st_size:,}B with {what}")
-            else:
-                record(FAIL, "Super compositing smoke test", "produced no output")
-
-    try:
-        asyncio.run(smoke())
-    except Exception as error:  # noqa: BLE001
-        # UpstreamError carries ffmpeg's stderr in `.details`. Without it all
-        # you get is an exit code, and -22 (4294967274 unsigned) means only
-        # "invalid argument" — not which argument.
-        detail = getattr(error, "details", None)
-        message = f"{type(error).__name__}: {error}"
-        if detail:
-            tail = "\n           ".join(str(detail).strip().splitlines()[-6:])
-            message += f"\n           ffmpeg said:\n           {tail}"
-        message += "\n           Run `python diagnose_drawtext.py` to pinpoint it."
-        record(FAIL, "Super compositing smoke test", message)
-
-
-# --- 7. Settings worth eyeballing ------------------------------------------
-
-print("\nSettings:")
-for name in ("brand", "brand_enforce_audit", "veo_model", "veo_resolution",
-             "veo_use_keyframes", "veo_chain_keyframes", "veo_concurrency",
-             "music_provider", "render_fps"):
-    print(f"    {name:22} = {getattr(settings, name, '?')}")
-
-
-# --- Summary ---------------------------------------------------------------
-
-failures = [name for status, name, _ in results if status == FAIL]
-print("\n" + "-" * 62)
-if failures:
-    print(f"{len(failures)} check(s) FAILED: {', '.join(failures)}")
-    raise SystemExit(1)
-print(f"All {len(results)} checks passed.")
+print()
+print("=" * 70)
+print(f"First failing rung : {first_bad or 'none — the ladder passed'}")
+print(f"Working font forms : {', '.join(working) if working else 'NONE'}")
+print(f"Artifacts left in  : {work}")
