@@ -1,192 +1,213 @@
-"""Turn a project's copy into positioned, branded compositing instructions.
+"""Decompose a raw brief before anything else reads it.
 
-``domain.models`` holds *what* a super says and roughly where it sits;
-``services.ffmpeg`` knows how to draw one. This is the layer between: it owns
-type scale, safe areas, and the brand's own end-card composition.
+The pipeline used to treat the brief as one opaque string and hand it to the
+scene writer whole. That is the root of several unrelated-looking failures:
 
-Sizes are expressed as a fraction of frame height so a 1080p render and a 720p
-render look identical rather than one of them looking like a ransom note.
+  * "On-Screen Text: A new horizon awaits." reached Veo as an instruction to
+    render type, and came back as "A new horizon awasts."
+  * "4K HDR" was silently ignored, because nothing in the pipeline is allowed
+    to say "no".
+  * Music direction competed for the scene writer's attention with camera
+    direction, and neither the composer nor Veo ever saw it.
+
+Splitting the brief is what lets each of those go to the right place — or be
+refused out loud. Only ``intent`` is ever allowed into a prompt.
 """
 
 from __future__ import annotations
 
-from ..domain.models import EndCard, SuperPosition, SuperSpec
-from ..services.ffmpeg import Lockup, Super
-from . import active_brand
-from .assets import icon, wordmark
+import re
 
-__all__ = ["build_supers", "build_lockups"]
+from ..brand import brand_system_block
+from ..domain.models import BriefAnalysis, EndCard, SuperSpec
+from ..logging_setup import get_logger
+from .llm import ChatMessage, chat_json
 
-#: Broadcast-style safe area. Copy inside this margin survives the crop that
-#: social platforms apply to a 16:9 master.
-_MARGIN = 0.062
+log = get_logger("brief")
 
-#: Type scale, as a fraction of frame height.
-_BODY = 0.041
-_HEADLINE = 0.055
-_SUBLINE = 0.030
+#: Headings a human writes above the copy they want burnt in. Matching these is
+#: the deterministic fallback for when no model is configured — crude, but it
+#: catches the common shape and is better than passing copy through to Veo.
+_COPY_HEADING = re.compile(
+    r"^\s*(?:on[- ]screen\s+text|on[- ]screen\s+copy|supers?|captions?|titles?|"
+    r"text\s+overlay|end\s?card|final\s+frame|copy)\s*[:\-]?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+#: Asks that read as achievable but are not, on this pipeline. Kept short and
+#: specific: a false positive here tells the user "no" about something we could
+#: in fact do, which is worse than staying quiet.
+_UNSUPPORTED = (
+    (re.compile(r"\b(?:4k|uhd|2160p|8k)\b", re.IGNORECASE),
+     "4K/8K delivery — Veo renders at 1080p maximum. The film will be 1080p."),
+    (re.compile(r"\bhdr\b|\bdolby\s+vision\b", re.IGNORECASE),
+     "HDR — Veo output is SDR. The grade will be delivered in SDR."),
+    (re.compile(r"\b(?:60|120)\s?fps\b", re.IGNORECASE),
+     "High frame rate — clips are conformed to the project frame rate."),
+)
 
 
-#: Multiplier from type size to baseline-to-baseline distance.
-_LINE_HEIGHT = 1.34
+_SYSTEM = """\
+You split an advertising brief into parts that go to different systems. You do \
+not write, improve, critique or expand the brief. You sort it.
 
-#: Clear air between the last narrative super and the end card resolving. Less
-#: than this and the two cross-fade through each other.
-_CARD_GAP = 0.5
+Return JSON with exactly these keys:
+
+  intent      string. The creative brief: story, subject, mood, setting, casting, \
+camera and grade direction. Everything a director needs and nothing else. \
+Remove on-screen copy, duration/resolution/aspect specification, music \
+direction, and prohibition lists — those are captured separately below. Keep \
+the user's own wording wherever you can; you are deleting, not rewriting.
+
+  supers      array. Every piece of text the VIEWER READS ON SCREEN. Each item: \
+{"text": string, "start": number, "end": number, "position": one of \
+"upper-left"|"upper-centre"|"lower-left"|"lower-centre"|"centre"}. If the brief \
+gives timings, use them. If it gives a range like "0-10 sec", use it. If it \
+gives no timing, distribute the lines evenly across the runtime. Copy the text \
+EXACTLY as written, including capitalisation. Do not invent copy that is not \
+in the brief. Empty array if the brief asks for no on-screen text.
+POSITION: unless the brief actually specifies placement, use "upper-left". \
+Narrative supers sit in a corner so they do not cover the face or the action; \
+dead-centre type over a subject is what an amateur edit looks like. Reserve \
+"centre" for the end card, which is handled separately below.
+
+  endCard     object. The closing brand frame, if the brief describes one: \
+{"enabled": bool, "headline": string|null, "subline": string|null, \
+"mark": "wordmark"|"icon"|"none", "seconds": number}. A "final frame" or "logo \
+reveal" instruction belongs here, not in supers. enabled=false if absent.
+
+  avoid       array of strings. Things the brief says must NOT appear. Split a \
+comma-separated negative prompt into individual items.
+
+  music       string or null. Music and sound-design direction, verbatim.
+
+Rules:
+- Text a CHARACTER reads (a sign, a boarding pass, a phone screen) is NOT a \
+super. It stays in intent. Supers are only what is composited over the picture.
+- Never put copy in both intent and supers.
+- If the brief contains no on-screen text at all, supers is [] and endCard.enabled \
+is false. Do not helpfully invent an end card.
+"""
 
 
-def _x(position: SuperPosition, height: int) -> str:
-    """The ffmpeg x expression. ``tw`` is the measured text width."""
-    if position in {"upper-centre", "lower-centre", "centre"}:
-        return "(W-tw)/2"
-    return str(int(height * _MARGIN))
+def _fallback(raw: str) -> BriefAnalysis:
+    """Split the brief without a model.
 
-
-def _y(position: SuperPosition, *, line: int, lines: int, size: int, height: int) -> str:
-    """The ffmpeg y expression for one line of a stacked block.
-
-    Line height is computed from the type size rather than read back from
-    ffmpeg's ``th``, because ``th`` measures whatever that single line happens
-    to contain — a line of all-caps and a line with descenders would other‑wise
-    sit at different pitches inside the same super.
+    Cuts at the first copy heading and treats everything above it as intent.
+    Crude, and it does not recover timings — but it stops copy reaching Veo,
+    which is the failure that matters.
     """
-    margin = int(height * _MARGIN)
-    step = int(size * _LINE_HEIGHT)
-
-    if position in {"upper-left", "upper-centre"}:
-        return str(margin + line * step)
-    if position in {"lower-left", "lower-centre"}:
-        return f"H-{margin + (lines - line) * step}"
-    return f"(H-{lines * step})/2+{line * step}"
+    match = _COPY_HEADING.search(raw)
+    intent = raw[: match.start()].strip() if match else raw.strip()
+    if match:
+        log.info("No model configured; split the brief at %r.", match.group(0).strip())
+    return BriefAnalysis(intent=intent or raw.strip(), unsupported=_unsupported_in(raw))
 
 
-def _stack(
-    text: str,
-    *,
-    position: SuperPosition,
-    start: float,
-    end: float,
-    size: int,
-    height: int,
-    fade: float = 0.5,
-    y_offset: int = 0,
-) -> list[Super]:
-    """One ``Super`` per line.
+def _unsupported_in(raw: str) -> list[str]:
+    return [note for pattern, note in _UNSUPPORTED if pattern.search(raw)]
 
-    drawtext will not render a multi-line block cleanly: with ``expansion=none``
-    it breaks the line *and* draws a tofu glyph where the newline was. Splitting
-    here is what stops a box appearing mid-super, and it buys exact control over
-    leading as a side effect.
+
+_POSITIONS = frozenset(
+    {"upper-left", "upper-centre", "lower-left", "lower-centre", "centre"}
+)
+
+
+def _coerce_supers(items: object, seconds: int) -> list[SuperSpec]:
+    """Build ``SuperSpec``s from model output, dropping anything malformed.
+
+    A super with a broken time window is worse than a missing one: it either
+    never appears or sits on screen for the whole film.
     """
-    lines = [line for line in text.splitlines() if line.strip()]
-    if not lines:
+    if not isinstance(items, list):
         return []
 
-    drawn: list[Super] = []
-    for index, line in enumerate(lines):
-        y = _y(position, line=index, lines=len(lines), size=size, height=height)
-        if y_offset:
-            y = f"{y}+{y_offset}"
-        drawn.append(
-            Super(
-                text=line,
+    supers: list[SuperSpec] = []
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        text = str(entry.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            start = max(0.0, float(entry.get("start", 0)))
+            end = min(float(seconds), float(entry.get("end", 0)))
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        position = entry.get("position")
+        supers.append(
+            SuperSpec(
+                text=text,
                 start=start,
                 end=end,
-                x=_x(position, height),
-                y=y,
-                size=size,
-                fade=fade,
+                position=position if position in _POSITIONS else "upper-left",  # type: ignore[arg-type]
             )
         )
-    return drawn
-
-
-def build_supers(
-    items: list[SuperSpec],
-    end_card: EndCard,
-    *,
-    seconds: float,
-    height: int,
-) -> list[Super]:
-    """Every line of burnt-in copy for the film, in timeline order."""
-    supers: list[Super] = []
-
-    # A brief that says "30-50 sec" for its last line and also asks for an end
-    # card is describing a collision: the line would still be on screen when the
-    # lockup resolves. Narrative copy yields to the end card.
-    card_start = max(0.0, seconds - end_card.seconds) if end_card.enabled else seconds
-    last_moment = max(0.0, card_start - _CARD_GAP) if end_card.enabled else seconds
-
-    for item in items:
-        start = max(0.0, item.start)
-        end = min(min(seconds, item.end), last_moment)
-        if end - start < 0.4:
-            # Entirely swallowed by the end card. Dropping it is right: a super
-            # that flashes for a third of a second reads as a glitch.
-            continue
-        supers += _stack(
-            item.text,
-            position=item.position,
-            start=start,
-            end=end,
-            size=int(height * _BODY),
-            height=height,
-        )
-
-    if not end_card.enabled:
-        return supers
-
-    # The card resolves over the tail of the film. The mark sits optically
-    # above centre and the copy below it, so neither fights the other.
-    start = max(0.0, seconds - end_card.seconds)
-
-    if end_card.headline:
-        supers += _stack(
-            end_card.headline,
-            position="centre",
-            start=start + 0.6,
-            end=seconds,
-            size=int(height * _HEADLINE),
-            height=height,
-            fade=0.7,
-            y_offset=int(height * 0.085),
-        )
-    if end_card.subline:
-        supers += _stack(
-            end_card.subline,
-            position="centre",
-            start=start + 1.0,
-            end=seconds,
-            size=int(height * _SUBLINE),
-            height=height,
-            fade=0.7,
-            y_offset=int(height * 0.165),
-        )
-
     return supers
 
 
-def build_lockups(end_card: EndCard, *, seconds: float, width: int) -> list[Lockup]:
-    """The brand mark for the end card, or nothing when brand is off.
+def _coerce_end_card(value: object) -> EndCard:
+    if not isinstance(value, dict) or not value.get("enabled"):
+        return EndCard(enabled=False)
+    mark = value.get("mark")
+    return EndCard(
+        enabled=True,
+        headline=(str(value["headline"]).strip() if value.get("headline") else None),
+        subline=(str(value["subline"]).strip() if value.get("subline") else None),
+        mark=mark if mark in {"wordmark", "icon", "none"} else "wordmark",
+        seconds=float(value.get("seconds") or 4.0),
+    )
 
-    White cut only: the card resolves over sky, cloud or runway, all of which
-    are mid-to-bright but never light enough for the blue cut to hold.
+
+async def analyse_brief(raw: str, *, seconds: int) -> BriefAnalysis:
+    """Split a raw brief into intent, copy, constraints and refusals.
+
+    Falls back to a deterministic split when no model is configured, so the
+    pipeline still boots and still keeps copy away from Veo.
     """
-    if not end_card.enabled or end_card.mark == "none" or active_brand() != "indigo":
-        return []
+    raw = (raw or "").strip()
+    if not raw:
+        return BriefAnalysis(intent="")
 
-    file = wordmark(on_dark=True) if end_card.mark == "wordmark" else icon(on_dark=True)
-    # The lockup reads at about a quarter of frame width; smaller and the
-    # 20-dot device closes up, larger and it stops feeling like a sign-off.
-    target = int(width * (0.26 if end_card.mark == "wordmark" else 0.10))
-
-    return [
-        Lockup(
-            file=file,
-            start=max(0.0, seconds - end_card.seconds),
-            width=target,
-            x="(W-w)/2",
-            y="(H-h)/2-" + str(int(width * 0.035)),
-            fade=0.8,
-        )
+    messages: list[ChatMessage] = [
+        {"role": "system", "content": _SYSTEM + brand_system_block(safety_only=True)},
+        {
+            "role": "user",
+            "content": f"Runtime: {seconds} seconds.\n\n--- BRIEF ---\n{raw}\n--- END ---",
+        },
     ]
+
+    try:
+        payload = await chat_json(messages)
+    except Exception as error:  # noqa: BLE001 - any upstream failure degrades the same way
+        log.warning("Brief analysis failed, falling back to a heading split. %s", error)
+        return _fallback(raw)
+
+    if not isinstance(payload, dict):
+        return _fallback(raw)
+
+    intent = str(payload.get("intent") or "").strip()
+    if not intent:
+        log.warning("Brief analysis returned no intent; keeping the raw brief.")
+        intent = raw
+
+    avoid = [str(item).strip() for item in payload.get("avoid") or [] if str(item).strip()]
+    music = payload.get("music")
+
+    analysis = BriefAnalysis(
+        intent=intent,
+        supers=_coerce_supers(payload.get("supers"), seconds),
+        end_card=_coerce_end_card(payload.get("endCard")),
+        avoid=avoid,
+        unsupported=_unsupported_in(raw),
+        music=str(music).strip() if music else None,
+    )
+
+    log.info(
+        "Brief split: intent %d chars (from %d), %d super(s), end card %s, %d unsupported.",
+        len(analysis.intent), len(raw), len(analysis.supers),
+        "on" if analysis.end_card.enabled else "off", len(analysis.unsupported),
+    )
+    return analysis
