@@ -1,196 +1,323 @@
-# Universal rules — apply to every video model
-
-These rules apply to Seedance, Kling, Veo, and any other AI video generator. They exist because all current video models share a common failure mode. They reward concrete physical direction. They punish abstraction, contradictions, and keyword spam. Ignoring these produces muddy generations regardless of which model you target.
-
-Read this file after `dramaturgy.md` and before any model-specific file. The model-specific syntax sits on top of these rules — it does not replace them.
-
-## Contents
-
-1. The non-negotiable. Details intensify emotion (Details Law)
-2. U1. Universal prompt skeleton
-3. U2. Weight-at-start
-4. U3. Show don't tell
-5. U4. Natural language beats tag spam
-6. U5. One primary camera move per shot
-7. U6. Precise lens language
-8. U7. Character consistency anchor
-9. U8. No contradictions
-10. U9. Concrete physical detail over abstract concept
-11. U10. Duration discipline
-12. U11. The final image rule
-13. U12. The three-detail check (audit before sending)
-14. U13. Reference role discipline
-15. U14. Priority declaration
-
----
-
-## 1. The non-negotiable. Details intensify emotion. Laziness kills the prompt.
-
-This is the most violated rule in AI video, and the one reason most multi-shot prompts fail. The dramaturgy is fine — the writer just got lazy on a single shot, and that one thin shot drags the whole sequence into mush.
-
-Every shot in every prompt owns at least three concrete physical details:
-
-1. **One environmental pressure.** Cold blue refrigerator light. Steam off boiling water. Wet asphalt. Flickering fluorescent. Dripping tap. Curtain breathing in the AC. (Kurosawa: weather is a character. See `dramaturgy.md` §9.)
-2. **One physical micro-action.** Jaw locks. Knuckles whiten on the fork. Lips press into a line. He swallows hard. Fingers curl against the doorframe. (Show, not tell — the body is the only place where feelings render.)
-3. **One sound anchor or visual motif.** Stomach growl at 2.3s. Reflection in a darkened phone screen. Rain on the same windowpane. A single fluorescent flicker before each cut.
-
-If a shot has none of these — it is filler. Delete it or rewrite it. No exceptions for "establishing", "transition", or "hero product" shots — those are exactly the shots that go lazy first.
-
-Words that do not render and mark the writer being lazy:
-
-- "cinematic", "professional", "high quality", "masterpiece", "stunning", "epic", "amazing"
-- "beautiful lighting", "dynamic camera", "intense moment", "powerful scene"
-- "he is sad", "she is angry", "he is afraid" — emotions named without a body
-
-Replace each with concrete physical facts. The full theory of why this works lives in `dramaturgy.md` §2 (Second law).
-
-## 2. U1. Universal prompt skeleton
-
-Build every prompt from these layers, roughly in this order:
-
-```text
-[Subject / Character]
-[Action / Motion]
-[Scene / Environment]
-[Camera / Shot / Lens]
-[Lighting / Atmosphere]
-[Style / Mood / Palette]
-[Sound / Audio]
-[Duration / Aspect ratio / Resolution]
-[Continuity rules]
-[Negative constraints — only if the model supports them]
-```
-
-Model-specific skeletons live in their reference files (`seedance.md`, `kling.md`, `veo.md`). For dramatic / multi-shot / character-locked Seedance work, the production-grade 11-block skeleton in `seedance.md` §6 supersedes this generic skeleton.
-
-## 3. U2. Weight-at-start
-
-Generators put more attention on the first 30-40% of tokens. Lead with subject and action. Style modifiers go at the end. Camera, lighting, and environment live in the middle.
-
-## 4. U3. Show don't tell
-
-The model cannot render feelings. It renders bodies. Translate every emotion into a physical action.
-
-- Bad. "He is scared."
-- Good. "His jaw locks. He stops breathing for one beat. His fingers curl against the doorframe."
-
-Calibration: for one emotional transition, **2-4 observable cues** (eye movement, brow tension, mouth, breathing, throat swallow, hands) are enough. Fewer leaves the model guessing; more reads as overacting.
-
-## 5. U4. Natural language beats tag spam
-
-Video models are not image models. Tag stuffing like "masterpiece, 4k, cinematic, beautiful" fails. Write in full cinematic sentences as if briefing a human DOP.
-
-## 6. U5. One primary camera move per shot
-
-Do not stack three camera moves in a 5-second clip. Pick one dominant move (dolly-in, pan, tracking, static). Layer a subtle micro-adjustment if needed (slight handheld shake, gentle rack focus). More than that produces visual chaos.
-
-## 7. U6. Precise lens language
-
-State the lens. "Shot on 50mm" works across all major models. Quick map:
-
-- 24mm. wide, immersive, exaggerated space
-- 35mm. natural documentary
-- 50mm. intimate, human perspective
-- 85mm. portrait, compressed background
-- 100mm macro. texture, detail
-- anamorphic 40mm. cinematic widescreen
-
-Full vocabulary in `camera-lighting-vocabulary.md`.
-
-## 8. U7. Character consistency anchor
-
-Anchor identity at the START of every prompt. In a multi-clip sequence, repeat the full identity block in every single prompt. Video generators have no memory between generations. Treat every clip like briefing a brilliant intern with memory damage.
-
-Identity block must include: face shape, eye color, skin tone. Hair color, length, style. Facial hair. Exact clothing items. Distinctive accessories.
-
-**Repeat identity. Do not repeat the film.** This rule covers the people the camera can see in *this* shot, and nothing else. Two failures come from over-applying it, and both cost more than a small continuity drift:
-
-- **Describing absent characters renders them.** A prompt is a description of a frame, not a cast list. Name the whole ensemble in every clip and the ones who are not in the scene arrive anyway — a flight attendant standing in a train carriage, a child in an empty boardroom.
-- **Repeated mass flattens the film.** When most of a prompt is identical to the previous prompt, the model weights what repeats and every shot converges on the same composition. Eight perfectly consistent identical framings is a failed sequence.
-
-So restate per clip: the identity and wardrobe of whoever is physically in that shot, the lighting key, and the two or three palette colours actually in frame. Keep locations, prop inventories, camera-grammar manifests and film-level rules out of the prompt — they are your constraints as the writer, not text to paste. If more than roughly a third of a prompt could be moved unchanged into a different scene, that surplus is costing you the shot.
-
-Prohibitions belong in the negative prompt. Naming a thing inside a positive prompt in order to forbid it is one of the most reliable ways to summon it (see `fixes-and-skeletons.md`).
-
-Model-specific syntax for character locking:
-- Seedance: `@img1` reference + identity block (see `seedance.md` §10)
-- Kling 1.x – 2.x: Element Binding with 3-4 reference images (see `kling.md` §7)
-- Kling 3.0: in-prompt `[Character A: <full identity>]` labels, optionally combined with Element Library (see `kling.md` §3)
-- Veo: reference ingredients / JSON identity (see `veo.md`)
-
-## 9. U8. No contradictions
-
-The model obeys the strongest signal. Contradictions produce artifacts.
-
-- Bad. "Still pond" + "flowing water."
-- Bad. "Close-up" + "wide cinematic landscape."
-- Bad. "Quiet moment" + "explosive action."
-
-## 10. U9. Concrete physical detail over abstract concept
-
-"Loneliness" does not render. "A man sitting alone, shoulders collapsed, face lit by blue phone glow, empty bottles on the table" does.
-
-This is the same rule as the Details Law in section 1, viewed from a different angle. Section 1 is the audit. This is the principle.
-
-Corollary — **consequence prompting**. Current models render real physics, so describe the consequence of an action, not just the action: tires kick up water curtains; the hand grips the jar and the lid actually unscrews; the impact shatters the surface into a spider-web pattern. Action chains where each step forces the next also work as QA — a broken chain exposes a failed generation at a glance.
-
-## 11. U10. Duration discipline
-
-Most models work in 5-10 second clips. Longer narratives live in multiple clips stitched in the editor. Do not cram a 30-second story into a 5-second prompt.
-
-Default splits:
-
-- 10s = 2 clips × 5s
-- 15s = 3 × 5s
-- 30s = 6 × 5s
-- 60s = 12 × 5s
-
-Three exceptions:
-- Seedance — 2-3 shots inside one 5-10s clip via "Cut to" syntax (see `seedance.md` §8).
-- Kling 3.0 — up to 6 shots inside one generation, up to 15s, with native audio and dialogue (see `kling.md` §3).
-- Seedance 2.5 — up to 30s in one pass. The working structure is consecutive stages, each with one primary state change and an explicit visible end state (see `seedance-25.md` §6).
-
-## 12. U11. The final image rule
-
-Every clip needs a clear final frame. The model uses the ending as emotional destination.
-
-- "Ends on his face frozen in the blue refrigerator light" beats "he stands there sadly."
-
-The final image is also one of the five anchors (see `dramaturgy.md` §13). Naming it is non-negotiable.
-
-## 13. U12. The three-detail check (audit before sending)
-
-Before returning the final prompt to the user, audit every shot. Each shot must carry at least one of each:
-
-1. Environmental pressure (lighting, weather, surface, sound of the room).
-2. Physical micro-action on the body (jaw, hand, breath, eye, gesture).
-3. Sound anchor or recurring visual motif tied to the emotional spine.
-
-If a shot has zero, fix it before sending. If a shot has only one, ask whether you can make it two without bloat. The strongest prompts in this skill's worked examples always have all three.
-
-Empty descriptors that fail this check: "establishing wide shot", "beautiful lighting", "dynamic camera move", "cinematic look", "intense moment", "dramatic close-up". Replace each with three concrete physical facts.
-
-## 14. U13. Reference role discipline
-
-Wherever a model accepts reference assets (Seedance `@Image/@Video/@Audio`, Kling Element Binding and Omni references, Veo ingredients), **every asset gets an explicit role written in the prompt**: what it defines (appearance, motion, voice, scene, camera path) and what to ignore ("Do not use the image background", "Do not use the people in the image").
-
-- Bind each subject individually: "<Character A> corresponds to @Image 1 — use only the appearance, hairstyle, and clothing." Never the collective form "@Images 1 through 4 define four characters respectively" — it does not state which is which.
-- Do not restate what a reference already defines. If a video reference carries the motion, name only the attributes to inherit; re-describing every action fights the reference.
-- More assets is not more control. Control comes from role clarity; unassigned assets bleed into the frame.
-
-Model-specific limits and templates live in the model files (`seedance-25.md` §5 has the fullest system).
-
-## 15. U14. Priority declaration
-
-When a prompt is overloaded (10+ scenes, many subjects, spatial tricks), adding more description makes it worse. Instead, declare priorities — the model cannot know what matters most unless told what to protect and what to sacrifice:
-
-1. The core subject that must survive every shot.
-2. The key shots that must appear.
-3. The transitions where the model may freestyle.
-4. The mandatory final frame.
-
-This ranks above prompt-length discipline: a shorter prompt with declared priorities beats a longer one without them.
-
----
-
-*Author: Serge Shima ([t.me/aimastersme](https://t.me/aimastersme) · [sergeshima.com](https://sergeshima.com) · [aimasters.me](https://aimasters.me)) · License: CC BY 4.0 — attribution required · Source: [smixs/visual-skills](https://github.com/smixs/visual-skills)*
+"""One scene in, one clip file out.
+
+This is where the "Veo only does 8 seconds" constraint stops being a problem and
+becomes a loop: each scene of the plan is generated on its own, written to
+``storage/projects/<id>/clips/``, measured, and recorded back on the project.
+The renderer later accumulates whatever is ready.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+from ..config import settings
+from ..domain.formats import veo_aspect_for
+from ..domain.models import Clip, Project, Scene, StoryOption, now_iso
+from ..errors import BadRequest, Conflict
+from ..logging_setup import get_logger
+from ..storage import clips_dir, ensure_dir, media_url, resolve_in_storage, to_storage_relative, work_dir
+from . import veo
+from .veo import InlineAsset
+from .ffmpeg import extract_poster, probe
+from .imagegen import asset_from_image, generate_keyframe
+from .jobs import JobContext, map_with_concurrency
+from .store import require_project, update_project
+
+log = get_logger("clips")
+
+
+def selected_story(project: Project) -> StoryOption:
+    story = next((s for s in project.stories if s.id == project.selected_story_id), None)
+    if story is None:
+        raise BadRequest("No story is selected for this project yet.")
+    if not story.scenes:
+        raise BadRequest("The selected story has no scenes yet. Generate the storyboard first.")
+    return story
+
+
+def _find_scene(project: Project, scene_id: str) -> tuple[StoryOption, Scene]:
+    story = selected_story(project)
+    scene = next((s for s in story.scenes if s.id == scene_id), None)
+    if scene is None:
+        raise BadRequest(f"Scene {scene_id} is not part of the selected story.")
+    return story, scene
+
+
+def sync_clips(project: Project) -> list[Clip]:
+    """Derive the clip rows from the selected story, keeping what is generated."""
+    story = next((s for s in project.stories if s.id == project.selected_story_id), None)
+    if story is None:
+        return []
+
+    existing = {clip.scene_id: clip for clip in project.clips}
+    clips: list[Clip] = []
+
+    for scene in story.scenes:
+        previous = existing.get(scene.id)
+        # A scene whose length changed invalidates the clip generated from the
+        # old version — the renderer would otherwise pad or cut the wrong shot.
+        stale = previous is not None and previous.seconds != scene.seconds
+
+        if previous is not None and not stale:
+            refreshed = previous.model_copy(update={"order": scene.order, "seconds": scene.seconds})
+            clips.append(refreshed)
+        else:
+            clips.append(
+                Clip(sceneId=scene.id, order=scene.order, status="idle", seconds=scene.seconds)
+            )
+
+    return clips
+
+
+async def _patch_clip(project_id: str, scene_id: str, **patch) -> None:
+    def mutate(project: Project) -> Project:
+        project.clips = [
+            clip.model_copy(update=patch) if clip.scene_id == scene_id else clip
+            for clip in project.clips
+        ]
+        return project
+
+    await update_project(project_id, mutate)
+
+
+async def generate_scene_clip(
+    project: Project,
+    scene_id: str,
+    *,
+    force: bool = False,
+    on_progress=None,
+    seed_frame: InlineAsset | None = None,
+) -> Clip:
+    """Generate one scene's clip.
+
+    ``seed_frame`` is the previous clip's final frame, supplied by the chained
+    path in ``generate_all_clips``. It takes precedence over a generated
+    keyframe: a real frame of the film we are already making is a stronger
+    continuity anchor than a fresh still of what that frame should have been.
+    """
+    story, scene = _find_scene(project, scene_id)
+    current = next((clip for clip in project.clips if clip.scene_id == scene_id), None)
+
+    if current and current.status == "generating" and not force:
+        raise Conflict(f"Scene {scene.order} is already generating.")
+    if current and current.status == "ready" and not force:
+        return current
+
+    aspect = veo_aspect_for(project.brief.ratio)
+    destination = Path(clips_dir(project.id)) / f"scene-{scene.order:02d}.mp4"
+    poster = destination.with_suffix(".jpg")
+
+    await _patch_clip(
+        project.id,
+        scene_id,
+        status="generating",
+        progress=0.0,
+        error=None,
+        started_at=now_iso(),
+        attempts=(current.attempts if current else 0) + 1,
+    )
+
+    async def report(fraction: float, message: str) -> None:
+        if on_progress is not None:
+            result = on_progress(fraction, message)
+            if asyncio.iscoroutine(result):
+                await result
+        await _patch_clip(project.id, scene_id, progress=fraction)
+
+    try:
+        # Lock continuity with a first frame: the previous clip's tail if we are
+        # chaining, otherwise an optional generated still.
+        first_frame = seed_frame
+        if first_frame is None and settings.veo_use_keyframes:
+            await report(0.02, "Rendering the opening frame…")
+            first_frame = await generate_keyframe(scene, story, aspect)
+
+        generated = await veo.generate_clip(
+            destination,
+            prompt=scene.prompt,
+            seconds=scene.seconds,
+            aspect_ratio=aspect,
+            negative_prompt=scene.negative_prompt,
+            model=project.model or None,
+            first_frame=first_frame,
+            on_progress=report,
+        )
+
+        info = await probe(generated.file)
+
+        try:
+            await extract_poster(generated.file, poster, min(0.5, max(0.0, info.seconds / 2)))
+            poster_url = media_url(to_storage_relative(poster))
+        except Exception as error:  # noqa: BLE001 — a missing poster is cosmetic
+            log.warning("Poster extraction failed for scene %d: %s", scene.order, error)
+            poster_url = None
+
+        if info.seconds < scene.seconds - 0.5:
+            log.warning(
+                "Scene %d came back at %.2fs for a %ds request; the renderer will hold the last "
+                "frame to fill the slot.",
+                scene.order, info.seconds, scene.seconds,
+            )
+
+        relative = to_storage_relative(generated.file)
+        await _patch_clip(
+            project.id,
+            scene_id,
+            status="ready",
+            progress=1.0,
+            actual_seconds=info.seconds,
+            file=relative,
+            url=media_url(relative),
+            poster_url=poster_url,
+            operation=generated.operation,
+            error=None,
+            completed_at=now_iso(),
+        )
+
+        log.info("Scene %d ready (%.2fs).", scene.order, info.seconds)
+        refreshed = await require_project(project.id)
+        return next(clip for clip in refreshed.clips if clip.scene_id == scene_id)
+
+    except asyncio.CancelledError:
+        await _patch_clip(project.id, scene_id, status="idle", progress=0.0, error=None)
+        raise
+    except Exception as error:
+        await _patch_clip(
+            project.id,
+            scene_id,
+            status="failed",
+            progress=0.0,
+            error=str(error),
+            completed_at=now_iso(),
+        )
+        raise
+
+
+async def generate_all_clips(
+    project: Project, context: JobContext, *, force: bool = False
+) -> dict[str, int]:
+    """Generate every scene that is not already done, ``VEO_CONCURRENCY`` at a time.
+
+    One clip failing does not stop the others — the UI shows which one broke and
+    offers a retry, which is much better than losing eleven good generations.
+    """
+    story = selected_story(project)
+
+    by_scene = {clip.scene_id: clip for clip in project.clips}
+    pending = [
+        scene
+        for scene in story.scenes
+        if force or (by_scene.get(scene.id) is None or by_scene[scene.id].status != "ready")
+    ]
+
+    if not pending:
+        return {"ready": len(story.scenes), "failed": 0}
+
+    log.info(
+        "Generating %d clip(s) for project %s, %d at a time.",
+        len(pending), project.id, settings.veo_concurrency,
+    )
+
+    per_scene: dict[str, float] = {}
+
+    def publish() -> None:
+        done = sum(per_scene.values())
+        context.progress(
+            done / len(pending), f"{int(done)} of {len(pending)} clips generated"
+        )
+
+    async def run(scene: Scene, seed_frame: InlineAsset | None = None) -> Clip:
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+
+                async def track(fraction: float, _message: str) -> None:
+                    per_scene[scene.id] = fraction
+                    publish()
+
+                return await generate_scene_clip(
+                    project, scene.id, force=True, on_progress=track, seed_frame=seed_frame
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                if attempt >= settings.veo_max_attempts:
+                    raise
+                log.warning(
+                    "Scene %d failed on attempt %d; retrying. %s", scene.order, attempt, error
+                )
+
+    if settings.veo_chain_keyframes:
+        return await _generate_chained(project, pending, run_scene=run, publish=publish)
+
+    results = await map_with_concurrency(pending, settings.veo_concurrency, run)
+    failed = sum(1 for result in results if isinstance(result, BaseException))
+
+    return {"ready": len(pending) - failed, "failed": failed}
+
+
+async def _tail_frame(clip: Clip, work: Path) -> InlineAsset | None:
+    """The last frame of a finished clip, as a seed for the next one.
+
+    Sampled a beat before the true end: the final frame of a generated clip is
+    the one most likely to carry compression mush or the start of a fade, and
+    seeding the next shot with a smeared frame propagates the smear.
+    """
+    if not clip.file:
+        return None
+    try:
+        source = resolve_in_storage(clip.file)
+        info = await probe(source)
+        at = max(0.0, (info.seconds or 0.0) - 0.15)
+        frame = work / f"tail-{clip.scene_id}.jpg"
+        await extract_poster(source, frame, at)
+        return asset_from_image(frame)
+    except Exception as error:  # noqa: BLE001 — chaining is an optimisation
+        log.warning("Could not take a tail frame from %s: %s", clip.scene_id, error)
+        return None
+
+
+async def _generate_chained(
+    project: Project,
+    pending: list[Scene],
+    *,
+    run_scene,
+    publish,
+) -> dict[str, int]:
+    """Generate clips in story order, each seeded with the previous tail frame.
+
+    Serial by necessity — clip N+1 cannot start until N has produced a frame.
+    That is the cost of the feature, and it is why it is off by default.
+
+    A failure breaks the chain but not the run: the next scene simply starts
+    from its own keyframe, which is exactly the behaviour without chaining.
+    """
+    ordered = sorted(pending, key=lambda scene: scene.order)
+    work = Path(work_dir(project.id)) / "chain"
+    ensure_dir(work)
+
+    log.info("Chaining %d clip(s) for project %s in story order.", len(ordered), project.id)
+
+    ready = 0
+    failed = 0
+    seed: InlineAsset | None = None
+
+    for scene in ordered:
+        try:
+            clip = await run_scene(scene, seed_frame=seed)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 — one bad clip must not stop the film
+            log.warning("Scene %d failed; the chain restarts from scene %d. %s",
+                        scene.order, scene.order + 1, error)
+            failed += 1
+            seed = None
+            continue
+
+        ready += 1
+        seed = await _tail_frame(clip, work)
+        publish()
+
+    return {"ready": ready, "failed": failed}
