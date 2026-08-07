@@ -1,40 +1,749 @@
-(venv) C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server>py verify_setup.py
-[  ok  ] Python modules import
-[  ok  ] Brand audit runs
-           returned 0 issue(s) on the probe story
-[  ok  ] ffmpeg present
-           ffmpeg version 9.0-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers
-[  ok  ] ffprobe present
-[  ok  ] ffmpeg has drawtext
-[  ok  ] Font for supers
-           C:\Windows\Fonts\GOTHIC.TTF
-[ warn ] Brand enforcement is OFF (BRAND='none')
-           Every IndiGo guardrail is a no-op and the end card gets NO logo, because brand.supers.build_lockups() gates on the active brand. Set BRAND=indigo in .env to switch the brand layer on.
-[  ok  ] Brand marks present
-           wordmark-white.png 28,553B, wordmark-blue.png 28,666B, icon-white.png 57,778B, icon-blue.png 58,360B
-[  ok  ] Brand reference images
-           8 found
-[ FAIL ] Super compositing smoke test
-           UpstreamError: brand failed (exit 4294967274).
-           ffmpeg said:
-           [AVFilterGraph @ 000001711d150d00] No option name near '/Windows/Fonts/GOTHIC.TTF:textfile=C:/Users/ADITYA~1.CHA/AppData/Local/Temp/tmpfcrgtxne/supers/super-00.txt:expansion=none:fontcolor=white:fontsize=28:x=20:y=20:enable=between(t,0.100,1.900):alpha=max(0,min(1,min((t-0.100)/0.500,(1.900-t)/0.500))):line_spacing=10:shadowcolor=black@0.35:shadowx=0:shadowy=2'
-           [AVFilterGraph @ 000001711d150d00] Error parsing a filter description around: [txt0];[1:v]scale=200:-1,format=rgba,fade=t=in:st=0.500:d=0.600:alpha=1,setpts=PTS-STARTPTS[mark0];[txt0][mark0]overlay=x=(W-w)/2:y=(H-h)/2:enable='gte(t\,0.500)'[ov0]
-           [AVFilterGraph @ 000001711d150d00] Error parsing filterchain '[0:v]drawtext=fontfile=C\:/Windows/Fonts/GOTHIC.TTF:textfile=C\:/Users/ADITYA~1.CHA/AppData/Local/Temp/tmpfcrgtxne/supers/super-00.txt:expansion=none:fontcolor=white:fontsize=28:x=20:y=20:enable=between(t\,0.100\,1.900):alpha=max(0\,min(1\,min((t-0.100)/0.500\,(1.900-t)/0.500))):line_spacing=10:shadowcolor=black@0.35:shadowx=0:shadowy=2[txt0];[1:v]scale=200:-1,format=rgba,fade=t=in:st=0.500:d=0.600:alpha=1,setpts=PTS-STARTPTS[mark0];[txt0][mark0]overlay=x=(W-w)/2:y=(H-h)/2:enable='gte(t\,0.500)'[ov0]' around: [txt0];[1:v]scale=200:-1,format=rgba,fade=t=in:st=0.500:d=0.600:alpha=1,setpts=PTS-STARTPTS[mark0];[txt0][mark0]overlay=x=(W-w)/2:y=(H-h)/2:enable='gte(t\,0.500)'[ov0]
-           Error : Invalid argument
-           Run `python diagnose_drawtext.py` to pinpoint it.
+"""The accumulation engine.
 
-Settings:
-    brand                  = none
-    brand_enforce_audit    = True
-    veo_model              = veo-3.1-generate-preview
-    veo_resolution         = 1080p
-    veo_use_keyframes      = False
-    veo_chain_keyframes    = False
-    veo_concurrency        = 3
-    music_provider         = none
-    render_fps             = 24
+Veo hands back N short, independently encoded clips. Turning them into one file
+is three steps, and skipping any of them is where stitched AI video usually goes
+wrong:
 
---------------------------------------------------------------
-1 check(s) FAILED: Super compositing smoke test
+  1. Normalise. Every segment is re-encoded to identical geometry, frame rate,
+     pixel format, timescale and audio layout, and padded or trimmed to the
+     exact seconds the plan asked for. Veo returns 7.94s for an 8s request often
+     enough that concatenating raw output drifts.
+  2. Concatenate. Because step 1 made them identical, this is a stream copy.
+  3. Mix and trim. Music and voiceover are laid under the clips' native audio,
+     then the whole thing is cut to the exact target length.
+"""
 
-(venv) C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server>
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Awaitable, Callable, Literal
+
+from ..config import settings
+from ..errors import AppError, UpstreamError
+from ..logging_setup import get_logger
+from ..storage import ensure_dir
+
+log = get_logger("ffmpeg")
+
+ProgressFn = Callable[[float, str], Awaitable[None] | None]
+
+
+def _resolve_binary(configured: str | None, name: str) -> str:
+    if configured:
+        return configured
+    found = shutil.which(name)
+    return found or name
+
+
+FFMPEG = _resolve_binary(settings.ffmpeg_path, "ffmpeg")
+FFPROBE = _resolve_binary(settings.ffprobe_path, "ffprobe")
+
+# Keeps a console window from flashing up for every ffmpeg call on Windows.
+# Absent on POSIX, where 0 means "no special flags".
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _missing_binary_error(binary: str, setting: str) -> AppError:
+    return AppError(
+        f'{Path(binary).name} was not found at "{binary}". '
+        f"Install it, or set {setting} in server/.env.",
+        status=503,
+        code=f"{Path(binary).stem}_missing",
+    )
+
+
+@dataclass(slots=True)
+class MediaInfo:
+    seconds: float
+    has_video: bool
+    has_audio: bool
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+
+
+@dataclass(slots=True)
+class Segment:
+    file: Path
+    seconds: float
+
+
+@dataclass(slots=True)
+class MixTrack:
+    file: Path
+    gain: float
+    #: Music loops to fill the runtime; voiceover plays once from the top.
+    loop: bool
+    fade_in: float = 0.0
+    fade_out: float = 0.0
+
+
+@dataclass(slots=True)
+class Super:
+    """One line of burnt-in copy, with its own window on the timeline.
+
+    Text is never sent to Veo — it is drawn here, from a font file, so it is
+    spelled the way it was written. ``x`` and ``y`` are ffmpeg expressions
+    evaluated against ``w``/``h`` (the text box) and ``W``/``H`` (the frame).
+    """
+
+    text: str
+    start: float
+    end: float
+    x: str
+    y: str
+    size: int
+    colour: str = "white"
+    fade: float = 0.5
+    #: A soft drop shadow is the difference between legible and not over sky.
+    shadow: bool = True
+
+
+@dataclass(slots=True)
+class Lockup:
+    """A brand mark composited over the plate for part of the runtime."""
+
+    file: Path
+    start: float
+    width: int
+    x: str = "(W-w)/2"
+    y: str = "(H-h)/2"
+    fade: float = 0.6
+
+
+async def _report(callback: ProgressFn | None, fraction: float, message: str) -> None:
+    if callback is None:
+        return
+    result = callback(fraction, message)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+async def _run(
+    args: list[str],
+    *,
+    label: str = "ffmpeg",
+    total_seconds: float | None = None,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Run ffmpeg on a worker thread, relaying its progress to the event loop.
+
+    Deliberately NOT ``asyncio.create_subprocess_exec``. Uvicorn installs
+    ``WindowsSelectorEventLoopPolicy`` on Windows, and a selector loop cannot
+    spawn subprocesses at all — it raises ``NotImplementedError``. A plain
+    blocking ``Popen`` on a thread behaves identically on every platform and
+    every event loop policy, which is worth more here than native async I/O:
+    these calls are minutes long and there are only a handful in flight.
+
+    stderr goes to a temp file rather than a pipe so a chatty failure cannot
+    fill the OS pipe buffer and deadlock while we are draining stdout.
+    """
+    # `-progress pipe:1` gives machine-readable key=value on stdout, which is
+    # far more reliable than scraping the human-readable stderr banner.
+    argv = [
+        FFMPEG,
+        "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        *args,
+        "-progress", "pipe:1", "-nostats",
+    ]
+    log.debug("%s: %s", label, " ".join(argv))
+
+    loop = asyncio.get_running_loop()
+    updates: asyncio.Queue[float] = asyncio.Queue()
+    handle: dict[str, subprocess.Popen[bytes]] = {}
+
+    def blocking() -> tuple[int, str]:
+        with tempfile.TemporaryFile("w+b") as errors:
+            process = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                creationflags=_NO_WINDOW,
+            )
+            handle["process"] = process
+
+            assert process.stdout is not None
+            for raw in process.stdout:
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line.startswith("out_time_us="):
+                    continue
+                try:
+                    seconds = int(line.split("=", 1)[1]) / 1_000_000
+                except ValueError:
+                    continue
+                # Hop back onto the loop thread to publish progress.
+                loop.call_soon_threadsafe(updates.put_nowait, seconds)
+
+            process.stdout.close()
+            code = process.wait()
+
+            errors.seek(0)
+            return code, errors.read().decode("utf-8", "ignore")
+
+    try:
+        worker = asyncio.create_task(asyncio.to_thread(blocking))
+    except FileNotFoundError as error:
+        raise _missing_binary_error(FFMPEG, "FFMPEG_PATH") from error
+
+    try:
+        while not worker.done():
+            try:
+                seconds = await asyncio.wait_for(updates.get(), timeout=0.25)
+            except asyncio.TimeoutError:
+                continue
+            if total_seconds and on_progress:
+                fraction = max(0.0, min(0.99, seconds / total_seconds))
+                await _report(
+                    on_progress, fraction, f"{label}… {seconds:.1f}s / {total_seconds:.0f}s"
+                )
+    except asyncio.CancelledError:
+        # A cancelled render must not leave ffmpeg running for another minute.
+        process = handle.get("process")
+        if process is not None and process.poll() is None:
+            process.kill()
+        raise
+
+    try:
+        code, stderr = await worker
+    except FileNotFoundError as error:
+        raise _missing_binary_error(FFMPEG, "FFMPEG_PATH") from error
+
+    if code != 0:
+        raise UpstreamError(f"{label} failed (exit {code}).", details=stderr.strip()[-1500:])
+
+    await _report(on_progress, 1.0, f"{label} done.")
+
+
+# ---------------------------------------------------------------------------
+# Probe
+# ---------------------------------------------------------------------------
+
+
+async def probe(file: Path) -> MediaInfo:
+    args = ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(file)]
+
+    # Threaded for the same reason as `_run` — a selector event loop on Windows
+    # cannot spawn subprocesses.
+    def blocking() -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [FFPROBE, *args], capture_output=True, creationflags=_NO_WINDOW, check=False
+        )
+
+    try:
+        result = await asyncio.to_thread(blocking)
+    except FileNotFoundError as error:
+        raise _missing_binary_error(FFPROBE, "FFPROBE_PATH") from error
+
+    if result.returncode != 0:
+        raise UpstreamError(
+            f"ffprobe failed on {file.name}.",
+            details=result.stderr.decode("utf-8", "ignore")[-600:],
+        )
+
+    parsed = json.loads(result.stdout.decode("utf-8", "ignore") or "{}")
+    streams = parsed.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+    duration_raw = (parsed.get("format") or {}).get("duration") or (video or {}).get("duration") or 0
+    try:
+        seconds = float(duration_raw)
+    except (TypeError, ValueError):
+        seconds = 0.0
+
+    fps = None
+    if video:
+        try:
+            num, den = (video.get("avg_frame_rate") or "0/1").split("/")
+            fps = float(num) / float(den) if float(den) else None
+        except (ValueError, ZeroDivisionError):
+            fps = None
+
+    return MediaInfo(
+        seconds=seconds,
+        has_video=video is not None,
+        has_audio=audio is not None,
+        width=(video or {}).get("width"),
+        height=(video or {}).get("height"),
+        fps=fps,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 1 — normalise
+# ---------------------------------------------------------------------------
+
+
+async def normalise_segment(
+    source: Path,
+    destination: Path,
+    *,
+    width: int,
+    height: int,
+    seconds: float,
+    fps: int | None = None,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Re-encode one segment to the delivery geometry and to exactly ``seconds``.
+
+    ``scale=…:force_original_aspect_ratio=increase`` followed by ``crop`` is a
+    centre crop that fills the frame — this is what converts Veo's 9:16 output
+    into a 1:1 or 4:5 deliverable without letterboxing.
+
+    ``tpad``/``apad`` hold the last frame and pad silence so a clip that came
+    back fractionally short still fills its slot; ``-t`` then cuts it back to
+    length. Without this the finished film drifts a second or two under target.
+    """
+    rate = fps or settings.render_fps
+    info = await probe(source)
+    ensure_dir(destination.parent)
+
+    video_filter = ",".join(
+        [
+            f"scale={width}:{height}:force_original_aspect_ratio=increase",
+            f"crop={width}:{height}",
+            f"fps={rate}",
+            # Hold the final frame if the source came back short of its slot.
+            f"tpad=stop_mode=clone:stop_duration={max(1, math.ceil(seconds))}",
+            "setsar=1",
+            "format=yuv420p",
+        ]
+    )
+
+    args: list[str] = ["-i", str(source)]
+
+    if not info.has_audio:
+        # Veo normally returns audio, but a filtered or silent generation may
+        # not. The concat demuxer requires an identical stream layout on every
+        # segment, so synthesise silence rather than dropping the track.
+        args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+
+    args += [
+        "-map", "0:v:0",
+        "-map", "0:a:0" if info.has_audio else "1:a:0",
+        "-vf", video_filter,
+        "-af", "apad,aresample=48000:async=1",
+        "-t", str(seconds),
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "20",
+        "-profile:v", "high",
+        "-level", "4.2",
+        "-pix_fmt", "yuv420p",
+        # A shared timescale keeps the concat demuxer from introducing gaps.
+        "-video_track_timescale", str(rate * 1000),
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "48000",
+        "-ac", "2",
+        "-movflags", "+faststart",
+        str(destination),
+    ]
+
+    await _run(
+        args,
+        label=f"normalise {source.name}",
+        total_seconds=seconds,
+        on_progress=on_progress,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 2 — concatenate
+# ---------------------------------------------------------------------------
+
+
+def _concat_entry(path: Path) -> str:
+    """One line of a concat demuxer list file.
+
+    Paths are single-quoted; a literal quote is escaped as ``'\\''``, the same
+    convention a POSIX shell uses.
+    """
+    escaped = str(path).replace("'", "'\\''")
+    return f"file '{escaped}'"
+
+
+async def concat_segments(
+    segments: list[Segment],
+    destination: Path,
+    *,
+    transition: Literal["hardcut", "crossfade"] = "hardcut",
+    crossfade_seconds: float = 0.4,
+    work_dir: Path,
+    on_progress: ProgressFn | None = None,
+) -> float:
+    """Join the conformed segments. Returns the duration actually produced."""
+    if not segments:
+        raise UpstreamError("Nothing to concatenate — no clips are ready.")
+
+    ensure_dir(destination.parent)
+    plain_total = sum(segment.seconds for segment in segments)
+
+    if len(segments) == 1:
+        shutil.copyfile(segments[0].file, destination)
+        return plain_total
+
+    if transition == "crossfade":
+        return await _crossfade_segments(
+            segments, destination, crossfade_seconds, on_progress=on_progress
+        )
+
+    # Every segment was normalised to identical parameters, so this is a copy.
+    ensure_dir(work_dir)
+    list_file = work_dir / "concat.txt"
+    entries = [_concat_entry(segment.file) for segment in segments]
+    list_file.write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+    await _run(
+        ["-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy",
+         "-movflags", "+faststart", str(destination)],
+        label="concat",
+        total_seconds=plain_total,
+        on_progress=on_progress,
+    )
+
+    return plain_total
+
+
+async def _crossfade_segments(
+    segments: list[Segment],
+    destination: Path,
+    fade: float,
+    *,
+    on_progress: ProgressFn | None = None,
+) -> float:
+    """Dissolve between segments with ``xfade``/``acrossfade``.
+
+    Note the arithmetic: each transition overlaps two segments, so the result is
+    ``(n - 1) * fade`` seconds SHORTER than the sum of the parts. The duration
+    plan fits the target exactly for hard cuts; choosing crossfade trades that
+    exact landing for the dissolve, and the renderer reports what it got.
+    """
+    shortest = min(segment.seconds for segment in segments)
+    safe_fade = max(0.1, min(fade, shortest / 2 - 0.1))
+
+    inputs: list[str] = []
+    for segment in segments:
+        inputs += ["-i", str(segment.file)]
+
+    filters: list[str] = []
+    video_label = "0:v"
+    audio_label = "0:a"
+    offset = 0.0
+
+    for index in range(1, len(segments)):
+        offset += segments[index - 1].seconds - (0 if index == 1 else safe_fade)
+        transition_at = max(0.0, offset - safe_fade)
+
+        next_video, next_audio = f"v{index}", f"a{index}"
+        filters.append(
+            f"[{video_label}][{index}:v]xfade=transition=fade:"
+            f"duration={safe_fade}:offset={transition_at:.3f}[{next_video}]"
+        )
+        filters.append(f"[{audio_label}][{index}:a]acrossfade=d={safe_fade}[{next_audio}]")
+        video_label, audio_label = next_video, next_audio
+
+    total = sum(segment.seconds for segment in segments) - (len(segments) - 1) * safe_fade
+
+    await _run(
+        [
+            *inputs,
+            "-filter_complex", ";".join(filters),
+            "-map", f"[{video_label}]",
+            "-map", f"[{audio_label}]",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+            "-movflags", "+faststart",
+            str(destination),
+        ],
+        label="crossfade",
+        total_seconds=total,
+        on_progress=on_progress,
+    )
+
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Step 2b — burn supers and brand marks
+# ---------------------------------------------------------------------------
+
+
+def _filter_path(path: Path) -> str:
+    r"""Escape a filesystem path for use inside a filtergraph option.
+
+    Windows is the whole reason this exists. ``C:\Users\x\f.ttf`` contains both
+    the option separator and the escape character.
+
+    The colon needs **two** backslashes, not one. Two parsers sit in series
+    between this string and the filter — the filtergraph parser, then the
+    filter's own argument parser — and each consumes one layer of escaping. A
+    single ``\:`` survives the first and arrives at the second as a bare ``:``,
+    where it reads as an option separator. ffmpeg then reports the second half
+    of your path as a malformed option name::
+
+        No option name near '/Windows/Fonts/GOTHIC.TTF:textfile=...'
+
+    Backslashes also become forward slashes, which ffmpeg accepts on Windows and
+    which keeps the separator from being read as an escape character.
+
+    Invisible on macOS and Linux, where paths contain neither character — which
+    is exactly how this shipped broken.
+    """
+    text = str(path).replace("\\", "/")
+    return text.replace(":", r"\\:").replace("'", r"\\'")
+
+
+#: Typographer's punctuation an LLM reaches for by default, mapped to glyphs
+#: every system font actually carries. Futura renders an em dash as tofu, and a
+#: box in the middle of a brand super is worse than a hyphen.
+_PUNCTUATION = {
+    "—": "-",   # em dash
+    "–": "-",   # en dash
+    "‘": "'",   # single quotes
+    "’": "'",
+    "“": '"',   # double quotes
+    "”": '"',
+    "…": "...",  # ellipsis
+    " ": " ",   # non-breaking space
+    "•": "-",   # bullet
+    "×": "x",   # multiplication sign, as in "IndiGo x Japan"
+}
+
+
+def _safe_glyphs(text: str) -> str:
+    """Replace punctuation the render font is unlikely to carry."""
+    for source, replacement in _PUNCTUATION.items():
+        text = text.replace(source, replacement)
+    return text
+
+
+def _fade_alpha(start: float, end: float, fade: float) -> str:
+    """A trapezoid alpha ramp: up over ``fade``, hold, down over ``fade``."""
+    if fade <= 0:
+        return "1"
+    return (
+        f"max(0\\,min(1\\,min((t-{start:.3f})/{fade:.3f}\\,({end:.3f}-t)/{fade:.3f})))"
+    )
+
+
+async def burn_brand(
+    source: Path,
+    destination: Path,
+    *,
+    seconds: float,
+    supers: list[Super],
+    lockups: list[Lockup],
+    font: Path | None,
+    work_dir: Path,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Composite copy and brand marks onto the finished plate.
+
+    This is the half of the brand policy that the prompt layer cannot do. Veo is
+    told to keep the plate clean; everything a viewer reads gets drawn here,
+    where it is correct by construction rather than by luck.
+
+    A missing font drops the supers and keeps the marks — an unreadable film is
+    worse than a silent one, but a film with no end card is still deliverable.
+    """
+    if not supers and not lockups:
+        shutil.copyfile(source, destination)
+        return
+
+    if supers and font is None:
+        log.warning("No usable font found; skipping %d super(s).", len(supers))
+        supers = []
+
+    ensure_dir(work_dir)
+    inputs: list[str] = ["-i", str(source)]
+    steps: list[str] = []
+    label = "0:v"
+
+    for index, item in enumerate(supers):
+        # `textfile` rather than `text` so copy containing colons, quotes or
+        # commas needs no escaping. `expansion=none` is the other half of that:
+        # without it drawtext still interprets `%` and backslash sequences in
+        # the file, and a super reading "100% ready" silently renders nothing.
+        copy_file = work_dir / f"super-{index:02d}.txt"
+        copy_file.write_text(_safe_glyphs(item.text), encoding="utf-8")
+
+        assert font is not None
+        options = [
+            f"fontfile={_filter_path(font)}",
+            f"textfile={_filter_path(copy_file)}",
+            "expansion=none",
+            f"fontcolor={item.colour}",
+            f"fontsize={item.size}",
+            f"x={item.x}",
+            f"y={item.y}",
+            f"enable=between(t\\,{item.start:.3f}\\,{item.end:.3f})",
+            f"alpha={_fade_alpha(item.start, item.end, item.fade)}",
+            "line_spacing=10",
+        ]
+        if item.shadow:
+            options += ["shadowcolor=black@0.35", "shadowx=0", "shadowy=2"]
+
+        steps.append(f"[{label}]drawtext={':'.join(options)}[txt{index}]")
+        label = f"txt{index}"
+
+    for index, mark in enumerate(lockups):
+        stream = 1 + index
+        # `-t` bounds the looped still so it cannot outrun the plate.
+        inputs += ["-loop", "1", "-t", f"{seconds:.3f}", "-i", str(mark.file)]
+        steps.append(
+            f"[{stream}:v]scale={mark.width}:-1,format=rgba,"
+            f"fade=t=in:st={mark.start:.3f}:d={mark.fade:.3f}:alpha=1,"
+            f"setpts=PTS-STARTPTS[mark{index}]"
+        )
+        steps.append(
+            f"[{label}][mark{index}]overlay=x={mark.x}:y={mark.y}:"
+            f"enable='gte(t\\,{mark.start:.3f})'[ov{index}]"
+        )
+        label = f"ov{index}"
+
+    args = [
+        *inputs,
+        "-filter_complex", ";".join(steps),
+        "-map", f"[{label}]",
+        # Audio rides through untouched; the mix step owns it.
+        "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        str(destination),
+    ]
+
+    await _run(
+        args,
+        label="brand",
+        total_seconds=seconds,
+        on_progress=on_progress,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — mix audio and land on the exact duration
+# ---------------------------------------------------------------------------
+
+
+async def mix_and_finalise(
+    source: Path,
+    destination: Path,
+    *,
+    seconds: float,
+    tracks: list[MixTrack],
+    fade_out_seconds: float = 0.0,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Lay music and voiceover under the clips' native audio, then cut to length.
+
+    Levels are static rather than side-chain ducked: Veo's native audio is
+    mostly room tone and texture, so a fixed bed sits under it cleanly, whereas
+    a compressor keyed off ambience pumps. ``loudnorm`` lands the whole film at
+    a broadcast-ish -16 LUFS.
+    """
+    ensure_dir(destination.parent)
+    usable = [track for track in tracks if track.gain > 0]
+
+    args: list[str] = ["-i", str(source)]
+    filters: list[str] = []
+    mix_labels: list[str] = ["0:a"]
+
+    for index, track in enumerate(usable, start=1):
+        if track.loop:
+            args += ["-stream_loop", "-1"]
+        args += ["-i", str(track.file)]
+
+        label = f"t{index}"
+        chain = [
+            f"atrim=0:{seconds}",
+            "asetpts=PTS-STARTPTS",
+            "aresample=48000",
+            f"volume={track.gain:.3f}",
+        ]
+        if track.fade_in > 0:
+            chain.append(f"afade=t=in:st=0:d={track.fade_in}")
+        if track.fade_out > 0:
+            chain.append(f"afade=t=out:st={max(0.0, seconds - track.fade_out):.2f}:d={track.fade_out}")
+        # Pad in case the track is shorter than the film and not set to loop.
+        chain.append(f"apad=whole_dur={seconds}")
+
+        filters.append(f"[{index}:a]{','.join(chain)}[{label}]")
+        mix_labels.append(label)
+
+    if len(mix_labels) > 1:
+        joined = "".join(f"[{label}]" for label in mix_labels)
+        filters.append(
+            f"{joined}amix=inputs={len(mix_labels)}:duration=first:"
+            "dropout_transition=0:normalize=0[mixed]"
+        )
+        filters.append("[mixed]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+    else:
+        filters.append("[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+
+    args += ["-filter_complex", ";".join(filters), "-map", "0:v:0", "-map", "[aout]"]
+
+    if fade_out_seconds > 0:
+        args += [
+            "-vf", f"fade=t=out:st={max(0.0, seconds - fade_out_seconds):.2f}:d={fade_out_seconds}",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+        ]
+    else:
+        # No picture change — keep the encode we already paid for.
+        args += ["-c:v", "copy"]
+
+    args += [
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-t", str(seconds),
+        "-movflags", "+faststart",
+        str(destination),
+    ]
+
+    await _run(args, label="mix", total_seconds=seconds, on_progress=on_progress)
+
+
+# ---------------------------------------------------------------------------
+# Poster frames
+# ---------------------------------------------------------------------------
+
+
+async def extract_poster(source: Path, destination: Path, at_seconds: float = 0.5) -> None:
+    ensure_dir(destination.parent)
+    await _run(
+        ["-ss", str(at_seconds), "-i", str(source), "-frames:v", "1", "-q:v", "3", str(destination)],
+        label="poster",
+    )
+
+
+async def ffmpeg_available() -> bool:
+    """Cheap availability probe for the health endpoint.
+
+    Never raises — health must stay answerable even when the toolchain is
+    broken, since telling the user *what* is broken is the whole point of it.
+    """
+
+    def blocking() -> bool:
+        try:
+            result = subprocess.run(
+                [FFMPEG, "-version"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+                check=False,
+            )
+        except OSError:
+            return False
+        return result.returncode == 0
+
+    try:
+        return await asyncio.to_thread(blocking)
+    except Exception:  # noqa: BLE001
+        return False
