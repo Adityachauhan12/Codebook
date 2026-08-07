@@ -1,69 +1,192 @@
+"""Turn a project's copy into positioned, branded compositing instructions.
 
-(venv) C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server>py test_brief.py
-Raw brief: 1,718 characters
-Path     : Azure model
-2026-08-07T14:47:05 INFO  [video.llm] chat ok in 14.1s (2109 tokens, deployment gpt-5.5)
-2026-08-07T14:47:05 INFO  [video.brief] Brief split: intent 981 chars (from 1717), 3 super(s), end card on, 2 unsupported.
+``domain.models`` holds *what* a super says and roughly where it sits;
+``services.ffmpeg`` knows how to draw one. This is the layer between: it owns
+type scale, safe areas, and the brand's own end-card composition.
 
-====================================================================
-INTENT — the ONLY part the scene writer sees
-====================================================================
-IndiGo x Japan - A New Journey Begins
-Style: Ultra-cinematic, luxury travel commercial, emotionally uplifting
-Lens: Anamorphic, shallow depth of field, natural cinematic motion
-Colour Grade: Cool blues with warm sunrise highlights, premium airline aesthetic
+Sizes are expressed as a fraction of frame height so a 1080p render and a 720p
+render look identical rather than one of them looking like a ransom note.
+"""
 
-Create a breathtaking cinematic airline launch film announcing IndiGo's new destination: Japan. Open with a sunrise above the clouds. An IndiGo aircraft emerges through golden morning light, soaring over a sea of clouds.
+from __future__ import annotations
 
-Transition to aerial views of Japan: Mount Fuji at dawn, Tokyo's skyline, Shibuya Crossing at blue hour, Kyoto temples surrounded by cherry blossoms, bamboo forests, bullet trains, lakes reflecting autumn colours.
+from ..domain.models import EndCard, SuperPosition, SuperSpec
+from ..services.ffmpeg import Lockup, Super
+from . import active_brand
+from .assets import icon, wordmark
 
-Show elegant travel moments: a traveller gazing out of the aircraft window as Japan appears beneath the clouds; cabin crew welcoming passengers; close-ups of smiling travellers and children looking excited.
+__all__ = ["build_supers", "build_lockups"]
 
-Feature the aircraft landing at a modern Japanese airport during golden hour.
+#: Broadcast-style safe area. Copy inside this margin survives the crop that
+#: social platforms apply to a 16:9 master.
+_MARGIN = 0.062
 
-====================================================================
-SUPERS — 3 line(s), composited in post, never prompted
-====================================================================
-    0.0- 10.0s  [centre]  'A new horizon awaits.'
-   10.0- 30.0s  [centre]  'From India to the heart of Japan.'
-   30.0- 50.0s  [centre]  'Discover timeless traditions. Experience tomorrow.'
+#: Type scale, as a fraction of frame height.
+_BODY = 0.041
+_HEADLINE = 0.055
+_SUBLINE = 0.030
 
-====================================================================
-END CARD
-====================================================================
-  headline : 'INDIGO NOW FLIES TO JAPAN'
-  subline  : 'Your Next Journey Begins'
-  mark     : wordmark   last 3.0s
 
-====================================================================
-ROUTED ELSEWHERE
-====================================================================
-  music -> composer : Epic orchestral score blended with modern ambient textures and subtle Japanese instruments such as koto and shakuhachi. Build toward an emotional cres
-  avoid -> negative : 13 item(s)
-      - Low quality
-      - cartoon
-      - CGI look
-      - oversaturated colours
-      - distorted aircraft
-      - incorrect airline branding
+#: Multiplier from type size to baseline-to-baseline distance.
+_LINE_HEIGHT = 1.34
 
-====================================================================
-REFUSED OUT LOUD instead of silently ignored
-====================================================================
-  ! 4K/8K delivery — Veo renders at 1080p maximum. The film will be 1080p.
-  ! HDR — Veo output is SDR. The grade will be delivered in SDR.
+#: Clear air between the last narrative super and the end card resolving. Less
+#: than this and the two cross-fade through each other.
+_CARD_GAP = 0.5
 
-====================================================================
-VERDICT
-====================================================================
-  [PASS] no super copy leaked into intent   (critical)
-  [PASS] the literal end-card copy is not in intent   (critical)
-  [PASS] intent is shorter than the raw brief   (critical)
-  [PASS] copy was extracted with timings
-  [PASS] end card recognised
-  [PASS] music routed to the composer
-  [PASS] 4K/HDR refused out loud
 
-SAFE: nothing a viewer reads can reach Veo.
+def _x(position: SuperPosition, height: int) -> str:
+    """The ffmpeg x expression. ``tw`` is the measured text width."""
+    if position in {"upper-centre", "lower-centre", "centre"}:
+        return "(W-tw)/2"
+    return str(int(height * _MARGIN))
 
-(venv) C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server>
+
+def _y(position: SuperPosition, *, line: int, lines: int, size: int, height: int) -> str:
+    """The ffmpeg y expression for one line of a stacked block.
+
+    Line height is computed from the type size rather than read back from
+    ffmpeg's ``th``, because ``th`` measures whatever that single line happens
+    to contain — a line of all-caps and a line with descenders would other‑wise
+    sit at different pitches inside the same super.
+    """
+    margin = int(height * _MARGIN)
+    step = int(size * _LINE_HEIGHT)
+
+    if position in {"upper-left", "upper-centre"}:
+        return str(margin + line * step)
+    if position in {"lower-left", "lower-centre"}:
+        return f"H-{margin + (lines - line) * step}"
+    return f"(H-{lines * step})/2+{line * step}"
+
+
+def _stack(
+    text: str,
+    *,
+    position: SuperPosition,
+    start: float,
+    end: float,
+    size: int,
+    height: int,
+    fade: float = 0.5,
+    y_offset: int = 0,
+) -> list[Super]:
+    """One ``Super`` per line.
+
+    drawtext will not render a multi-line block cleanly: with ``expansion=none``
+    it breaks the line *and* draws a tofu glyph where the newline was. Splitting
+    here is what stops a box appearing mid-super, and it buys exact control over
+    leading as a side effect.
+    """
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    drawn: list[Super] = []
+    for index, line in enumerate(lines):
+        y = _y(position, line=index, lines=len(lines), size=size, height=height)
+        if y_offset:
+            y = f"{y}+{y_offset}"
+        drawn.append(
+            Super(
+                text=line,
+                start=start,
+                end=end,
+                x=_x(position, height),
+                y=y,
+                size=size,
+                fade=fade,
+            )
+        )
+    return drawn
+
+
+def build_supers(
+    items: list[SuperSpec],
+    end_card: EndCard,
+    *,
+    seconds: float,
+    height: int,
+) -> list[Super]:
+    """Every line of burnt-in copy for the film, in timeline order."""
+    supers: list[Super] = []
+
+    # A brief that says "30-50 sec" for its last line and also asks for an end
+    # card is describing a collision: the line would still be on screen when the
+    # lockup resolves. Narrative copy yields to the end card.
+    card_start = max(0.0, seconds - end_card.seconds) if end_card.enabled else seconds
+    last_moment = max(0.0, card_start - _CARD_GAP) if end_card.enabled else seconds
+
+    for item in items:
+        start = max(0.0, item.start)
+        end = min(min(seconds, item.end), last_moment)
+        if end - start < 0.4:
+            # Entirely swallowed by the end card. Dropping it is right: a super
+            # that flashes for a third of a second reads as a glitch.
+            continue
+        supers += _stack(
+            item.text,
+            position=item.position,
+            start=start,
+            end=end,
+            size=int(height * _BODY),
+            height=height,
+        )
+
+    if not end_card.enabled:
+        return supers
+
+    # The card resolves over the tail of the film. The mark sits optically
+    # above centre and the copy below it, so neither fights the other.
+    start = max(0.0, seconds - end_card.seconds)
+
+    if end_card.headline:
+        supers += _stack(
+            end_card.headline,
+            position="centre",
+            start=start + 0.6,
+            end=seconds,
+            size=int(height * _HEADLINE),
+            height=height,
+            fade=0.7,
+            y_offset=int(height * 0.085),
+        )
+    if end_card.subline:
+        supers += _stack(
+            end_card.subline,
+            position="centre",
+            start=start + 1.0,
+            end=seconds,
+            size=int(height * _SUBLINE),
+            height=height,
+            fade=0.7,
+            y_offset=int(height * 0.165),
+        )
+
+    return supers
+
+
+def build_lockups(end_card: EndCard, *, seconds: float, width: int) -> list[Lockup]:
+    """The brand mark for the end card, or nothing when brand is off.
+
+    White cut only: the card resolves over sky, cloud or runway, all of which
+    are mid-to-bright but never light enough for the blue cut to hold.
+    """
+    if not end_card.enabled or end_card.mark == "none" or active_brand() != "indigo":
+        return []
+
+    file = wordmark(on_dark=True) if end_card.mark == "wordmark" else icon(on_dark=True)
+    # The lockup reads at about a quarter of frame width; smaller and the
+    # 20-dot device closes up, larger and it stops feeling like a sign-off.
+    target = int(width * (0.26 if end_card.mark == "wordmark" else 0.10))
+
+    return [
+        Lockup(
+            file=file,
+            start=max(0.0, seconds - end_card.seconds),
+            width=target,
+            x="(W-w)/2",
+            y="(H-h)/2-" + str(int(width * 0.035)),
+            fade=0.8,
+        )
+    ]
