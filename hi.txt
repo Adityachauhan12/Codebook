@@ -1,369 +1,683 @@
-"""Audio has three sources, in descending order of importance:
-
-  1. Veo's native audio, baked into every clip. Room tone, texture, body sound,
-     dialogue. This is the bed the film actually sits on.
-  2. A music track, either generated (when a provider is configured) or
-     uploaded. Mixed underneath at ``MUSIC_GAIN``.
-  3. A voiceover, synthesised from a script by the Azure TTS deployment.
-
-Only (1) is guaranteed. Everything here degrades to "upload your own" rather
-than blocking the render.
-"""
-
 from __future__ import annotations
 
-from pathlib import Path
-from urllib.parse import quote
+import asyncio
+import json
+from typing import Any, Callable, Literal
 
-import httpx
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..config import settings
-from ..domain.models import AudioKind, AudioTrack, Project, ProjectBrief, StoryOption
-from ..errors import BadRequest, Unavailable, UpstreamError
+from ..domain.duration import default_pacing, plan_duration
+from ..domain.models import (
+    AspectRatio,
+    BriefAnalysis,
+    EndCard,
+    Pacing,
+    Project,
+    ProjectBrief,
+    RenderResult,
+    StylePreset,
+    TransitionStyle,
+)
+from ..errors import BadRequest, NotFound
 from ..ids import short_id
-from ..logging_setup import get_logger
-from ..skills.registry import compose_skill
-from ..storage import audio_dir, ensure_dir, media_url, to_storage_relative
-from .ffmpeg import probe
-from .llm import chat_json
-from .store import require_project, update_project
+from ..services.audio import generate_track, save_uploaded_track, suggest_tracks
+from ..services.brief import analyse_brief
+from ..services.clips import generate_all_clips, generate_scene_clip, selected_story, sync_clips
+from ..services.jobs import JobContext, cancel_job, start_job
+from ..services.render import render_project
+from ..services.store import (
+    create_project,
+    delete_project,
+    get_job,
+    list_jobs,
+    list_projects,
+    require_project,
+    subscribe,
+    unsubscribe,
+    update_project,
+)
+from ..services.storyboard import (
+    generate_scenes,
+    generate_treatments,
+    regenerate_treatment,
+    rewrite_scene,
+)
 
-log = get_logger("audio")
+router = APIRouter(prefix="/api/video", tags=["video"])
 
 
-class _MusicIdea(BaseModel):
-    label: str = ""
-    prompt: str = ""
+# ---------------------------------------------------------------------------
+# Request bodies
+# ---------------------------------------------------------------------------
 
 
-class _Voiceover(BaseModel):
-    label: str = "Voiceover"
-    script: str = ""
+class BriefBody(BaseModel):
+    brief: str = Field(min_length=8)
+    seconds: int = Field(ge=4)
+    style: StylePreset = "cinematic"
+    ratio: AspectRatio = "16:9"
+    pacing: Pacing | None = None
+    references: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    language: str = "English"
+    transition: TransitionStyle = "hardcut"
+    quality: Literal["standard", "draft"] = "standard"
+
+    def to_brief(self) -> ProjectBrief:
+        return ProjectBrief(
+            brief=self.brief.strip(),
+            seconds=self.seconds,
+            style=self.style,
+            ratio=self.ratio,
+            pacing=self.pacing or default_pacing(self.style),
+            references=self.references,
+            avoid=self.avoid,
+            language=self.language,
+        )
 
 
-class _Suggestions(BaseModel):
-    music: list[_MusicIdea] = Field(default_factory=list)
-    voiceover: _Voiceover | None = None
+class BriefPatch(BaseModel):
+    brief: str | None = None
+    seconds: int | None = Field(default=None, ge=4)
+    style: StylePreset | None = None
+    ratio: AspectRatio | None = None
+    pacing: Pacing | None = None
+    references: list[str] | None = None
+    avoid: list[str] | None = None
+    language: str | None = None
+    transition: TransitionStyle | None = None
 
 
-async def suggest_tracks(
-    brief: ProjectBrief, story: StoryOption, target_seconds: int
-) -> list[AudioTrack]:
-    """Write music direction for the cut.
+class SelectStoryBody(BaseModel):
+    storyId: str
 
-    The skill's sound vocabulary is loaded so the briefs come back as texture and
-    instrumentation rather than adjectives.
+
+class ScenePatch(BaseModel):
+    prompt: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    negativePrompt: str | None = None
+    transitionOut: TransitionStyle | None = None
+
+
+class RewriteBody(BaseModel):
+    instruction: str = ""
+
+
+class TrackPatch(BaseModel):
+    selected: bool | None = None
+    gain: float | None = Field(default=None, ge=0, le=2)
+    prompt: str | None = None
+    label: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Planning — no key required, so the UI can show the real clip count up front
+# ---------------------------------------------------------------------------
+
+
+@router.get("/plan")
+async def get_plan(
+    seconds: float = Query(default=30),
+    style: str = Query(default="cinematic"),
+    pacing: Pacing | None = Query(default=None),
+) -> dict[str, Any]:
+    resolved = pacing or default_pacing(style)
+    plan = plan_duration(seconds, resolved)
+
+    return {
+        "plan": plan.model_dump(by_alias=True, mode="json"),
+        "limits": {
+            "maxClipSeconds": settings.veo_max_clip_seconds,
+            "allowedClipSeconds": settings.allowed_clip_seconds,
+            "maxVideoSeconds": settings.max_video_seconds,
+            "maxSegments": settings.max_segments,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
+
+
+@router.get("/projects")
+async def get_projects() -> dict[str, Any]:
+    projects = await list_projects()
+    return {
+        "projects": [
+            {
+                "id": project.id,
+                "createdAt": project.created_at,
+                "brief": project.brief.brief[:140],
+                "seconds": project.plan.target_seconds,
+                "segments": len(project.plan.segments),
+                "render": project.render.status,
+            }
+            for project in projects
+        ]
+    }
+
+
+def _apply_analysis(analysis: BriefAnalysis) -> Callable[[Project], Project]:
+    """Distribute a brief analysis across the project.
+
+    Each part lands where the system that needs it will look: intent on the
+    brief for the prompt layer, supers and end card on the project for the
+    compositor, music on the brief for the composer.
     """
-    max_words = int(target_seconds * 2.5)
-
-    user = "\n".join(
-        [
-            "## The film",
-            "",
-            f"Brief: {brief.creative()}",
-            *(
-                [f"The brief's own music direction, to honour: {brief.music_direction}"]
-                if brief.music_direction
-                else []
-            ),
-            f"Length: {target_seconds}s. Style preset: {brief.style}. Ratio: {brief.ratio}.",
-            f"Story: {story.title} — {story.treatment}",
-            f"Emotion: {story.anchors.emotion}. Motif: {story.anchors.motif}. "
-            f"Ends on: {story.anchors.final_image}",
-            "",
-            "The clips already carry native audio — room tone, body sound, and the sound motif. "
-            "What you are writing is the score that sits UNDER that, plus an optional voiceover.",
-            "",
-            "## Task",
-            "",
-            "Write 5 distinct music directions. Each one names instrumentation, tempo in BPM, "
-            "texture, and where it lifts or drops against the beat map. No adjective soup — "
-            "'warm cinematic build' is not a direction.",
-            "",
-            f"Then write one optional voiceover script that fits {target_seconds} seconds at "
-            f"roughly 2.5 words per second (about {max_words} words maximum). Leave it empty if "
-            "the film is stronger without narration.",
-            "",
-            "## Output",
-            "",
-            "Return JSON only:",
-            '{"music":[{"label":"","prompt":""}],"voiceover":{"label":"","script":""}}',
-        ]
-    )
-
-    raw = await chat_json(
-        [
-            {"role": "system", "content": compose_skill("audio")},
-            {"role": "user", "content": user},
-        ],
-        label="audio-directions",
-        fast=True,
-        temperature=0.9,
-        max_output_tokens=2000,
-    )
-
-    try:
-        parsed = _Suggestions.model_validate(raw)
-    except Exception as error:  # noqa: BLE001
-        raise UpstreamError("The model returned audio directions we could not read.") from error
-
-    tracks = [
-        AudioTrack(
-            id=short_id("track"),
-            kind="music",
-            label=idea.label,
-            prompt=idea.prompt,
-            selected=index == 0,
-            status="idle",
-            gain=settings.music_gain,
-        )
-        for index, idea in enumerate(parsed.music[:5])
-    ]
-
-    if parsed.voiceover and parsed.voiceover.script.strip():
-        tracks.append(
-            AudioTrack(
-                id=short_id("track"),
-                kind="voiceover",
-                label=parsed.voiceover.label or "Voiceover",
-                prompt=parsed.voiceover.script.strip(),
-                selected=False,
-                status="idle",
-                gain=settings.voiceover_gain,
-            )
-        )
-
-    return tracks
-
-
-# ---------------------------------------------------------------------------
-# Music providers
-# ---------------------------------------------------------------------------
-
-
-async def _music_elevenlabs(prompt: str, seconds: int) -> tuple[bytes, str]:
-    if not settings.elevenlabs_api_key:
-        raise Unavailable("ELEVENLABS_API_KEY is not set.")
-
-    length_ms = round(min(max(seconds, 10), 300) * 1000)
-
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        response = await client.post(
-            "https://api.elevenlabs.io/v1/music",
-            headers={
-                "xi-api-key": settings.elevenlabs_api_key,
-                "content-type": "application/json",
-            },
-            json={
-                "prompt": prompt,
-                "music_length_ms": length_ms,
-                "model_id": settings.elevenlabs_music_model,
-            },
-        )
-
-    if response.status_code >= 400:
-        raise UpstreamError(
-            f"ElevenLabs music generation failed ({response.status_code}).",
-            details=response.text[:400],
-        )
-
-    return response.content, "mp3"
-
-
-async def _music_lyria(prompt: str) -> tuple[bytes, str]:
-    if not (settings.google_cloud_project and settings.google_access_token):
-        raise Unavailable(
-            "Vertex Lyria needs GOOGLE_CLOUD_PROJECT and GOOGLE_ACCESS_TOKEN "
-            "(run `gcloud auth print-access-token`)."
-        )
-
-    location = settings.google_cloud_location
-    url = (
-        f"https://{location}-aiplatform.googleapis.com/v1/projects/"
-        f"{settings.google_cloud_project}/locations/{location}/publishers/google/models/"
-        f"{settings.vertex_lyria_model}:predict"
-    )
-
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        response = await client.post(
-            url,
-            headers={
-                "authorization": f"Bearer {settings.google_access_token}",
-                "content-type": "application/json",
-            },
-            json={"instances": [{"prompt": prompt}], "parameters": {}},
-        )
-
-    if response.status_code >= 400:
-        raise UpstreamError(
-            f"Lyria music generation failed ({response.status_code}).", details=response.text[:400]
-        )
-
-    predictions = response.json().get("predictions") or []
-    encoded = None
-    if predictions:
-        encoded = predictions[0].get("bytesBase64Encoded") or predictions[0].get("audioContent")
-    if not encoded:
-        raise UpstreamError("Lyria returned no audio.")
-
-    import base64
-
-    return base64.b64decode(encoded), "wav"
-
-
-# ---------------------------------------------------------------------------
-# Voiceover
-# ---------------------------------------------------------------------------
-
-
-async def _synthesise_voiceover(script: str) -> tuple[bytes, str]:
-    deployment = settings.azure_openai_tts_deployment_name
-    if not deployment:
-        raise Unavailable(
-            "Voiceover needs AZURE_OPENAI_TTS_DEPLOYMENT_NAME. Veo still generates in-scene "
-            "dialogue without it."
-        )
-    if not settings.azure_configured:
-        raise Unavailable("Azure OpenAI is not configured.")
-
-    assert settings.azure_openai_base_url and settings.azure_openai_key
-    url = (
-        f"{settings.azure_openai_base_url.rstrip('/')}/openai/deployments/{quote(deployment)}"
-        f"/audio/speech?api-version={quote(settings.azure_openai_version)}"
-    )
-
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        response = await client.post(
-            url,
-            headers={"api-key": settings.azure_openai_key, "content-type": "application/json"},
-            json={
-                "model": deployment,
-                "input": script,
-                "voice": settings.azure_openai_tts_voice,
-                "response_format": "mp3",
-            },
-        )
-
-    if response.status_code >= 400:
-        raise UpstreamError(
-            f"Voiceover synthesis failed ({response.status_code}).", details=response.text[:400]
-        )
-
-    return response.content, "mp3"
-
-
-# ---------------------------------------------------------------------------
-# Orchestration
-# ---------------------------------------------------------------------------
-
-
-async def _patch_track(project_id: str, track_id: str, **patch) -> None:
-    def mutate(project: Project) -> Project:
-        project.audio = [
-            track.model_copy(update=patch) if track.id == track_id else track
-            for track in project.audio
-        ]
-        return project
-
-    await update_project(project_id, mutate)
-
-
-async def generate_track(project: Project, track_id: str) -> AudioTrack:
-    track = next((candidate for candidate in project.audio if candidate.id == track_id), None)
-    if track is None:
-        raise BadRequest(f"Audio track {track_id} not found.")
-
-    await _patch_track(project.id, track_id, status="generating", error=None)
-
-    try:
-        seconds = project.plan.target_seconds
-
-        if track.kind == "voiceover":
-            payload, extension = await _synthesise_voiceover(track.prompt)
-        elif settings.music_provider == "elevenlabs":
-            payload, extension = await _music_elevenlabs(track.prompt, seconds)
-        elif settings.music_provider == "vertex-lyria":
-            payload, extension = await _music_lyria(track.prompt)
-        else:
-            raise Unavailable(
-                "No music provider is configured. Set MUSIC_PROVIDER to `elevenlabs` or "
-                "`vertex-lyria`, or upload a track instead."
-            )
-
-        destination = Path(audio_dir(project.id)) / f"{track_id}.{extension}"
-        ensure_dir(destination.parent)
-        destination.write_bytes(payload)
-
-        try:
-            info = await probe(destination)
-            duration = info.seconds
-        except Exception:  # noqa: BLE001 — duration is informational
-            duration = None
-
-        relative = to_storage_relative(destination)
-        await _patch_track(
-            project.id,
-            track_id,
-            status="ready",
-            file=relative,
-            url=media_url(relative),
-            seconds=duration,
-            source="generated",
-            error=None,
-        )
-
-        log.info("Generated %s track %s.", track.kind, track_id)
-        refreshed = await require_project(project.id)
-        return next(candidate for candidate in refreshed.audio if candidate.id == track_id)
-
-    except Exception as error:
-        await _patch_track(project.id, track_id, status="failed", error=str(error))
-        raise
-
-
-async def save_uploaded_track(
-    project: Project, filename: str, payload: bytes, kind: AudioKind = "music"
-) -> AudioTrack:
-    suffix = Path(filename).suffix.lower() or ".mp3"
-    suffix = "".join(char for char in suffix if char.isalnum() or char == ".")
-
-    track_id = short_id("track")
-    destination = Path(audio_dir(project.id)) / f"{track_id}{suffix}"
-    ensure_dir(destination.parent)
-    destination.write_bytes(payload)
-
-    try:
-        info = await probe(destination)
-        duration = info.seconds
-    except Exception:  # noqa: BLE001
-        duration = None
-
-    relative = to_storage_relative(destination)
-    track = AudioTrack(
-        id=track_id,
-        kind=kind,
-        label=Path(filename).stem,
-        prompt="Uploaded track",
-        selected=True,
-        status="ready",
-        gain=settings.voiceover_gain if kind == "voiceover" else settings.music_gain,
-        seconds=duration,
-        file=relative,
-        url=media_url(relative),
-        source="uploaded",
-    )
 
     def mutate(current: Project) -> Project:
-        # An uploaded track of the same kind takes over the selection.
-        current.audio = [
-            existing.model_copy(update={"selected": False})
-            if existing.kind == kind
-            else existing
-            for existing in current.audio
-        ]
-        current.audio.append(track)
+        current.brief.intent = analysis.intent
+        current.brief.unsupported = analysis.unsupported
+        current.brief.music_direction = analysis.music
+        # dict.fromkeys de-duplicates while keeping the user's ordering first.
+        current.brief.avoid = list(dict.fromkeys([*current.brief.avoid, *analysis.avoid]))
+        current.supers = analysis.supers
+        current.end_card = analysis.end_card
         return current
 
-    await update_project(project.id, mutate)
-    return track
+    return mutate
+
+
+@router.post("/projects", status_code=201)
+async def post_project(body: BriefBody) -> dict[str, Any]:
+    brief = body.to_brief()
+    plan = plan_duration(brief.seconds, brief.pacing)
+
+    project = Project(
+        id=short_id("vid"),
+        brief=brief,
+        plan=plan,
+        transition=body.transition,
+        model=settings.veo_fast_model if body.quality == "draft" else settings.veo_model,
+    )
+    await create_project(project)
+
+    # Kick the treatments off immediately — the UI shows a spinner on the cards.
+    async def work(context: JobContext) -> dict[str, int]:
+        # Split the brief before anything reads it. The scene writer must never
+        # see on-screen copy, or it will ask Veo to spell.
+        context.progress(0.05, "Reading the brief…")
+        analysis = await analyse_brief(brief.brief, seconds=brief.seconds)
+        analysed = await update_project(project.id, _apply_analysis(analysis))
+
+        context.progress(0.2, "Writing director treatments…")
+        stories = await generate_treatments(analysed.brief, plan)
+
+        def mutate(current: Project) -> Project:
+            current.stories = stories
+            current.selected_story_id = stories[0].id if stories else None
+            return current
+
+        await update_project(project.id, mutate)
+        return {"stories": len(stories)}
+
+    job = start_job(project.id, "storyboard", work, message="Reading the brief…")
+    return {"project": project.dump(), "jobId": job.id}
+
+
+@router.get("/projects/{project_id}")
+async def get_one_project(project_id: str) -> dict[str, Any]:
+    project = await require_project(project_id)
+    return {"project": project.dump(), "jobs": [job.dump() for job in list_jobs(project_id)]}
+
+
+@router.delete("/projects/{project_id}")
+async def remove_project(project_id: str) -> dict[str, bool]:
+    await require_project(project_id)
+    await delete_project(project_id)
+    return {"ok": True}
+
+
+@router.patch("/projects/{project_id}")
+async def patch_project(project_id: str, body: BriefPatch) -> dict[str, Any]:
+    """Changing the brief re-plans the segments and invalidates the storyboard."""
+    existing = await require_project(project_id)
+    changes = body.model_dump(exclude_none=True)
+
+    merged = existing.brief.model_copy(
+        update={key: value for key, value in changes.items() if key != "transition"}
+    )
+    if body.style and not body.pacing:
+        merged.pacing = default_pacing(body.style)
+
+    duration_changed = (
+        merged.seconds != existing.brief.seconds or merged.pacing != existing.brief.pacing
+    )
+    plan = plan_duration(merged.seconds, merged.pacing) if duration_changed else existing.plan
+
+    # New brief text means the old split no longer describes it. A stale
+    # `intent` is worse than none: the prompt layer would keep quoting the
+    # previous brief while the supers came from the new one.
+    text_changed = merged.brief != existing.brief.brief
+    if text_changed:
+        merged.intent = ""
+        merged.unsupported = []
+        merged.music_direction = None
+
+    def mutate(current: Project) -> Project:
+        current.brief = merged
+        current.plan = plan
+        if body.transition:
+            current.transition = body.transition
+        if text_changed:
+            current.supers = []
+            current.end_card = EndCard(enabled=False)
+        if duration_changed or text_changed:
+            # A new segment count or a new brief makes the scene list meaningless.
+            for story in current.stories:
+                story.scenes = []
+            current.clips = []
+        return current
+
+    project = await update_project(project_id, mutate)
+
+    if text_changed:
+        analysis = await analyse_brief(merged.brief, seconds=merged.seconds)
+        project = await update_project(project_id, _apply_analysis(analysis))
+
+    return {"project": project.dump()}
+
+
+# ---------------------------------------------------------------------------
+# Storyboard
+# ---------------------------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/stories", status_code=202)
+async def post_stories(project_id: str) -> dict[str, str]:
+    project = await require_project(project_id)
+
+    async def work(context: JobContext) -> dict[str, int]:
+        context.progress(0.1, "Writing director treatments…")
+        stories = await generate_treatments(project.brief, project.plan)
+
+        def mutate(current: Project) -> Project:
+            current.stories = stories
+            current.selected_story_id = stories[0].id if stories else None
+            current.clips = []
+            return current
+
+        await update_project(project_id, mutate)
+        return {"stories": len(stories)}
+
+    return {"jobId": start_job(project_id, "storyboard", work).id}
+
+
+@router.post("/projects/{project_id}/stories/{story_id}/regenerate", status_code=202)
+async def post_regenerate_story(project_id: str, story_id: str) -> dict[str, str]:
+    project = await require_project(project_id)
+    if not any(story.id == story_id for story in project.stories):
+        raise NotFound(f"Story {story_id} not found.")
+
+    async def work(context: JobContext) -> dict[str, str]:
+        context.progress(0.2, "Finding a different direction…")
+        replacement = await regenerate_treatment(
+            project.brief, project.plan, project.stories, story_id
+        )
+
+        def mutate(current: Project) -> Project:
+            current.stories = [
+                replacement if story.id == story_id else story for story in current.stories
+            ]
+            if current.selected_story_id == story_id:
+                current.clips = []
+            return current
+
+        await update_project(project_id, mutate)
+        return {"storyId": story_id}
+
+    return {"jobId": start_job(project_id, "storyboard", work, target_id=story_id).id}
+
+
+@router.post("/projects/{project_id}/stories/{story_id}/scenes", status_code=202)
+async def post_scenes(project_id: str, story_id: str) -> dict[str, str]:
+    """Write the scene-by-scene prompts for one story."""
+    project = await require_project(project_id)
+    story = next((candidate for candidate in project.stories if candidate.id == story_id), None)
+    if story is None:
+        raise NotFound(f"Story {story_id} not found.")
+
+    async def work(context: JobContext) -> dict[str, Any]:
+        written, repair_passes = await generate_scenes(
+            project.brief,
+            project.plan,
+            story,
+            lambda fraction, message: context.progress(fraction, message),
+        )
+
+        def mutate(current: Project) -> Project:
+            current.stories = [
+                written if candidate.id == story_id else candidate for candidate in current.stories
+            ]
+            current.clips = sync_clips(current)
+            return current
+
+        await update_project(project_id, mutate)
+        return {
+            "storyId": story_id,
+            "scenes": len(written.scenes),
+            "audit": written.audit.model_dump(by_alias=True, mode="json"),
+            "repairPasses": repair_passes,
+        }
+
+    job = start_job(
+        project_id,
+        "storyboard",
+        work,
+        target_id=story_id,
+        message=f"Writing {len(project.plan.segments)} scene prompts…",
+    )
+    return {"jobId": job.id}
+
+
+@router.post("/projects/{project_id}/select-story")
+async def post_select_story(project_id: str, body: SelectStoryBody) -> dict[str, Any]:
+    project = await require_project(project_id)
+    if not any(story.id == body.storyId for story in project.stories):
+        raise NotFound(f"Story {body.storyId} not found.")
+
+    def mutate(current: Project) -> Project:
+        current.selected_story_id = body.storyId
+        current.clips = sync_clips(current)
+        return current
+
+    updated = await update_project(project_id, mutate)
+    return {"project": updated.dump()}
+
+
+@router.patch("/projects/{project_id}/scenes/{scene_id}")
+async def patch_scene(project_id: str, scene_id: str, body: ScenePatch) -> dict[str, Any]:
+    """Direct edit of a scene prompt from the storyboard drawer."""
+    changes = body.model_dump(exclude_none=True)
+    field_map = {
+        "prompt": "prompt",
+        "title": "title",
+        "summary": "summary",
+        "negativePrompt": "negative_prompt",
+        "transitionOut": "transition_out",
+    }
+    update = {field_map[key]: value for key, value in changes.items()}
+
+    def mutate(current: Project) -> Project:
+        for story in current.stories:
+            story.scenes = [
+                scene.model_copy(update=update) if scene.id == scene_id else scene
+                for scene in story.scenes
+            ]
+        if "prompt" in update:
+            # An edited prompt means the existing clip no longer matches the scene.
+            current.clips = [
+                clip.model_copy(update={"status": "idle", "progress": 0.0, "error": None})
+                if clip.scene_id == scene_id
+                else clip
+                for clip in current.clips
+            ]
+        return current
+
+    project = await update_project(project_id, mutate)
+    return {"project": project.dump()}
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/rewrite", status_code=202)
+async def post_rewrite_scene(project_id: str, scene_id: str, body: RewriteBody) -> dict[str, str]:
+    project = await require_project(project_id)
+    story = selected_story(project)
+    scene = next((candidate for candidate in story.scenes if candidate.id == scene_id), None)
+    if scene is None:
+        raise NotFound(f"Scene {scene_id} not found in the selected story.")
+
+    async def work(context: JobContext) -> dict[str, str]:
+        context.progress(0.3, "Rewriting the scene…")
+        rewritten = await rewrite_scene(project.brief, story, scene, body.instruction)
+
+        def mutate(current: Project) -> Project:
+            for candidate in current.stories:
+                if candidate.id != story.id:
+                    continue
+                candidate.scenes = [
+                    rewritten if existing.id == scene_id else existing
+                    for existing in candidate.scenes
+                ]
+            current.clips = [
+                clip.model_copy(update={"status": "idle", "progress": 0.0, "error": None})
+                if clip.scene_id == scene_id
+                else clip
+                for clip in current.clips
+            ]
+            return current
+
+        await update_project(project_id, mutate)
+        return {"sceneId": scene_id}
+
+    return {"jobId": start_job(project_id, "storyboard", work, target_id=scene_id).id}
+
+
+# ---------------------------------------------------------------------------
+# Clips
+# ---------------------------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/clips/generate-all", status_code=202)
+async def post_generate_all(project_id: str, force: bool = Query(default=False)) -> dict[str, str]:
+    project = await require_project(project_id)
+    selected_story(project)  # fail fast with a clear message
+
+    async def work(context: JobContext) -> dict[str, int]:
+        fresh = await require_project(project_id)
+        return await generate_all_clips(fresh, context, force=force)
+
+    job = start_job(
+        project_id,
+        "clips",
+        work,
+        message=f"Generating {len(project.plan.segments)} clips…",
+    )
+    return {"jobId": job.id}
+
+
+@router.post("/projects/{project_id}/clips/{scene_id}/generate", status_code=202)
+async def post_generate_clip(project_id: str, scene_id: str) -> dict[str, str]:
+    await require_project(project_id)
+
+    async def work(context: JobContext) -> dict[str, Any]:
+        fresh = await require_project(project_id)
+        clip = await generate_scene_clip(
+            fresh,
+            scene_id,
+            force=True,
+            on_progress=lambda fraction, message: context.progress(fraction, message),
+        )
+        return clip.model_dump(by_alias=True, mode="json")
+
+    return {"jobId": start_job(project_id, "clip", work, target_id=scene_id).id}
+
+
+# ---------------------------------------------------------------------------
+# Audio
+# ---------------------------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/audio/suggest", status_code=202)
+async def post_audio_suggest(project_id: str) -> dict[str, str]:
+    project = await require_project(project_id)
+    story = selected_story(project)
+
+    async def work(context: JobContext) -> dict[str, int]:
+        context.progress(0.3, "Writing music direction…")
+        tracks = await suggest_tracks(project.brief, story, project.plan.target_seconds)
+
+        def mutate(current: Project) -> Project:
+            # Uploaded tracks survive a re-suggest; generated ideas are replaced.
+            current.audio = [
+                track for track in current.audio if track.source == "uploaded"
+            ] + tracks
+            return current
+
+        await update_project(project_id, mutate)
+        return {"tracks": len(tracks)}
+
+    return {"jobId": start_job(project_id, "audio", work).id}
+
+
+@router.post("/projects/{project_id}/audio/{track_id}/generate", status_code=202)
+async def post_audio_generate(project_id: str, track_id: str) -> dict[str, str]:
+    await require_project(project_id)
+
+    async def work(context: JobContext) -> dict[str, Any]:
+        context.progress(0.2, "Generating audio…")
+        fresh = await require_project(project_id)
+        track = await generate_track(fresh, track_id)
+        return track.model_dump(by_alias=True, mode="json")
+
+    return {"jobId": start_job(project_id, "audio", work, target_id=track_id).id}
+
+
+@router.patch("/projects/{project_id}/audio/{track_id}")
+async def patch_audio(project_id: str, track_id: str, body: TrackPatch) -> dict[str, Any]:
+    changes = body.model_dump(exclude_none=True)
+
+    def mutate(current: Project) -> Project:
+        target = next((track for track in current.audio if track.id == track_id), None)
+        if target is None:
+            return current
+
+        updated = []
+        for track in current.audio:
+            if track.id == track_id:
+                patch = dict(changes)
+                # Editing the prompt invalidates the rendered audio.
+                if (
+                    "prompt" in patch
+                    and patch["prompt"] != track.prompt
+                    and track.source == "generated"
+                ):
+                    patch |= {"status": "idle", "file": None, "url": None}
+                updated.append(track.model_copy(update=patch))
+            elif changes.get("selected") is True and track.kind == target.kind:
+                # Selecting a track deselects the others of the same kind.
+                updated.append(track.model_copy(update={"selected": False}))
+            else:
+                updated.append(track)
+
+        current.audio = updated
+        return current
+
+    project = await update_project(project_id, mutate)
+    return {"project": project.dump()}
+
+
+@router.post("/projects/{project_id}/audio/upload", status_code=201)
+async def post_audio_upload(
+    project_id: str,
+    file: UploadFile = File(...),
+    kind: str = Form(default="music"),
+) -> dict[str, Any]:
+    project = await require_project(project_id)
+    payload = await file.read()
+
+    if len(payload) > 40 * 1024 * 1024:
+        raise BadRequest("Audio uploads are capped at 40MB.")
+    if not payload:
+        raise BadRequest("The uploaded file is empty.")
+
+    track = await save_uploaded_track(
+        project,
+        file.filename or "track.mp3",
+        payload,
+        "voiceover" if kind == "voiceover" else "music",
+    )
+    return {"track": track.model_dump(by_alias=True, mode="json")}
+
+
+# ---------------------------------------------------------------------------
+# Render
+# ---------------------------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/render", status_code=202)
+async def post_render(project_id: str) -> dict[str, str]:
+    project = await require_project(project_id)
+    selected_story(project)
+
+    async def work(context: JobContext) -> dict[str, Any]:
+        fresh = await require_project(project_id)
+        return await render_project(fresh, context)
+
+    job = start_job(project_id, "render", work, message="Accumulating clips…")
+
+    def mutate(current: Project) -> Project:
+        current.render = RenderResult(status="queued", progress=0.0)
+        return current
+
+    await update_project(project_id, mutate)
+    return {"jobId": job.id}
+
+
+# ---------------------------------------------------------------------------
+# Jobs and live progress
+# ---------------------------------------------------------------------------
+
+
+@router.get("/jobs/{job_id}")
+async def get_one_job(job_id: str) -> dict[str, Any]:
+    job = get_job(job_id)
+    if job is None:
+        raise NotFound(f"Job {job_id} not found.")
+    return {"job": job.dump()}
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def post_cancel_job(job_id: str) -> dict[str, bool]:
+    return {"cancelled": cancel_job(job_id)}
+
+
+@router.get("/projects/{project_id}/events")
+async def stream_events(project_id: str, request: Request) -> StreamingResponse:
+    """Live project state over SSE.
+
+    Every event carries full state, so a dropped connection recovers simply by
+    reconnecting — there is no incremental log to replay.
+    """
+    project = await require_project(project_id)
+    queue = subscribe(project_id)
+
+    async def generator():
+        try:
+            yield _sse("project", {"project": project.dump()})
+            for job in list_jobs(project_id):
+                yield _sse("job", {"job": job.dump()})
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=20.0)
+                except asyncio.TimeoutError:
+                    # Heartbeat, so proxies keep the connection open through the
+                    # quiet stretches of a long render.
+                    yield ": ping\n\n"
+                    continue
+
+                kind = event.pop("type")
+                yield _sse(kind, event)
+        finally:
+            unsubscribe(project_id, queue)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
