@@ -1,109 +1,132 @@
-this was the prompt
-IndiGo × Japan — A New Journey Begins"
-Duration: 45–60 seconds
-Style: Ultra-cinematic, luxury travel commercial, emotionally uplifting
-Aspect Ratio: 16:9
-Resolution: 4K HDR
-Lens: Anamorphic, shallow depth of field, natural cinematic motion
-Color Grade: Cool blues with warm sunrise highlights, premium airline commercial aesthetic
-Prompt
-Create a breathtaking cinematic airline launch film announcing IndiGo's new destination: Japan.
-Open with a sunrise above the clouds. An IndiGo aircraft gracefully emerges through golden morning light, soaring over a sea of clouds. Slow aerial tracking shot with subtle lens flares and volumetric sunlight.
-Transition seamlessly to spectacular aerial views of Japan: Mount Fuji at dawn, Tokyo's glittering skyline, Shibuya Crossing illuminated at blue hour, traditional Kyoto temples surrounded by cherry blossoms, peaceful bamboo forests, vibrant Japanese streets, bullet trains gliding effortlessly through scenic landscapes, and serene lakes reflecting autumn colors.
-Show elegant travel moments:
-A traveler gazing out of the aircraft window as Japan appears beneath the clouds.
-Cabin crew warmly welcoming passengers with refined hospitality.
-Close-up cinematic shots of smiling travelers, children looking excited, and families beginning their journey.
-Smooth transitions between aircraft interiors and iconic Japanese destinations.
-Feature the IndiGo aircraft landing smoothly at a modern Japanese airport during golden hour. Capture the aircraft from dramatic low angles and sweeping drone perspectives.
-Use fluid camera movements: aerial drones, slow push-ins, crane shots, cinematic tracking, orbit shots, and seamless match cuts between sky and landscape.
-Atmosphere should evoke wonder, discovery, elegance, and anticipation. Every frame should feel like a premium global airline advertisement.
-Visual Style
-Photorealistic
-IMAX-quality cinematography
-Soft atmospheric haze
-Natural reflections
-Premium commercial lighting
-Realistic aircraft physics
-Ultra-detailed environments
-High dynamic range
-Smooth cinematic motion
-No shaky camera
-Music
-Epic orchestral score blended with modern ambient textures and subtle Japanese instruments such as koto and shakuhachi. Build gradually toward an inspiring, emotional crescendo.
-Sound Design
-Gentle jet engines, wind above the clouds, distant city ambience, temple bells, soft footsteps, bullet train passing, subtle airport ambience, uplifting cinematic transitions.
-On-Screen Text
-0–10 sec
-"A new horizon awaits."
-10–30 sec
-"From India to the heart of Japan."
-30–50 sec
-"Discover timeless traditions. Experience tomorrow."
-Final Frame
-INDIGO NOW FLIES TO JAPAN
-Your Next Journey Begins
-Logo reveal with elegant fade over clouds.
-Negative Prompt
-Low quality, cartoon, CGI look, oversaturated colors, distorted aircraft, incorrect airline branding, extra aircraft, text artifacts, watermark, noisy image, blurry faces, unrealistic airports, shaky camera, low-resolution textures, duplicated people, warped architecture, incorrect Japanese landmarks, poor lighting, excessive motion blur, flickering, compression artifacts.
+"""Brand master files and the exact colours sampled from them.
 
-these were the scenes
+The composite-in-post design in ``policy.py`` only works if there is a master
+file to composite. This module is that file's address, plus the colour values
+taken from the artwork itself rather than from a brand deck nobody can find.
 
+Marks are straight (unpremultiplied) RGBA PNGs, trimmed to their alpha bounding
+box, so ``overlay`` in ffmpeg places them without a halo and without guesswork
+about padding.
+"""
 
-Oval window, first horizon
-8s · Context · establish · 0:00
-Anamorphic 40mm medium-wide frame, measured push-in from cabin aisle height toward the aircraft window seat. Primary traveler: Indian woman in her early 30s, oval face, warm medium-brown skin, dark brown almond-shaped eyes, straight black shoulder-length hair tucked behind one ear, no eyewear, small gold stud earrings, calm restrained expression; she wears a cream linen blazer, white silk blouse, tailored navy trousers, tan leather watch strap and small gold stud earrings. She sits beside an oval aircraft window in an IndiGo aircraft cabin, with an IndiGo boarding pass tucked beside the window shade; her hand rests close to the pass while sunrise clouds glow beyond the glass. The environmental pressure is the quiet cabin suspended above a dense cloud layer, with faint condensation on the window and soft engine vibration implied by the stillness of the objects. Her thumb presses once against the boarding pass edge, her shoulders remain held, and her lips stay closed, showing hesitation before wonder. Locked lighting constant: Warm sunrise or golden-hour sunlight acts as key from frame-left whenever sky is visible; cool blue cabin and city ambience acts as fill from frame-right; window light remains the emotional source on faces. Locked palette: Deep indigo blue, cool blue-grey shadows, pearl white aircraft surfaces, warm gold sunrise highlights, soft cherry-blossom pink, cedar green, autumn amber; avoid oversaturated reds, neon overload and muddy yellow interiors. Continuity: cabin crew lead is an Indian man in his late 20s, angular face, medium-brown skin, dark brown eyes, neatly trimmed black hair, clean-shaven, poised posture, controlled welcoming smile, wearing an IndiGo-inspired navy uniform with deep indigo blazer, white shirt, indigo tie, silver name pin and neatly pressed trousers; child passenger is an Indian girl around 7 years old, round face, medium-brown skin, dark brown eyes, long black hair in two neat low braids, curious gaze, wearing a pale blue cardigan over a white cotton dress, white socks and navy Mary Jane shoes, travelling with parents kept mostly out of focus. Locations held for the film: IndiGo aircraft cabin, aircraft window seat, sunrise cloud layer, Mount Fuji at dawn, Tokyo skyline at blue hour, Shibuya Crossing, Kyoto temple gardens, bamboo forest, bullet train corridor and a modern Japanese airport at golden hour. Camera grammar: anamorphic shallow depth of field, slow aerial tracking, measured push-ins, glass-reflection compositions, stable crane and drone movement, no handheld shake; each move follows a reveal through a reflective surface. Props: IndiGo boarding pass, aircraft window shade, clear cabin glass, temple pond reflection, airport glass wall, one IndiGo aircraft with white fuselage and deep indigo-blue tail and engine accents. Rules: the primary traveler remains the emotional point of view even when Japan landmarks appear; use one IndiGo aircraft only and keep branding clean, legible and consistent; every transition is motivated by a reflection, window shape or cloud opening; faces stay natural and not overly posed; smiles arrive late after the Fuji reveal. On-screen text appears cleanly near the upper-left sky area: A new horizon awaits. Ends on the boarding pass reflected inside the oval window while the sunrise cloud layer fills the glass.
+from __future__ import annotations
 
-Audio: Quiet aircraft room tone, gentle jet engiAnamorphic 50mm close-up, slow lateral slide along the aircraft window glass from the boarding pass reflection toward the primary traveler's reflected eye. Primary traveler: Indian woman in her early 30s, oval face, warm medium-brown skin, dark brown almond-shaped eyes, straight black shoulder-length hair tucked behind one ear, no eyewear, small gold stud earrings, calm restrained expression; she wears a cream linen blazer, white silk blouse, tailored navy trousers, tan leather watch strap and small gold stud earrings. She leans a fraction closer to the oval window as the IndiGo wing and a thick cloud layer fill the view outside, with the boarding pass still tucked beside the aircraft window shade in the lower foreground. The environmental pressure is the cloud cover blocking any glimpse of Japan below, making the window act like a pale reflective wall. She swallows once, her jaw remains controlled, and two fingers curl lightly around the window shade lip as she holds back anticipation. Locked lighting constant: Warm sunrise or golden-hour sunlight acts as key from frame-left whenever sky is visible; cool blue cabin and city ambience acts as fill from frame-right; window light remains the emotional source on faces. Locked palette: Deep indigo blue, cool blue-grey shadows, pearl white aircraft surfaces, warm gold sunrise highlights, soft cherry-blossom pink, cedar green, autumn amber; avoid oversaturated reds, neon overload and muddy yellow interiors. Continuity: cabin crew lead is an Indian man in his late 20s, angular face, medium-brown skin, dark brown eyes, neatly trimmed black hair, clean-shaven, poised posture, controlled welcoming smile, wearing an IndiGo-inspired navy uniform with deep indigo blazer, white shirt, indigo tie, silver name pin and neatly pressed trousers; child passenger is an Indian girl around 7 years old, round face, medium-brown skin, dark brown eyes, long black hair in two neat low braids, curious gaze, wearing a pale blue cardigan over a white cotton dress, white socks and navy Mary Jane shoes, travelling with parents kept mostly out of focus. Locations held for the film: IndiGo aircraft cabin, aircraft window seat, sunrise cloud layer, Mount Fuji at dawn, Tokyo skyline at blue hour, Shibuya Crossing, Kyoto temple gardens, bamboo forest, bullet train corridor and a modern Japanese airport at golden hour. Camera grammar: anamorphic shallow depth of field, slow aerial tracking, measured push-ins, glass-reflection compositions, stable crane and drone movement, no handheld shake; each move follows a reveal through a reflective surface. Props: IndiGo boarding pass, aircraft window shade, clear cabin glass, temple pond reflection, airport glass wall, one IndiGo aircraft with white fuselage and deep indigo-blue tail and engine accents. Rules: the primary traveler remains the emotional point of view even when Japan landmarks appear; use one IndiGo aircraft only and keep branding clean, legible and consistent; every transition is motivated by a reflection, window shape or cloud opening; faces stay natural and not overly posed; smiles arrive late after the Fuji reveal. On-screen text appears in clean restrained typography over the pale cloud reflection: From India to the heart of Japan. Ends on her reflected eye aligned with a narrow break opening in the cloud layer beyond the wing.
+import sys
+from pathlib import Path
 
-Audio: Low cabin hum, gentle jet engine wash, faint window air pressure tone, one controlled breath, soft fabric rustle at her sleeve, no music.
+from ..config import settings
 
-Duration: 8 seconds.ne wash, soft air vent hiss, faint paper touch as her thumb presses the boarding pass, subtle wind above clouds, no music.
+__all__ = [
+    "INDIGO_BLUE",
+    "INDIGO_BLUE_HEX",
+    "INDIGO_SKY",
+    "INDIGO_SKY_HEX",
+    "INDIGO_MID_BLUE_HEX",
+    "MARKS_DIR",
+    "REFERENCES_DIR",
+    "FONTS_DIR",
+    "wordmark",
+    "icon",
+    "reference_images",
+    "font_path",
+]
+
+ASSETS_DIR = Path(__file__).parent / "assets"
+MARKS_DIR = ASSETS_DIR / "marks"
+REFERENCES_DIR = ASSETS_DIR / "references"
+FONTS_DIR = ASSETS_DIR / "fonts"
+
+#: Sampled from ``marks/wordmark-blue.png`` and ``marks/icon.svg`` — both give
+#: exactly this value. This is the brand's primary deep blue.
+INDIGO_BLUE = (0, 0, 153)
+INDIGO_BLUE_HEX = "#000099"
+
+#: The secondary light blue, sampled from the BluChip campaign headline.
+INDIGO_SKY = (151, 201, 234)
+INDIGO_SKY_HEX = "#97C9EA"
+
+#: The mid blue used in mailer headers. Useful for gradients, never for type.
+INDIGO_MID_BLUE_HEX = "#0058AC"
 
 
-Fuji appears in the eye
-8s · Crack · detail · 0:16
-Anamorphic 85mm close-up, slow push-in toward the primary traveler's eye as the oval aircraft window reflection crosses her face. Primary traveler: Indian woman in her early 30s, oval face, warm medium-brown skin, dark brown almond-shaped eyes, straight black shoulder-length hair tucked behind one ear, no eyewear, small gold stud earrings, calm restrained expression beginning to open; she wears a cream linen blazer, white silk blouse, tailored navy trousers, tan leather watch strap and small gold stud earrings. Outside the window, the cloud layer parts beneath the IndiGo wing and Mount Fuji appears at dawn, small and unmistakable, reflected both in the window glass and in her eye. The environmental pressure is the cloud layer splitting like a curtain, with bright dawn light spilling through the first clear opening toward Japan. Her eyelids widen slightly, her breath pauses, and the corners of her mouth loosen without forming a full smile yet. Locked lighting constant: Warm sunrise or golden-hour sunlight acts as key from frame-left whenever sky is visible; cool blue cabin and city ambience acts as fill from frame-right; window light remains the emotional source on faces. Locked palette: Deep indigo blue, cool blue-grey shadows, pearl white aircraft surfaces, warm gold sunrise highlights, soft cherry-blossom pink, cedar green, autumn amber; avoid oversaturated reds, neon overload and muddy yellow interiors. Continuity: cabin crew lead is an Indian man in his late 20s, angular face, medium-brown skin, dark brown eyes, neatly trimmed black hair, clean-shaven, poised posture, controlled welcoming smile, wearing an IndiGo-inspired navy uniform with deep indigo blazer, white shirt, indigo tie, silver name pin and neatly pressed trousers; child passenger is an Indian girl around 7 years old, round face, medium-brown skin, dark brown eyes, long black hair in two neat low braids, curious gaze, wearing a pale blue cardigan over a white cotton dress, white socks and navy Mary Jane shoes, travelling with parents kept mostly out of focus. Locations held for the film: IndiGo aircraft cabin, aircraft window seat, sunrise cloud layer, Mount Fuji at dawn, Tokyo skyline at blue hour, Shibuya Crossing, Kyoto temple gardens, bamboo forest, bullet train corridor and a modern Japanese airport at golden hour. Camera grammar: anamorphic shallow depth of field, slow aerial tracking, measured push-ins, glass-reflection compositions, stable crane and drone movement, no handheld shake; each move follows a reveal through a reflective surface. Props: IndiGo boarding pass, aircraft window shade, clear cabin glass, temple pond reflection, airport glass wall, one IndiGo aircraft with white fuselage and deep indigo-blue tail and engine accents. Rules: the primary traveler remains the emotional point of view even when Japan landmarks appear; use one IndiGo aircraft only and keep branding clean, legible and consistent; every transition is motivated by a reflection, window shape or cloud opening; faces stay natural and not overly posed; smiles arrive late after the Fuji reveal. On-screen text remains clean and restrained over the pale sky area: From India to the heart of Japan. Ends on Mount Fuji reflected inside her dark brown eye while the wing line points toward Japan below.
+def wordmark(*, on_dark: bool = True) -> Path:
+    """The full IndiGo lockup — wordmark plus 20-dot device. 1543x466.
 
-Audio: Jet engine wash softens, a faint air-pressure swell as the cloud layer opens, one held breath from the traveler, distant high-altitude wind texture, no music.
+    ``on_dark`` picks the white cut, which is what an end card over sky or
+    cloud wants. The blue cut is for light plates only.
+    """
+    name = "wordmark-white.png" if on_dark else "wordmark-blue.png"
+    return MARKS_DIR / name
 
-Duration: 8 seconds.
 
-Japan reflected in motion
-6s · Acceleration · detail · 0:24
-Anamorphic 40mm medium frame, stable lateral tracking along curved bullet-train window glass at seated eye height. Primary traveler: Indian woman in her early 30s, oval face, warm medium-brown skin, dark brown almond-shaped eyes, straight black shoulder-length hair tucked behind one ear, no eyewear, small gold stud earrings, restrained expression opening after the Fuji reveal; she wears a cream linen blazer, white silk blouse, tailored navy trousers, tan leather watch strap and small gold stud earrings. Her faint reflected face travels across the glass as a bullet train glides through a Japanese rail corridor; Tokyo skyline at blue hour and the organized flow of Shibuya Crossing appear as layered reflections rather than separate random landmarks. The environmental pressure is compressed forward motion: city glass, train windows and blue-hour reflections slide past in smooth layers. In the reflection, her chin lifts a few millimeters and her fingers release their grip on the IndiGo boarding pass, letting anticipation turn into wonder. Locked lighting constant: Warm sunrise or golden-hour sunlight acts as key from frame-left whenever sky is visible; cool blue cabin and city ambience acts as fill from frame-right; window light remains the emotional source on faces. Locked palette: Deep indigo blue, cool blue-grey shadows, pearl white aircraft surfaces, warm gold sunrise highlights, soft cherry-blossom pink, cedar green, autumn amber; avoid oversaturated reds, neon overload and muddy yellow interiors. Continuity: cabin crew lead is an Indian man in his late 20s, angular face, medium-brown skin, dark brown eyes, neatly trimmed black hair, clean-shaven, poised posture, controlled welcoming smile, wearing an IndiGo-inspired navy uniform with deep indigo blazer, white shirt, indigo tie, silver name pin and neatly pressed trousers; child passenger is an Indian girl around 7 years old, round face, medium-brown skin, dark brown eyes, long black hair in two neat low braids, curious gaze, wearing a pale blue cardigan over a white cotton dress, white socks and navy Mary Jane shoes, travelling with parents kept mostly out of focus. Locations held for the film: IndiGo aircraft cabin, aircraft window seat, sunrise cloud layer, Mount Fuji at dawn, Tokyo skyline at blue hour, Shibuya Crossing, Kyoto temple gardens, bamboo forest, bullet train corridor and a modern Japanese airport at golden hour. Camera grammar: anamorphic shallow depth of field, slow aerial tracking, measured push-ins, glass-reflection compositions, stable crane and drone movement, no handheld shake; each move follows a reveal through a reflective surface. Props: IndiGo boarding pass, aircraft window shade, clear cabin glass, temple pond reflection, airport glass wall, one IndiGo aircraft with white fuselage and deep indigo-blue tail and engine accents. Rules: the primary traveler remains the emotional point of view even when Japan landmarks appear; use one IndiGo aircraft only and keep branding clean, legible and consistent; every transition is motivated by a reflection, window shape or cloud opening; faces stay natural and not overly posed; smiles arrive late after the Fuji reveal. Ends on the train window reflection bending into an oval shape that echoes the aircraft window.
+def icon(*, on_dark: bool = True) -> Path:
+    """The 20-dot arrow-plane device on its own. 835x832."""
+    return MARKS_DIR / ("icon-white.png" if on_dark else "icon-blue.png")
 
-Audio: Smooth bullet train pass, muted rail tone, distant Tokyo city wash, soft glass vibration, one quiet exhale from the traveler’s reflection, no music.
 
-Duration: 6 seconds.
+#: Ordered best-first. IndiGo's own typeface is not redistributable and is not in
+#: the asset drop, so these are the closest widely installed geometric sans
+#: faces. Anything dropped into ``assets/fonts`` wins over all of them.
+_FONT_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "darwin": (
+        "/System/Library/Fonts/Supplemental/Futura.ttc",
+        "/System/Library/Fonts/Avenir Next.ttc",
+        "/System/Library/Fonts/HelveticaNeue.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ),
+    "win32": (
+        r"C:\Windows\Fonts\GOTHIC.TTF",
+        r"C:\Windows\Fonts\Futura.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+    ),
+    "linux": (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ),
+}
 
-The first smile
-4s · Acceleration · reaction · 0:30
-Anamorphic 50mm medium close-up, measured push-in toward the child passenger’s pointing hand and the primary traveler’s face. Child passenger: Indian girl around 7 years old, round face, medium-brown skin, dark brown eyes, long black hair in two neat low braids, curious gaze, wearing a pale blue cardigan over a white cotton dress, white socks and navy Mary Jane shoes, travelling with parents kept mostly out of focus. Primary traveler: Indian woman in her early 30s, oval face, warm medium-brown skin, dark brown almond-shaped eyes, straight black shoulder-length hair tucked behind one ear, no eyewear, small gold stud earrings; she wears a cream linen blazer, white silk blouse, tailored navy trousers, tan leather watch strap and small gold stud earrings. Inside the IndiGo aircraft cabin, the child points toward the oval window where a soft reflection of Kyoto temple water, cherry blossoms and cedar green garden edges appears on the glass; the traveler looks from the child’s fingertip to the reflection and smiles softly for the first time. The environmental pressure is the quiet cabin becoming a threshold, with temple pond reflections and cherry-blossom pink suspended in the window glass. The child’s fingertip pauses just short of touching the glass, and the traveler’s shoulders lower as her restrained expression opens into a natural smile. Locked lighting constant: Warm sunrise or golden-hour sunlight acts as key from frame-left whenever sky is visible; cool blue cabin and city ambience acts as fill from frame-right; window light remains the emotional source on faces. Locked palette: Deep indigo blue, cool blue-grey shadows, pearl white aircraft surfaces, warm gold sunrise highlights, soft cherry-blossom pink, cedar green, autumn amber; avoid oversaturated reds, neon overload and muddy yellow interiors. Continuity: cabin crew lead is an Indian man in his late 20s, angular face, medium-brown skin, dark brown eyes, neatly trimmed black hair, clean-shaven, poised posture, controlled welcoming smile, wearing an IndiGo-inspired navy uniform with deep indigo blazer, white shirt, indigo tie, silver name pin and neatly pressed trousers; child passenger is the girl described above. Locations held for the film: IndiGo aircraft cabin, aircraft window seat, sunrise cloud layer, Mount Fuji at dawn, Tokyo skyline at blue hour, Shibuya Crossing, Kyoto temple gardens, bamboo forest, bullet train corridor and a modern Japanese airport at golden hour. Camera grammar: anamorphic shallow depth of field, slow aerial tracking, measured push-ins, glass-reflection compositions, stable crane and drone movement, no handheld shake; each move follows a reveal through a reflective surface. Props: IndiGo boarding pass, aircraft window shade, clear cabin glass, temple pond reflection, airport glass wall, one IndiGo aircraft with white fuselage and deep indigo-blue tail and engine accents. Rules: the primary traveler remains the emotional point of view even when Japan landmarks appear; use one IndiGo aircraft only and keep branding clean, legible and consistent; every transition is motivated by a reflection, window shape or cloud opening; faces stay natural and not overly posed; smiles arrive late after the Fuji reveal. On-screen text appears cleanly in the negative space near the window reflection: Discover timeless traditions. Experience tomorrow. Ends on the child’s fingertip and the traveler’s soft smile both reflected in the oval window.
 
-Audio: Cabin hush, child’s soft inhale, faint fabric rustle, gentle jet engine wash, delicate temple bell carried as a reflection-like sound motif, no music.
+def font_path() -> Path | None:
+    """The font file for burnt-in supers, or ``None`` if nothing usable exists.
 
-Duration: 4 seconds.
+    Order: the configured override, then anything bundled in ``assets/fonts``,
+    then the platform's best geometric sans. Returning ``None`` rather than
+    raising lets the caller decide — a film with no supers is still a film.
+    """
+    configured = (settings.brand_font_path or "").strip()
+    if configured:
+        candidate = Path(configured)
+        return candidate if candidate.is_file() else None
 
-Touchdown into golden hour
-8s · Impact · impact · 0:34
-Anamorphic 40mm wide frame, stable low drone tracking parallel to one IndiGo aircraft as it lands at a modern Japanese airport during golden hour. One IndiGo aircraft only: white fuselage, deep indigo-blue tail and engine accents, clean legible branding, realistic aircraft physics, no extra aircraft. The aircraft crosses left to right, landing gear aligned in the lower third; wheels touch the runway smoothly while the terminal glass wall catches the aircraft reflection and a faint oval-window reflection of the primary traveler. Primary traveler in the reflection: Indian woman in her early 30s, oval face, warm medium-brown skin, dark brown almond-shaped eyes, straight black shoulder-length hair tucked behind one ear, no eyewear, small gold stud earrings, wearing a cream linen blazer, white silk blouse, tailored navy trousers and tan leather watch strap; her expression is now open and quietly moved. The environmental pressure is golden-hour runway heat shimmer, airport glass reflections and the exact controlled moment of touchdown. Inside the faint window reflection, her hand opens flat from the IndiGo boarding pass, showing the distance has resolved into arrival. Locked lighting constant: Warm sunrise or golden-hour sunlight acts as key from frame-left whenever sky is visible; cool blue cabin and city ambience acts as fill from frame-right; window light remains the emotional source on faces. Locked palette: Deep indigo blue, cool blue-grey shadows, pearl white aircraft surfaces, warm gold sunrise highlights, soft cherry-blossom pink, cedar green, autumn amber; avoid oversaturated reds, neon overload and muddy yellow interiors. Continuity: cabin crew lead is an Indian man in his late 20s, angular face, medium-brown skin, dark brown eyes, neatly trimmed black hair, clean-shaven, poised posture, controlled welcoming smile, wearing an IndiGo-inspired navy uniform with deep indigo blazer, white shirt, indigo tie, silver name pin and neatly pressed trousers; child passenger is an Indian girl around 7 years old, round face, medium-brown skin, dark brown eyes, long black hair in two neat low braids, curious gaze, wearing a pale blue cardigan over a white cotton dress, white socks and navy Mary Jane shoes, travelling with parents kept mostly out of focus. Locations held for the film: IndiGo aircraft cabin, aircraft window seat, sunrise cloud layer, Mount Fuji at dawn, Tokyo skyline at blue hour, Shibuya Crossing, Kyoto temple gardens, bamboo forest, bullet train corridor and a modern Japanese airport at golden hour. Camera grammar: anamorphic shallow depth of field, slow aerial tracking, measured push-ins, glass-reflection compositions, stable crane and drone movement, no handheld shake; each move follows a reveal through a reflective surface. Props: IndiGo boarding pass, aircraft window shade, clear cabin glass, temple pond reflection, airport glass wall, one IndiGo aircraft with white fuselage and deep indigo-blue tail and engine accents. Rules: the primary traveler remains the emotional point of view even when Japan landmarks appear; use one IndiGo aircraft only and keep branding clean, legible and consistent; every transition is motivated by a reflection, window shape or cloud opening; faces stay natural and not overly posed; smiles arrive late after the Fuji reveal. On-screen text remains clean over the open sky above the runway: Discover timeless traditions. Experience tomorrow. Ends on the aircraft reflected in the airport glass wall, with the oval-window reflection still visible inside the reflection.
+    if FONTS_DIR.is_dir():
+        bundled = sorted(
+            path
+            for path in FONTS_DIR.iterdir()
+            if path.suffix.lower() in {".ttf", ".otf", ".ttc"}
+        )
+        if bundled:
+            return bundled[0]
 
-Audio: Controlled airport ambience, gentle jet engine lowering in pitch, soft tire contact on runway, restrained wheel roll, glassy terminal room tone, no music.
+    platform = "win32" if sys.platform.startswith("win") else sys.platform
+    for name in _FONT_CANDIDATES.get(platform, _FONT_CANDIDATES["linux"]):
+        path = Path(name)
+        if path.is_file():
+            return path
+    return None
 
-Duration: 8 seconds.
-Clouds hide the destination
-8s · Pressure · pressure · 0:08
-Anamorphic 40mm wide frame, stable low drone tracking parallel to one IndiGo aircraft as it lands at a modern Japanese airport during golden hour. One IndiGo aircraft only: white fuselage, deep indigo-blue tail and engine accents, clean legible branding, realistic aircraft physics, no extra aircraft. The aircraft crosses left to right, landing gear aligned in the lower third; wheels touch the runway smoothly while the terminal glass wall catches the aircraft reflection and a faint oval-window reflection of the primary traveler. Primary traveler in the reflection: Indian woman in her early 30s, oval face, warm medium-brown skin, dark brown almond-shaped eyes, straight black shoulder-length hair tucked behind one ear, no eyewear, small gold stud earrings, wearing a cream linen blazer, white silk blouse, tailored navy trousers and tan leather watch strap; her expression is now open and quietly moved. The environmental pressure is golden-hour runway heat shimmer, airport glass reflections and the exact controlled moment of touchdown. Inside the faint window reflection, her hand opens flat from the IndiGo boarding pass, showing the distance has resolved into arrival. Locked lighting constant: Warm sunrise or golden-hour sunlight acts as key from frame-left whenever sky is visible; cool blue cabin and city ambience acts as fill from frame-right; window light remains the emotional source on faces. Locked palette: Deep indigo blue, cool blue-grey shadows, pearl white aircraft surfaces, warm gold sunrise highlights, soft cherry-blossom pink, cedar green, autumn amber; avoid oversaturated reds, neon overload and muddy yellow interiors. Continuity: cabin crew lead is an Indian man in his late 20s, angular face, medium-brown skin, dark brown eyes, neatly trimmed black hair, clean-shaven, poised posture, controlled welcoming smile, wearing an IndiGo-inspired navy uniform with deep indigo blazer, white shirt, indigo tie, silver name pin and neatly pressed trousers; child passenger is an Indian girl around 7 years old, round face, medium-brown skin, dark brown eyes, long black hair in two neat low braids, curious gaze, wearing a pale blue cardigan over a white cotton dress, white socks and navy Mary Jane shoes, travelling with parents kept mostly out of focus. Locations held for the film: IndiGo aircraft cabin, aircraft window seat, sunrise cloud layer, Mount Fuji at dawn, Tokyo skyline at blue hour, Shibuya Crossing, Kyoto temple gardens, bamboo forest, bullet train corridor and a modern Japanese airport at golden hour. Camera grammar: anamorphic shallow depth of field, slow aerial tracking, measured push-ins, glass-reflection compositions, stable crane and drone movement, no handheld shake; each move follows a reveal through a reflective surface. Props: IndiGo boarding pass, aircraft window shade, clear cabin glass, temple pond reflection, airport glass wall, one IndiGo aircraft with white fuselage and deep indigo-blue tail and engine accents. Rules: the primary traveler remains the emotional point of view even when Japan landmarks appear; use one IndiGo aircraft only and keep branding clean, legible and consistent; every transition is motivated by a reflection, window shape or cloud opening; faces stay natural and not overly posed; smiles arrive late after the Fuji reveal. On-screen text remains clean over the open sky above the runway: Discover timeless traditions. Experience tomorrow. Ends on the aircraft reflected in the airport glass wall, with the oval-window reflection still visible inside the reflection.
 
-Audio: Controlled airport ambience, gentle jet engine lowering in pitch, soft tire contact on runway, restrained wheel roll, glassy terminal room tone, no music.
+def reference_images() -> list[Path]:
+    """Brand reference art, for conditioning keyframes on real pixels.
 
-Duration: 8 seconds.
-
-Launch promise over clouds
-8s · Aftermath · aftermath · 0:42
-Anamorphic 50mm wide frame, slow aerial pull-back from a ghosted oval aircraft-window reflection to one IndiGo aircraft gliding above sunrise clouds. The oval window reflection remains in the foreground and holds Mount Fuji one last time; beside the reflected window edge, the IndiGo boarding pass is visible as a soft anchor object. One IndiGo aircraft only: white fuselage, deep indigo-blue tail and engine accents, clean legible branding, realistic aircraft physics, no extra aircraft. Primary traveler in the faint reflection: Indian woman in her early 30s, oval face, warm medium-brown skin, dark brown almond-shaped eyes, straight black shoulder-length hair tucked behind one ear, no eyewear, small gold stud earrings, wearing a cream linen blazer, white silk blouse, tailored navy trousers, tan leather watch strap and small gold stud earrings; her soft smile holds still and her fingers rest calmly beside the boarding pass. The environmental pressure is the vast sunrise cloud layer beneath the aircraft, while the window reflection keeps the promise intimate and personal. Her expression stays natural, not posed, with the wonder now settled into quiet certainty. Locked lighting constant: Warm sunrise or golden-hour sunlight acts as key from frame-left whenever sky is visible; cool blue cabin and city ambience acts as fill from frame-right; window light remains the emotional source on faces. Locked palette: Deep indigo blue, cool blue-grey shadows, pearl white aircraft surfaces, warm gold sunrise highlights, soft cherry-blossom pink, cedar green, autumn amber; avoid oversaturated reds, neon overload and muddy yellow interiors. Continuity: cabin crew lead is an Indian man in his late 20s, angular face, medium-brown skin, dark brown eyes, neatly trimmed black hair, clean-shaven, poised posture, controlled welcoming smile, wearing an IndiGo-inspired navy uniform with deep indigo blazer, white shirt, indigo tie, silver name pin and neatly pressed trousers; child passenger is an Indian girl around 7 years old, round face, medium-brown skin, dark brown eyes, long black hair in two neat low braids, curious gaze, wearing a pale blue cardigan over a white cotton dress, white socks and navy Mary Jane shoes, travelling with parents kept mostly out of focus. Locations held for the film: IndiGo aircraft cabin, aircraft window seat, sunrise cloud layer, Mount Fuji at dawn, Tokyo skyline at blue hour, Shibuya Crossing, Kyoto temple gardens, bamboo forest, bullet train corridor and a modern Japanese airport at golden hour. Camera grammar: anamorphic shallow depth of field, slow aerial tracking, measured push-ins, glass-reflection compositions, stable crane and drone movement, no handheld shake; each move follows a reveal through a reflective surface. Props: IndiGo boarding pass, aircraft window shade, clear cabin glass, temple pond reflection, airport glass wall, one IndiGo aircraft with white fuselage and deep indigo-blue tail and engine accents. Rules: the primary traveler remains the emotional point of view even when Japan landmarks appear; use one IndiGo aircraft only and keep branding clean, legible and consistent; every transition is motivated by a reflection, window shape or cloud opening; faces stay natural and not overly posed; final frame returns to the cloud-and-window motif rather than ending only on a landmark. Final on-screen message appears as clean brand-safe typography centered in open sky space: INDIGO NOW FLIES TO JAPAN. Below it: Your Next Journey Begins. Ends on the IndiGo aircraft above sunrise clouds, with the oval window reflection holding Fuji and the final launch message in the same frame.
-
-Audio: High-altitude wind above clouds, gentle steady jet engine wash, faint boarding-pass paper touch, soft cabin-air memory under the sky tone, final quiet breath, no music.
-
-Duration: 8 seconds.
+    Type, palette and product-photography tone only — this set carries no
+    aircraft livery or cabin interior, so it cannot fix how Veo draws an
+    aeroplane. See ``imagegen.generate_keyframe``.
+    """
+    if not REFERENCES_DIR.is_dir():
+        return []
+    return sorted(
+        path
+        for path in REFERENCES_DIR.iterdir()
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+    )
