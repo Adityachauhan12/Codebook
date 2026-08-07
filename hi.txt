@@ -1,257 +1,736 @@
-"""Environment configuration.
+"""The accumulation engine.
 
-Two providers, two jobs:
+Veo hands back N short, independently encoded clips. Turning them into one file
+is three steps, and skipping any of them is where stitched AI video usually goes
+wrong:
 
-    Azure OpenAI  -> the writing brain. Storyboards, scene prompts, repairs,
-                     audio direction. Anything that produces text.
-    Google Gemini -> the pixels. Veo for the video segments, and the Gemini
-                     image model for optional scene keyframes used as Veo first
-                     frames.
-
-Nothing is required at boot. The keys arrive later, and a server that refuses to
-start without them is useless for wiring up the UI. Each capability reports
-itself through ``capabilities()``, and routes fail loudly, per request, with an
-actionable message.
+  1. Normalise. Every segment is re-encoded to identical geometry, frame rate,
+     pixel format, timescale and audio layout, and padded or trimmed to the
+     exact seconds the plan asked for. Veo returns 7.94s for an 8s request often
+     enough that concatenating raw output drifts.
+  2. Concatenate. Because step 1 made them identical, this is a stream copy.
+  3. Mix and trim. Music and voiceover are laid under the clips' native audio,
+     then the whole thing is cut to the exact target length.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
+import asyncio
+import json
+import math
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Awaitable, Callable, Literal
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from ..config import settings
+from ..errors import AppError, UpstreamError
+from ..logging_setup import get_logger
+from ..storage import ensure_dir
 
-SERVER_ROOT = Path(__file__).resolve().parent.parent
-REPO_ROOT = SERVER_ROOT.parent
+log = get_logger("ffmpeg")
 
-# server/.env wins; the repo root .env is the fallback so one file can feed both apps.
-_ENV_FILES = (REPO_ROOT / ".env", SERVER_ROOT / ".env")
+ProgressFn = Callable[[float, str], Awaitable[None] | None]
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=[str(path) for path in _ENV_FILES],
-        env_file_encoding="utf-8",
-        extra="ignore",
-        case_sensitive=False,
+def _resolve_binary(configured: str | None, name: str) -> str:
+    if configured:
+        return configured
+    found = shutil.which(name)
+    return found or name
+
+
+FFMPEG = _resolve_binary(settings.ffmpeg_path, "ffmpeg")
+FFPROBE = _resolve_binary(settings.ffprobe_path, "ffprobe")
+
+# Keeps a console window from flashing up for every ffmpeg call on Windows.
+# Absent on POSIX, where 0 means "no special flags".
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _missing_binary_error(binary: str, setting: str) -> AppError:
+    return AppError(
+        f'{Path(binary).name} was not found at "{binary}". '
+        f"Install it, or set {setting} in server/.env.",
+        status=503,
+        code=f"{Path(binary).stem}_missing",
     )
 
-    # --- Server -----------------------------------------------------------
-    host: str = "0.0.0.0"
-    port: int = 8787
-    public_base_url: str = "http://localhost:8787"
-    cors_origins: str = "http://localhost:5173,http://localhost:8080"
-    log_level: str = "INFO"
 
-    # --- Brand -------------------------------------------------------------
-    #: Which brand guardrails to enforce. "indigo" applies app/brand/policy.py to
-    #: every storyboard, scene prompt and audit. "none" turns enforcement off and
-    #: leaves the craft layer alone.
-    brand: str = "indigo"
-    #: TrueType/OpenType file used for burnt-in supers. Veo is never asked to
-    #: render type, so this font is the only one a viewer ever sees. Left unset,
-    #: `brand.assets.font_path()` picks the best available geometric sans for the
-    #: platform — Futura on macOS, Century Gothic on Windows.
-    brand_font_path: str | None = None
-    #: Refuse to render when the storyboard audit still has `error`-severity
-    #: issues. The audit exists to stop broken prompts reaching Veo; leaving this
-    #: off makes it advisory, which is how misspelt supers shipped.
-    brand_enforce_audit: bool = True
+@dataclass(slots=True)
+class MediaInfo:
+    seconds: float
+    has_video: bool
+    has_audio: bool
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
 
-    # --- Azure OpenAI: the writing brain ----------------------------------
-    azure_openai_base_url: str | None = None
-    azure_openai_key: str | None = None
-    #: The deployment name, which is what actually goes in the URL path.
-    azure_openai_deployment_name: str | None = None
-    #: Underlying model behind the deployment. Decides the parameter dialect.
-    azure_openai_model: str = "gpt-4.1"
-    azure_openai_version: str = "2024-10-21"
-    #: Optional second deployment for cheap passes. Falls back to the main one.
-    azure_openai_fast_deployment_name: str | None = None
-    #: Optional TTS deployment for voiceover. Voiceover is disabled without it.
-    azure_openai_tts_deployment_name: str | None = None
-    azure_openai_tts_voice: str = "alloy"
-    azure_openai_max_output_tokens: int = 16000
-    azure_openai_timeout_seconds: float = 180.0
 
-    # --- Google: Veo + image ----------------------------------------------
-    #: The Google AI Studio key. Named for the image model in this product's
-    #: existing config; the same key authenticates Veo. GEMINI_API_KEY is an alias.
-    gemini_image_api_key: str | None = None
-    gemini_api_key: str | None = None
-    gemini_api_base: str = "https://generativelanguage.googleapis.com/v1beta"
-    #: Image model, used for optional scene keyframes fed to Veo as first frames.
-    gemini_image_model_name: str = "gemini-2.5-flash-image"
-    veo_model: str = "veo-3.1-generate-preview"
-    veo_fast_model: str = "veo-3.1-fast-generate-preview"
+@dataclass(slots=True)
+class Segment:
+    file: Path
+    seconds: float
 
-    # --- Veo behaviour ------------------------------------------------------
-    #: Longest single Veo generation, in seconds. Veo accepts 4, 6 or 8.
-    veo_max_clip_seconds: int = Field(default=8, ge=4, le=8)
-    #: Seconds added by one ``extend`` call on a Veo-produced video.
-    veo_extend_seconds: int = 7
-    #: Hard ceiling on extends per video, per the Veo API.
-    veo_max_extensions: int = 20
-    veo_resolution: Literal["720p", "1080p"] = "1080p"
-    veo_person_generation: Literal["allow_all", "allow_adult", "dont_allow"] = "allow_all"
-    veo_poll_interval_seconds: float = 10.0
-    veo_poll_timeout_seconds: float = 900.0
-    #: How many Veo generations may be in flight at once.
-    veo_concurrency: int = 3
-    #: Attempts per clip before it is marked failed.
-    veo_max_attempts: int = 2
-    #: Render a still keyframe per scene with the Gemini image model and pass it
-    #: to Veo as the first frame. One image call per clip, large continuity win.
-    veo_use_keyframes: bool = False
-    #: Seed each clip with the LAST FRAME of the previous clip, so the face,
-    #: wardrobe and grade carry across a cut instead of being re-guessed. Costs
-    #: nothing extra per clip, but forces generation to run in story order rather
-    #: than `veo_concurrency` at a time — a 7-clip film goes from ~3 rounds to 7.
-    #: Worth it when characters recur; pointless for a montage of unrelated shots.
-    veo_chain_keyframes: bool = False
 
-    # --- Guard rails --------------------------------------------------------
-    max_video_seconds: int = 180
-    max_segments: int = 30
+@dataclass(slots=True)
+class MixTrack:
+    file: Path
+    gain: float
+    #: Music loops to fill the runtime; voiceover plays once from the top.
+    loop: bool
+    fade_in: float = 0.0
+    fade_out: float = 0.0
 
-    # --- Media / storage ----------------------------------------------------
-    storage_dir: str = "./storage"
-    ffmpeg_path: str | None = None
-    ffprobe_path: str | None = None
-    render_fps: int = 24
-    #: Gain applied to the music bed under the clip audio.
-    music_gain: float = 0.28
-    voiceover_gain: float = 1.0
 
-    # --- Optional music providers ------------------------------------------
-    music_provider: Literal["none", "elevenlabs", "vertex-lyria"] = "none"
-    elevenlabs_api_key: str | None = None
-    elevenlabs_music_model: str = "music_v1"
-    google_cloud_project: str | None = None
-    google_cloud_location: str = "us-central1"
-    google_access_token: str | None = None
-    vertex_lyria_model: str = "lyria-002"
+@dataclass(slots=True)
+class Super:
+    """One line of burnt-in copy, with its own window on the timeline.
 
-    @field_validator(
-        "azure_openai_base_url",
-        "azure_openai_key",
-        "azure_openai_deployment_name",
-        "azure_openai_fast_deployment_name",
-        "azure_openai_tts_deployment_name",
-        "gemini_image_api_key",
-        "gemini_api_key",
-        "elevenlabs_api_key",
-        "google_cloud_project",
-        "google_access_token",
-        "ffmpeg_path",
-        "ffprobe_path",
-        mode="before",
-    )
-    @classmethod
-    def _blank_to_none(cls, value: object) -> object:
-        """Treat ``KEY=`` in a .env file as "not set" rather than an empty string."""
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
+    Text is never sent to Veo — it is drawn here, from a font file, so it is
+    spelled the way it was written. ``x`` and ``y`` are ffmpeg expressions
+    evaluated against ``w``/``h`` (the text box) and ``W``/``H`` (the frame).
+    """
 
-    # --- Derived ------------------------------------------------------------
-    @property
-    def cors_origin_list(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+    text: str
+    start: float
+    end: float
+    x: str
+    y: str
+    size: int
+    colour: str = "white"
+    fade: float = 0.5
+    #: A soft drop shadow is the difference between legible and not over sky.
+    shadow: bool = True
 
-    @property
-    def storage_path(self) -> Path:
-        path = Path(self.storage_dir)
-        return path if path.is_absolute() else (SERVER_ROOT / path).resolve()
 
-    @property
-    def google_key(self) -> str | None:
-        """The Google key, under either accepted name."""
-        return self.gemini_image_api_key or self.gemini_api_key
+@dataclass(slots=True)
+class Lockup:
+    """A brand mark composited over the plate for part of the runtime."""
 
-    @property
-    def azure_configured(self) -> bool:
-        return bool(
-            self.azure_openai_base_url
-            and self.azure_openai_key
-            and self.azure_openai_deployment_name
+    file: Path
+    start: float
+    width: int
+    x: str = "(W-w)/2"
+    y: str = "(H-h)/2"
+    fade: float = 0.6
+
+
+async def _report(callback: ProgressFn | None, fraction: float, message: str) -> None:
+    if callback is None:
+        return
+    result = callback(fraction, message)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+async def _run(
+    args: list[str],
+    *,
+    label: str = "ffmpeg",
+    total_seconds: float | None = None,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Run ffmpeg on a worker thread, relaying its progress to the event loop.
+
+    Deliberately NOT ``asyncio.create_subprocess_exec``. Uvicorn installs
+    ``WindowsSelectorEventLoopPolicy`` on Windows, and a selector loop cannot
+    spawn subprocesses at all — it raises ``NotImplementedError``. A plain
+    blocking ``Popen`` on a thread behaves identically on every platform and
+    every event loop policy, which is worth more here than native async I/O:
+    these calls are minutes long and there are only a handful in flight.
+
+    stderr goes to a temp file rather than a pipe so a chatty failure cannot
+    fill the OS pipe buffer and deadlock while we are draining stdout.
+    """
+    # `-progress pipe:1` gives machine-readable key=value on stdout, which is
+    # far more reliable than scraping the human-readable stderr banner.
+    argv = [
+        FFMPEG,
+        "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        *args,
+        "-progress", "pipe:1", "-nostats",
+    ]
+    log.debug("%s: %s", label, " ".join(argv))
+
+    loop = asyncio.get_running_loop()
+    updates: asyncio.Queue[float] = asyncio.Queue()
+    handle: dict[str, subprocess.Popen[bytes]] = {}
+
+    def blocking() -> tuple[int, str]:
+        with tempfile.TemporaryFile("w+b") as errors:
+            process = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                creationflags=_NO_WINDOW,
+            )
+            handle["process"] = process
+
+            assert process.stdout is not None
+            for raw in process.stdout:
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line.startswith("out_time_us="):
+                    continue
+                try:
+                    seconds = int(line.split("=", 1)[1]) / 1_000_000
+                except ValueError:
+                    continue
+                # Hop back onto the loop thread to publish progress.
+                loop.call_soon_threadsafe(updates.put_nowait, seconds)
+
+            process.stdout.close()
+            code = process.wait()
+
+            errors.seek(0)
+            return code, errors.read().decode("utf-8", "ignore")
+
+    try:
+        worker = asyncio.create_task(asyncio.to_thread(blocking))
+    except FileNotFoundError as error:
+        raise _missing_binary_error(FFMPEG, "FFMPEG_PATH") from error
+
+    try:
+        while not worker.done():
+            try:
+                seconds = await asyncio.wait_for(updates.get(), timeout=0.25)
+            except asyncio.TimeoutError:
+                continue
+            if total_seconds and on_progress:
+                fraction = max(0.0, min(0.99, seconds / total_seconds))
+                await _report(
+                    on_progress, fraction, f"{label}… {seconds:.1f}s / {total_seconds:.0f}s"
+                )
+    except asyncio.CancelledError:
+        # A cancelled render must not leave ffmpeg running for another minute.
+        process = handle.get("process")
+        if process is not None and process.poll() is None:
+            process.kill()
+        raise
+
+    try:
+        code, stderr = await worker
+    except FileNotFoundError as error:
+        raise _missing_binary_error(FFMPEG, "FFMPEG_PATH") from error
+
+    if code != 0:
+        raise UpstreamError(f"{label} failed (exit {code}).", details=stderr.strip()[-1500:])
+
+    await _report(on_progress, 1.0, f"{label} done.")
+
+
+# ---------------------------------------------------------------------------
+# Probe
+# ---------------------------------------------------------------------------
+
+
+async def probe(file: Path) -> MediaInfo:
+    args = ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(file)]
+
+    # Threaded for the same reason as `_run` — a selector event loop on Windows
+    # cannot spawn subprocesses.
+    def blocking() -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [FFPROBE, *args], capture_output=True, creationflags=_NO_WINDOW, check=False
         )
 
-    @property
-    def allowed_clip_seconds(self) -> list[int]:
-        """Durations Veo accepts for a single generation, capped by config."""
-        allowed = [s for s in (4, 6, 8) if s <= self.veo_max_clip_seconds]
-        return allowed or [4]
+    try:
+        result = await asyncio.to_thread(blocking)
+    except FileNotFoundError as error:
+        raise _missing_binary_error(FFPROBE, "FFPROBE_PATH") from error
+
+    if result.returncode != 0:
+        raise UpstreamError(
+            f"ffprobe failed on {file.name}.",
+            details=result.stderr.decode("utf-8", "ignore")[-600:],
+        )
+
+    parsed = json.loads(result.stdout.decode("utf-8", "ignore") or "{}")
+    streams = parsed.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+    duration_raw = (parsed.get("format") or {}).get("duration") or (video or {}).get("duration") or 0
+    try:
+        seconds = float(duration_raw)
+    except (TypeError, ValueError):
+        seconds = 0.0
+
+    fps = None
+    if video:
+        try:
+            num, den = (video.get("avg_frame_rate") or "0/1").split("/")
+            fps = float(num) / float(den) if float(den) else None
+        except (ValueError, ZeroDivisionError):
+            fps = None
+
+    return MediaInfo(
+        seconds=seconds,
+        has_video=video is not None,
+        has_audio=audio is not None,
+        width=(video or {}).get("width"),
+        height=(video or {}).get("height"),
+        fps=fps,
+    )
 
 
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
+# ---------------------------------------------------------------------------
+# Step 1 — normalise
+# ---------------------------------------------------------------------------
 
 
-settings = get_settings()
+async def normalise_segment(
+    source: Path,
+    destination: Path,
+    *,
+    width: int,
+    height: int,
+    seconds: float,
+    fps: int | None = None,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Re-encode one segment to the delivery geometry and to exactly ``seconds``.
 
+    ``scale=…:force_original_aspect_ratio=increase`` followed by ``crop`` is a
+    centre crop that fills the frame — this is what converts Veo's 9:16 output
+    into a 1:1 or 4:5 deliverable without letterboxing.
 
-def capabilities() -> list[dict[str, object]]:
-    """What this server can actually do right now, given the keys it has."""
-    google = settings.google_key
-    return [
-        {
-            "id": "storyboard",
-            "ready": settings.azure_configured,
-            "detail": (
-                f"Azure OpenAI {settings.azure_openai_model} "
-                f"(deployment {settings.azure_openai_deployment_name})"
-                if settings.azure_configured
-                else "Set AZURE_OPENAI_BASE_URL, AZURE_OPENAI_KEY and "
-                "AZURE_OPENAI_DEPLOYMENT_NAME to plan storyboards."
-            ),
-        },
-        {
-            "id": "clips",
-            "ready": bool(google),
-            "detail": (
-                f"{settings.veo_model}, max {settings.veo_max_clip_seconds}s per generation"
-                if google
-                else "Set GEMINI_IMAGE_API_KEY to generate video clips with Veo."
-            ),
-        },
-        {
-            "id": "keyframes",
-            "ready": bool(google) and settings.veo_use_keyframes,
-            "detail": (
-                "Set GEMINI_IMAGE_API_KEY to generate scene keyframes."
-                if not google
-                else f"{settings.gemini_image_model_name} first-frame keyframes are on"
-                if settings.veo_use_keyframes
-                else "Set VEO_USE_KEYFRAMES=true to lock continuity with generated first frames."
-            ),
-        },
-        {
-            "id": "voiceover",
-            "ready": settings.azure_configured and bool(settings.azure_openai_tts_deployment_name),
-            "detail": (
-                f"Azure OpenAI TTS deployment {settings.azure_openai_tts_deployment_name}"
-                if settings.azure_openai_tts_deployment_name
-                else "Set AZURE_OPENAI_TTS_DEPLOYMENT_NAME for voiceover. Veo still "
-                "generates in-scene dialogue without it."
-            ),
-        },
-        {
-            "id": "music",
-            "ready": (
-                settings.music_provider == "elevenlabs" and bool(settings.elevenlabs_api_key)
-            )
-            or (
-                settings.music_provider == "vertex-lyria"
-                and bool(settings.google_cloud_project and settings.google_access_token)
-            ),
-            "detail": (
-                "No music generator configured — upload a track instead, or set MUSIC_PROVIDER."
-                if settings.music_provider == "none"
-                else f"Provider {settings.music_provider}"
-            ),
-        },
+    ``tpad``/``apad`` hold the last frame and pad silence so a clip that came
+    back fractionally short still fills its slot; ``-t`` then cuts it back to
+    length. Without this the finished film drifts a second or two under target.
+    """
+    rate = fps or settings.render_fps
+    info = await probe(source)
+    ensure_dir(destination.parent)
+
+    video_filter = ",".join(
+        [
+            f"scale={width}:{height}:force_original_aspect_ratio=increase",
+            f"crop={width}:{height}",
+            f"fps={rate}",
+            # Hold the final frame if the source came back short of its slot.
+            f"tpad=stop_mode=clone:stop_duration={max(1, math.ceil(seconds))}",
+            "setsar=1",
+            "format=yuv420p",
+        ]
+    )
+
+    args: list[str] = ["-i", str(source)]
+
+    if not info.has_audio:
+        # Veo normally returns audio, but a filtered or silent generation may
+        # not. The concat demuxer requires an identical stream layout on every
+        # segment, so synthesise silence rather than dropping the track.
+        args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+
+    args += [
+        "-map", "0:v:0",
+        "-map", "0:a:0" if info.has_audio else "1:a:0",
+        "-vf", video_filter,
+        "-af", "apad,aresample=48000:async=1",
+        "-t", str(seconds),
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "20",
+        "-profile:v", "high",
+        "-level", "4.2",
+        "-pix_fmt", "yuv420p",
+        # A shared timescale keeps the concat demuxer from introducing gaps.
+        "-video_track_timescale", str(rate * 1000),
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "48000",
+        "-ac", "2",
+        "-movflags", "+faststart",
+        str(destination),
     ]
+
+    await _run(
+        args,
+        label=f"normalise {source.name}",
+        total_seconds=seconds,
+        on_progress=on_progress,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 2 — concatenate
+# ---------------------------------------------------------------------------
+
+
+def _concat_entry(path: Path) -> str:
+    """One line of a concat demuxer list file.
+
+    Paths are single-quoted; a literal quote is escaped as ``'\\''``, the same
+    convention a POSIX shell uses.
+    """
+    escaped = str(path).replace("'", "'\\''")
+    return f"file '{escaped}'"
+
+
+async def concat_segments(
+    segments: list[Segment],
+    destination: Path,
+    *,
+    transition: Literal["hardcut", "crossfade"] = "hardcut",
+    crossfade_seconds: float = 0.4,
+    work_dir: Path,
+    on_progress: ProgressFn | None = None,
+) -> float:
+    """Join the conformed segments. Returns the duration actually produced."""
+    if not segments:
+        raise UpstreamError("Nothing to concatenate — no clips are ready.")
+
+    ensure_dir(destination.parent)
+    plain_total = sum(segment.seconds for segment in segments)
+
+    if len(segments) == 1:
+        shutil.copyfile(segments[0].file, destination)
+        return plain_total
+
+    if transition == "crossfade":
+        return await _crossfade_segments(
+            segments, destination, crossfade_seconds, on_progress=on_progress
+        )
+
+    # Every segment was normalised to identical parameters, so this is a copy.
+    ensure_dir(work_dir)
+    list_file = work_dir / "concat.txt"
+    entries = [_concat_entry(segment.file) for segment in segments]
+    list_file.write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+    await _run(
+        ["-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy",
+         "-movflags", "+faststart", str(destination)],
+        label="concat",
+        total_seconds=plain_total,
+        on_progress=on_progress,
+    )
+
+    return plain_total
+
+
+async def _crossfade_segments(
+    segments: list[Segment],
+    destination: Path,
+    fade: float,
+    *,
+    on_progress: ProgressFn | None = None,
+) -> float:
+    """Dissolve between segments with ``xfade``/``acrossfade``.
+
+    Note the arithmetic: each transition overlaps two segments, so the result is
+    ``(n - 1) * fade`` seconds SHORTER than the sum of the parts. The duration
+    plan fits the target exactly for hard cuts; choosing crossfade trades that
+    exact landing for the dissolve, and the renderer reports what it got.
+    """
+    shortest = min(segment.seconds for segment in segments)
+    safe_fade = max(0.1, min(fade, shortest / 2 - 0.1))
+
+    inputs: list[str] = []
+    for segment in segments:
+        inputs += ["-i", str(segment.file)]
+
+    filters: list[str] = []
+    video_label = "0:v"
+    audio_label = "0:a"
+    offset = 0.0
+
+    for index in range(1, len(segments)):
+        offset += segments[index - 1].seconds - (0 if index == 1 else safe_fade)
+        transition_at = max(0.0, offset - safe_fade)
+
+        next_video, next_audio = f"v{index}", f"a{index}"
+        filters.append(
+            f"[{video_label}][{index}:v]xfade=transition=fade:"
+            f"duration={safe_fade}:offset={transition_at:.3f}[{next_video}]"
+        )
+        filters.append(f"[{audio_label}][{index}:a]acrossfade=d={safe_fade}[{next_audio}]")
+        video_label, audio_label = next_video, next_audio
+
+    total = sum(segment.seconds for segment in segments) - (len(segments) - 1) * safe_fade
+
+    await _run(
+        [
+            *inputs,
+            "-filter_complex", ";".join(filters),
+            "-map", f"[{video_label}]",
+            "-map", f"[{audio_label}]",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+            "-movflags", "+faststart",
+            str(destination),
+        ],
+        label="crossfade",
+        total_seconds=total,
+        on_progress=on_progress,
+    )
+
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Step 2b — burn supers and brand marks
+# ---------------------------------------------------------------------------
+
+
+def _filter_path(path: Path) -> str:
+    r"""Escape a filesystem path for use inside a filtergraph option.
+
+    Windows is the whole reason this exists. ``C:\Users\x\f.ttf`` contains both
+    the option separator and the escape character, so it has to become
+    ``C\:/Users/x/f.ttf`` — forward slashes (which ffmpeg accepts on Windows)
+    and an escaped drive colon.
+    """
+    text = str(path).replace("\\", "/")
+    return text.replace(":", r"\:").replace("'", r"\'")
+
+
+#: Typographer's punctuation an LLM reaches for by default, mapped to glyphs
+#: every system font actually carries. Futura renders an em dash as tofu, and a
+#: box in the middle of a brand super is worse than a hyphen.
+_PUNCTUATION = {
+    "—": "-",   # em dash
+    "–": "-",   # en dash
+    "‘": "'",   # single quotes
+    "’": "'",
+    "“": '"',   # double quotes
+    "”": '"',
+    "…": "...",  # ellipsis
+    " ": " ",   # non-breaking space
+    "•": "-",   # bullet
+    "×": "x",   # multiplication sign, as in "IndiGo x Japan"
+}
+
+
+def _safe_glyphs(text: str) -> str:
+    """Replace punctuation the render font is unlikely to carry."""
+    for source, replacement in _PUNCTUATION.items():
+        text = text.replace(source, replacement)
+    return text
+
+
+def _fade_alpha(start: float, end: float, fade: float) -> str:
+    """A trapezoid alpha ramp: up over ``fade``, hold, down over ``fade``."""
+    if fade <= 0:
+        return "1"
+    return (
+        f"max(0\\,min(1\\,min((t-{start:.3f})/{fade:.3f}\\,({end:.3f}-t)/{fade:.3f})))"
+    )
+
+
+async def burn_brand(
+    source: Path,
+    destination: Path,
+    *,
+    seconds: float,
+    supers: list[Super],
+    lockups: list[Lockup],
+    font: Path | None,
+    work_dir: Path,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Composite copy and brand marks onto the finished plate.
+
+    This is the half of the brand policy that the prompt layer cannot do. Veo is
+    told to keep the plate clean; everything a viewer reads gets drawn here,
+    where it is correct by construction rather than by luck.
+
+    A missing font drops the supers and keeps the marks — an unreadable film is
+    worse than a silent one, but a film with no end card is still deliverable.
+    """
+    if not supers and not lockups:
+        shutil.copyfile(source, destination)
+        return
+
+    if supers and font is None:
+        log.warning("No usable font found; skipping %d super(s).", len(supers))
+        supers = []
+
+    ensure_dir(work_dir)
+    inputs: list[str] = ["-i", str(source)]
+    steps: list[str] = []
+    label = "0:v"
+
+    for index, item in enumerate(supers):
+        # `textfile` rather than `text` so copy containing colons, quotes or
+        # commas needs no escaping. `expansion=none` is the other half of that:
+        # without it drawtext still interprets `%` and backslash sequences in
+        # the file, and a super reading "100% ready" silently renders nothing.
+        copy_file = work_dir / f"super-{index:02d}.txt"
+        copy_file.write_text(_safe_glyphs(item.text), encoding="utf-8")
+
+        assert font is not None
+        options = [
+            f"fontfile={_filter_path(font)}",
+            f"textfile={_filter_path(copy_file)}",
+            "expansion=none",
+            f"fontcolor={item.colour}",
+            f"fontsize={item.size}",
+            f"x={item.x}",
+            f"y={item.y}",
+            f"enable=between(t\\,{item.start:.3f}\\,{item.end:.3f})",
+            f"alpha={_fade_alpha(item.start, item.end, item.fade)}",
+            "line_spacing=10",
+        ]
+        if item.shadow:
+            options += ["shadowcolor=black@0.35", "shadowx=0", "shadowy=2"]
+
+        steps.append(f"[{label}]drawtext={':'.join(options)}[txt{index}]")
+        label = f"txt{index}"
+
+    for index, mark in enumerate(lockups):
+        stream = 1 + index
+        # `-t` bounds the looped still so it cannot outrun the plate.
+        inputs += ["-loop", "1", "-t", f"{seconds:.3f}", "-i", str(mark.file)]
+        steps.append(
+            f"[{stream}:v]scale={mark.width}:-1,format=rgba,"
+            f"fade=t=in:st={mark.start:.3f}:d={mark.fade:.3f}:alpha=1,"
+            f"setpts=PTS-STARTPTS[mark{index}]"
+        )
+        steps.append(
+            f"[{label}][mark{index}]overlay=x={mark.x}:y={mark.y}:"
+            f"enable='gte(t\\,{mark.start:.3f})'[ov{index}]"
+        )
+        label = f"ov{index}"
+
+    args = [
+        *inputs,
+        "-filter_complex", ";".join(steps),
+        "-map", f"[{label}]",
+        # Audio rides through untouched; the mix step owns it.
+        "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        str(destination),
+    ]
+
+    await _run(
+        args,
+        label="brand",
+        total_seconds=seconds,
+        on_progress=on_progress,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — mix audio and land on the exact duration
+# ---------------------------------------------------------------------------
+
+
+async def mix_and_finalise(
+    source: Path,
+    destination: Path,
+    *,
+    seconds: float,
+    tracks: list[MixTrack],
+    fade_out_seconds: float = 0.0,
+    on_progress: ProgressFn | None = None,
+) -> None:
+    """Lay music and voiceover under the clips' native audio, then cut to length.
+
+    Levels are static rather than side-chain ducked: Veo's native audio is
+    mostly room tone and texture, so a fixed bed sits under it cleanly, whereas
+    a compressor keyed off ambience pumps. ``loudnorm`` lands the whole film at
+    a broadcast-ish -16 LUFS.
+    """
+    ensure_dir(destination.parent)
+    usable = [track for track in tracks if track.gain > 0]
+
+    args: list[str] = ["-i", str(source)]
+    filters: list[str] = []
+    mix_labels: list[str] = ["0:a"]
+
+    for index, track in enumerate(usable, start=1):
+        if track.loop:
+            args += ["-stream_loop", "-1"]
+        args += ["-i", str(track.file)]
+
+        label = f"t{index}"
+        chain = [
+            f"atrim=0:{seconds}",
+            "asetpts=PTS-STARTPTS",
+            "aresample=48000",
+            f"volume={track.gain:.3f}",
+        ]
+        if track.fade_in > 0:
+            chain.append(f"afade=t=in:st=0:d={track.fade_in}")
+        if track.fade_out > 0:
+            chain.append(f"afade=t=out:st={max(0.0, seconds - track.fade_out):.2f}:d={track.fade_out}")
+        # Pad in case the track is shorter than the film and not set to loop.
+        chain.append(f"apad=whole_dur={seconds}")
+
+        filters.append(f"[{index}:a]{','.join(chain)}[{label}]")
+        mix_labels.append(label)
+
+    if len(mix_labels) > 1:
+        joined = "".join(f"[{label}]" for label in mix_labels)
+        filters.append(
+            f"{joined}amix=inputs={len(mix_labels)}:duration=first:"
+            "dropout_transition=0:normalize=0[mixed]"
+        )
+        filters.append("[mixed]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+    else:
+        filters.append("[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+
+    args += ["-filter_complex", ";".join(filters), "-map", "0:v:0", "-map", "[aout]"]
+
+    if fade_out_seconds > 0:
+        args += [
+            "-vf", f"fade=t=out:st={max(0.0, seconds - fade_out_seconds):.2f}:d={fade_out_seconds}",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+        ]
+    else:
+        # No picture change — keep the encode we already paid for.
+        args += ["-c:v", "copy"]
+
+    args += [
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-t", str(seconds),
+        "-movflags", "+faststart",
+        str(destination),
+    ]
+
+    await _run(args, label="mix", total_seconds=seconds, on_progress=on_progress)
+
+
+# ---------------------------------------------------------------------------
+# Poster frames
+# ---------------------------------------------------------------------------
+
+
+async def extract_poster(source: Path, destination: Path, at_seconds: float = 0.5) -> None:
+    ensure_dir(destination.parent)
+    await _run(
+        ["-ss", str(at_seconds), "-i", str(source), "-frames:v", "1", "-q:v", "3", str(destination)],
+        label="poster",
+    )
+
+
+async def ffmpeg_available() -> bool:
+    """Cheap availability probe for the health endpoint.
+
+    Never raises — health must stay answerable even when the toolchain is
+    broken, since telling the user *what* is broken is the whole point of it.
+    """
+
+    def blocking() -> bool:
+        try:
+            result = subprocess.run(
+                [FFMPEG, "-version"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+                check=False,
+            )
+        except OSError:
+            return False
+        return result.returncode == 0
+
+    try:
+        return await asyncio.to_thread(blocking)
+    except Exception:  # noqa: BLE001
+        return False
