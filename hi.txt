@@ -1,513 +1,61 @@
-"""The dramaturgy and three-detail checks, enforced in code.
-
-The skill says its two checks — the six-point dramaturgy check and the
-three-detail audit — are the step writers skip, and that skipping them silently
-degrades everything downstream. An LLM asked to self-check will cheerfully claim
-it did.
-
-So the check runs here, against the structured scene the model returned.
-Anything at ``error`` severity is fed back to the model as a repair brief;
-warnings are surfaced in the UI but do not block.
-"""
-
-from __future__ import annotations
-
-import re
-
-from ..brand import brand_issues
-from ..domain.models import AuditIssue, AuditReport, Scene, StoryOption
-
-#: Words that mark an absent detail. Section 7 of PIPELINE.md.
-BANNED_PHRASES = [
-    "cinematic masterpiece",
-    "professional",
-    "high quality",
-    "highest quality",
-    "masterpiece",
-    "stunning",
-    "epic",
-    "amazing",
-    "beautiful lighting",
-    "beautiful light",
-    "dynamic camera",
-    "intense moment",
-    "powerful scene",
-    "breathtaking",
-    "award-winning",
-    "award winning",
-    "hyperrealistic",
-    "ultra realistic",
-    "ultra-realistic",
-    "photorealistic masterpiece",
-    "8k",
-    "4k",
-    "best quality",
-    "highly detailed",
-]
-
-#: "cinematic" alone is banned, but "cinematic naturalism" is a named grade the
-#: skill's own worked examples use. Allow the compound, reject the adjective.
-ALLOWED_CINEMATIC_COMPOUNDS = ("cinematic naturalism", "cinematic widescreen")
-
-TELL_NOT_SHOW = re.compile(
-    r"\b(?:he|she|they|the (?:man|woman|hero|subject|character)|it)\s+"
-    r"(?:is|are|was|were|looks?|seems?|feels?)\s+(?:very\s+|really\s+|so\s+)?"
-    r"(?:sad|angry|afraid|scared|happy|excited|nervous|anxious|joyful|frustrated|"
-    r"lonely|proud|confident|surprised)\b",
-    re.IGNORECASE,
-)
-
-LENS_PATTERN = re.compile(
-    r"\b(?:\d{2,3}\s?mm|macro|anamorphic|telephoto|wide-angle|wide angle)\b", re.IGNORECASE
-)
-
-CAMERA_MOVE_PATTERN = re.compile(
-    r"\b(?:static camera|locked[- ]off|slow push[- ]in|fast push[- ]in|push[- ]in|pull[- ]back|"
-    r"dolly[- ](?:in|out)|tracking|lateral track|handheld|whip pan|snap zoom|rack focus|"
-    r"tilt (?:up|down)|orbit|gimbal|crane|aerial|dolly[- ]zoom|pan (?:left|right)|drift|glide|"
-    r"arc|steadicam|FPV|top[- ]down)\b",
-    re.IGNORECASE,
-)
-
-LIGHT_PATTERN = re.compile(
-    r"\b(?:key(?:\s?light)?|rim(?:\s?light)?|backlight|back light|fill|bounce|practical|"
-    r"underlight|top light|side light|spill|silhouette|motivated)\b",
-    re.IGNORECASE,
-)
-
-LIGHT_DIRECTION_PATTERN = re.compile(
-    r"\b(?:frame[- ](?:left|right)|from (?:left|right|behind|above|below|"
-    r"the (?:window|door|screen|street))|overhead|off[- ]screen (?:left|right)|"
-    r"camera[- ](?:left|right)|three[- ]quarter)\b",
-    re.IGNORECASE,
-)
-
-COLOUR_PATTERN = re.compile(
-    r"\b(?:red|orange|amber|gold(?:en)?|yellow|green|teal|cyan|blue|indigo|violet|magenta|pink|"
-    r"crimson|scarlet|sepia|ochre|beige|cream|ivory|white|grey|gray|black|brown|tan|rust|bronze|"
-    r"copper|silver|charcoal|slate|desaturated|monochrome|warm|cool|cold)\b",
-    re.IGNORECASE,
-)
-
-AUDIO_LINE = re.compile(r"^\s*audio\s*:", re.IGNORECASE | re.MULTILINE)
-
-FINAL_IMAGE_PATTERN = re.compile(
-    r"\b(?:ends? on|final frame|final image|closes? on|last frame|holds? on|freezes? on|out on)\b",
-    re.IGNORECASE,
-)
-
-DIALOGUE_PATTERN = re.compile(
-    r"(?:says|whispers|shouts|mutters|asks|replies|answers)\s*[:,]\s*[\"“]([^\"”]+)",
-    re.IGNORECASE,
-)
-
-#: Words per second of natural speech; Veo caps spoken audio at ~8s.
-WORDS_PER_SECOND = 2.5
-
-
-def _contains_banned(text: str) -> list[str]:
-    lower = text.lower()
-    hits = [phrase for phrase in BANNED_PHRASES if phrase in lower]
-
-    # "cinematic" on its own, but not as part of an allowed compound.
-    for match in re.finditer(r"cinematic", lower):
-        index = match.start()
-        allowed = any(lower.startswith(compound, index) for compound in ALLOWED_CINEMATIC_COMPOUNDS)
-        if not allowed and "cinematic" not in hits:
-            hits.append("cinematic")
-            break
-
-    return hits
-
-
-def _filled(value: str | None, min_length: int = 12) -> bool:
-    return bool(value and len(value.strip()) >= min_length)
-
-
-def _significant_token(phrase: str) -> str | None:
-    """Longest word in a phrase, lowercased — a cheap proxy for "was this restated"."""
-    words = [word for word in re.sub(r"[^a-z0-9\s-]", " ", phrase.lower()).split() if len(word) > 4]
-    return max(words, key=len) if words else None
-
-
-def _audit_scene(scene: Scene, story: StoryOption) -> list[AuditIssue]:
-    issues: list[AuditIssue] = []
-
-    def at(rule: str, severity: str, message: str) -> None:
-        issues.append(
-            AuditIssue(
-                sceneId=scene.id,
-                sceneOrder=scene.order,
-                rule=rule,
-                severity=severity,  # type: ignore[arg-type]
-                message=message,
-            )
-        )
-
-    prompt = scene.prompt or ""
-    card = scene.shot_card
-    haystack = "\n".join(
-        [prompt, *(str(value) for value in card.model_dump().values() if isinstance(value, str))]
-    )
-
-    if len(prompt.strip()) < 120:
-        at("prompt-substance", "error", "Prompt is too thin to direct a shot.")
-
-    # --- Details Law: the three-detail check --------------------------------
-    if not _filled(card.environmental_pressure):
-        at(
-            "three-detail/environment",
-            "error",
-            "No environmental pressure. Name a physical fact of the space that carries the emotion.",
-        )
-    if not _filled(card.micro_action):
-        at(
-            "three-detail/micro-action",
-            "error",
-            "No physical micro-action. Translate the emotion onto the body — jaw, hands, breath, eyes.",
-        )
-    if not _filled(card.sound_anchor, 8):
-        at(
-            "three-detail/motif",
-            "error",
-            "No sound anchor or visual motif tying this shot to the spine of the piece.",
-        )
-
-    # --- Banned vocabulary --------------------------------------------------
-    banned = _contains_banned(haystack)
-    if banned:
-        at(
-            "banned-vocabulary",
-            "error",
-            f"Placeholder words instead of detail: {', '.join(banned)}. "
-            "Replace each with a concrete physical fact.",
-        )
-
-    if TELL_NOT_SHOW.search(haystack):
-        at("show-dont-tell", "error", "An emotion is named without a body. Render it as an action.")
-
-    # --- Camera and light ---------------------------------------------------
-    if not LENS_PATTERN.search(haystack):
-        at("lens", "error", "No lens stated. Add a focal length (24/35/50/85/100mm macro).")
-    if not CAMERA_MOVE_PATTERN.search(haystack):
-        at(
-            "camera-move",
-            "error",
-            "No camera direction. Name one primary move, or state 'static camera'.",
-        )
-    if not _filled(card.movement_reason, 6):
-        at("motivated-camera", "warning", "Camera move has no stated reason. Answer 'what changed?'")
-    if not LIGHT_PATTERN.search(haystack):
-        at("light-source", "error", "No named light source or role (key, rim, fill, practical).")
-    if not LIGHT_DIRECTION_PATTERN.search(haystack):
-        at("light-direction", "warning", "Light has no direction. Say where it comes from.")
-    if not COLOUR_PATTERN.search(f"{card.palette} {prompt}"):
-        at("palette", "warning", "Palette is not defined with concrete colours.")
-
-    # --- Composition and gaze -----------------------------------------------
-    if not _filled(card.eye_trace, 6):
-        at("controlled-gaze", "warning", "No eye-trace. Say where the viewer looks in the first 0.3s.")
-
-    # --- Veo specifics ------------------------------------------------------
-    if not AUDIO_LINE.search(prompt):
-        at(
-            "veo/audio-line",
-            "error",
-            "No `Audio:` line. Veo will not generate sound unless it is labelled explicitly.",
-        )
-    if not FINAL_IMAGE_PATTERN.search(prompt):
-        at(
-            "final-image",
-            "error",
-            "No explicit final frame. The model needs an emotional destination.",
-        )
-    if not re.search(rf"duration\s*:\s*{scene.seconds}\b", prompt, re.IGNORECASE):
-        at(
-            "duration-discipline",
-            "warning",
-            f'Prompt does not state "Duration: {scene.seconds} seconds", which is what this '
-            "segment will be generated at.",
-        )
-
-    # Dialogue budget — Veo speeds up delivery when a line does not fit.
-    for match in DIALOGUE_PATTERN.finditer(prompt):
-        line = match.group(1).strip()
-        words = len([word for word in line.split() if word])
-        budget = int(min(scene.seconds, 8) * WORDS_PER_SECOND)
-        if words > budget:
-            at(
-                "dialogue-budget",
-                "error",
-                f'"{line[:48]}…" is {words} words but this {scene.seconds}s shot only holds '
-                f"about {budget}. Cut the line.",
-            )
-
-    # --- Continuity ---------------------------------------------------------
-    # Two different bars, because they mean different things. Palette and
-    # lighting are the film's grade — every scene shares them, no exceptions.
-    # Characters and wardrobe are a roster — a multi-character story naturally
-    # has scenes that feature only some of them (a ground-crew scene has no
-    # reason to mention the flight attendant), so the bar is "at least one
-    # locked identity is present", not "the whole cast is present every time".
-    continuity = story.continuity
-    lower_prompt = prompt.lower()
-
-    universal_tokens = [
-        token
-        for token in (_significant_token(v) for v in (continuity.palette, continuity.lighting_constant))
-        if token
-    ]
-    missing_universal = [token for token in universal_tokens if token not in lower_prompt]
-    if missing_universal:
-        at(
-            "continuity-block",
-            "error",
-            "The locked palette or lighting constant is not restated in this prompt. These are "
-            "the two things that must be identical in every scene — Veo has no memory between "
-            "generations.",
-        )
-
-    roster_tokens = [
-        token
-        for token in (
-            _significant_token(v) for v in (*continuity.characters, *continuity.wardrobe)
-        )
-        if token
-    ]
-    if roster_tokens and not any(token in lower_prompt for token in roster_tokens):
-        at(
-            "continuity-block",
-            "error",
-            "None of the story's locked characters or wardrobe are referenced in this prompt. "
-            "Every scene should feature — and describe consistently with — at least one "
-            "identity from the continuity block, not a new unlocked person.",
-        )
-
-    if not _filled(scene.continuity_note, 10):
-        at(
-            "cut-match",
-            "warning",
-            "No note on how this scene joins the previous one. State the matching pose, light and "
-            "lens height.",
-        )
-
-    return issues
-
-
-def _audit_story(story: StoryOption) -> list[AuditIssue]:
-    issues: list[AuditIssue] = []
-
-    def push(rule: str, severity: str, message: str) -> None:
-        issues.append(AuditIssue(rule=rule, severity=severity, message=message))  # type: ignore[arg-type]
-
-    # --- The five anchors ---------------------------------------------------
-    anchors = story.anchors
-    missing = [
-        name
-        for name, value in (
-            ("emotion", anchors.emotion),
-            ("motif", anchors.motif),
-            ("object", anchors.object),
-            ("break", anchors.break_),
-            ("finalImage", anchors.final_image),
-        )
-        if not _filled(value, 3)
-    ]
-    if missing:
-        push("five-anchors", "error", f"Missing anchors: {', '.join(missing)}. Commit to all five.")
-
-    # --- Continuity block ---------------------------------------------------
-    continuity = story.continuity
-    if not continuity.characters:
-        push("continuity/characters", "warning", "No character identity locked for this story.")
-    if not _filled(continuity.palette, 8):
-        push("continuity/palette", "error", "No palette defined with concrete colours.")
-    if not _filled(continuity.lighting_constant, 8):
-        push(
-            "continuity/lighting",
-            "error",
-            "No lighting constant. Name the dominant source and direction.",
-        )
-
-    # --- The motif must actually recur --------------------------------------
-    motif_token = _significant_token(anchors.motif)
-    if motif_token and len(story.scenes) > 2:
-        recurrences = sum(
-            1
-            for scene in story.scenes
-            if motif_token in f"{scene.prompt} {scene.shot_card.sound_anchor}".lower()
-        )
-        if recurrences < 2:
-            push(
-                "motif-recurrence",
-                "warning",
-                f'The motif "{anchors.motif}" appears in {recurrences} scene(s). '
-                "A motif that does not recur is decoration.",
-            )
-
-    # --- The arc must be complete -------------------------------------------
-    beats = {scene.beat for scene in story.scenes}
-    for required in ("crack", "impact"):
-        if required not in beats:
-            push(
-                "beat-map",
-                "warning",
-                f'No "{required}" beat in the cut. Never skip the Crack or the Impact.',
-            )
-
-    # --- Every shot must do a job -------------------------------------------
-    functions = [scene.shot_function for scene in story.scenes]
-    if len(functions) > 3 and len(set(functions)) < 3:
-        push(
-            "three-jobs",
-            "warning",
-            "Nearly every shot has the same function. Vary establish / power / pressure / detail / "
-            "reaction / shift / impact.",
-        )
-
-    return issues
-
-
-#: Two conditions, both required, because either alone misfires.
-#:
-#: Ratio alone punishes legitimate work: a 12-clip product montage on one set
-#: shares its lighting and lens block across every prompt and scores ~0.69, and
-#: that repetition is correct — the set really is constant. Flagging it would
-#: tell a writer to break continuity that the film depends on.
-#:
-#: Absolute mass alone is too blunt for long prompts that are genuinely dense.
-#:
-#: Together they separate the cases. A shared 45-word style anchor is craft. A
-#: shared 430-word essay — cast list, location list, prop inventory, rules — is
-#: what collapsed a 7-shot film into one repeated framing.
-_BOILERPLATE_LIMIT = 0.45
-_BOILERPLATE_WORDS = 120
-
-_SENTENCE = re.compile(r"[^.;\n]+[.;]?")
-
-
-def _sentences(text: str) -> list[str]:
-    """Prompt sentences, normalised enough that whitespace noise is not a diff."""
-    return [
-        " ".join(part.split())
-        for part in _SENTENCE.findall(text or "")
-        if len(part.strip()) > 24
-    ]
-
-
-def _audit_boilerplate(story: StoryOption) -> list[AuditIssue]:
-    """Flag scenes that are mostly copies of the other scenes.
-
-    Restating identity across clips is required — Veo has no memory. Restating
-    the palette, the camera grammar, the whole cast and every location is not,
-    and it is what collapses a multi-shot film into one repeated composition.
-    Instructions alone did not hold this line, so it is measured here.
-    """
-    scenes = [scene for scene in story.scenes if (scene.prompt or "").strip()]
-    if len(scenes) < 3:
-        return []
-
-    issues: list[AuditIssue] = []
-    per_scene = {scene.id: _sentences(scene.prompt) for scene in scenes}
-
-    for scene in scenes:
-        own = per_scene[scene.id]
-        # A very short prompt trips the ratio on almost any shared sentence, and
-        # the real fault there is thinness — which `prompt-depth` already
-        # reports. Diagnosing it as boilerplate would send the repair pass off
-        # cutting detail from a prompt that needs more of it.
-        if len(own) < 4 or len((scene.prompt or "").split()) < 60:
-            continue
-        elsewhere = {
-            sentence
-            for other in scenes
-            if other.id != scene.id
-            for sentence in per_scene[other.id]
-        }
-        shared = [sentence for sentence in own if sentence in elsewhere]
-        if not shared:
-            continue
-
-        total = sum(len(sentence) for sentence in own)
-        repeated = sum(len(sentence) for sentence in shared)
-        share = repeated / total if total else 0.0
-        repeated_words = sum(len(sentence.split()) for sentence in shared)
-
-        if share > _BOILERPLATE_LIMIT and repeated_words > _BOILERPLATE_WORDS:
-            issues.append(
-                AuditIssue(
-                    sceneId=scene.id,
-                    sceneOrder=scene.order,
-                    rule="craft/boilerplate",
-                    severity="error",
-                    message=(
-                        f"{repeated_words} words of this prompt ({share:.0%} of it) are "
-                        f"repeated verbatim in other scenes — {len(shared)} of "
-                        f"{len(own)} sentences. Veo weights the repeated mass, so every shot "
-                        "converges on the same framing. A shared style anchor is fine; this "
-                        "is an essay. Keep the identity of whoever is in THIS shot and the "
-                        "lighting key; cut the restated palette, camera grammar, prop list, "
-                        "location list and rules, and spend the words on what this shot does."
-                    ),
-                )
-            )
-
-    return issues
-
-
-def audit_story_option(story: StoryOption) -> AuditReport:
-    issues = _audit_story(story)
-    for scene in story.scenes:
-        issues.extend(_audit_scene(scene, story))
-    issues.extend(_audit_boilerplate(story))
-
-    # Craft and brand are separate axes, but they share one report and one repair
-    # loop — a beautifully directed film in the wrong blue is still a reshoot.
-    issues.extend(brand_issues(story))
-
-    errors = sum(1 for issue in issues if issue.severity == "error")
-    warnings = len(issues) - errors
-
-    # A clean story scores 100; each error costs 6 points, each warning 1.5.
-    score = max(0, round(100 - errors * 6 - warnings * 1.5))
-
-    return AuditReport(passed=errors == 0, score=score, issues=issues)
-
-
-def build_repair_brief(story: StoryOption, report: AuditReport) -> str:
-    """Turn failed checks into a brief the model can act on, grouped by scene."""
-    errors = [issue for issue in report.issues if issue.severity == "error"]
-    if not errors:
-        return ""
-
-    story_level = [issue for issue in errors if issue.scene_order is None]
-    by_scene: dict[int, list[AuditIssue]] = {}
-    for issue in errors:
-        if issue.scene_order is None:
-            continue
-        by_scene.setdefault(issue.scene_order, []).append(issue)
-
-    lines = [
-        "The automated dramaturgy, three-detail and brand audit rejected this storyboard.",
-        "Fix every item below and return the corrected storyboard in the same JSON schema.",
-        "Rules prefixed `brand/` are brand-book violations and are not negotiable — never "
-        "satisfy one by removing the scene's substance.",
-        "Keep the scene count, the per-scene `seconds`, the beats and the shot functions exactly "
-        "as they are — only the writing changes.",
-        "",
-    ]
-
-    if story_level:
-        lines.append("## Story level")
-        lines.extend(f"- [{issue.rule}] {issue.message}" for issue in story_level)
-        lines.append("")
-
-    scenes_by_order = {scene.order: scene for scene in story.scenes}
-    for order in sorted(by_scene):
-        scene = scenes_by_order.get(order)
-        suffix = f" — {scene.title} ({scene.seconds}s, {scene.beat})" if scene else ""
-        lines.append(f"## Scene {order}{suffix}")
-        lines.extend(f"- [{issue.rule}] {issue.message}" for issue in by_scene[order])
-        lines.append("")
-
-    return "\n".join(lines)
+2026-08-07T14:56:48 INFO  [video.main] Storage at C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\storage
+2026-08-07T14:56:48 INFO  [video.main]   storyboard  ready           Azure OpenAI gpt-5.5 (deployment gpt-5.5)
+2026-08-07T14:56:48 INFO  [video.main]   clips       ready           veo-3.1-generate-preview, max 8s per generation
+2026-08-07T14:56:48 INFO  [video.main]   keyframes   not configured  Set VEO_USE_KEYFRAMES=true to lock continuity with generated first frames.
+2026-08-07T14:56:48 INFO  [video.main]   voiceover   not configured  Set AZURE_OPENAI_TTS_DEPLOYMENT_NAME for voiceover. Veo still generates in-scene dialogue without it.
+2026-08-07T14:56:48 INFO  [video.main]   music       not configured  No music generator configured — upload a track instead, or set MUSIC_PROVIDER.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:55895 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54689 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57106 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55897 - "GET /api/video/projects/vid_19fda95e32d3c36362a HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55899 - "GET /api/video/projects/vid_19fda95e32d3c36362a/events HTTP/1.1" 200 OK
+2026-08-07T14:56:48 INFO  [video.store] Created project vid_19fdb8bec6172037222 (30s, 4 segments)
+INFO:     127.0.0.1:63827 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55896 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63829 - "GET /api/video/projects/vid_19fda95e32d3c36362a HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57718 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62988 - "GET /api/video/projects/vid_19fda95e32d3c36362a HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62989 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52360 - "GET /api/video/projects/vid_19fda95e32d3c36362a/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52362 - "GET /api/video/projects/vid_19fda95e32d3c36362a HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62985 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54069 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60092 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53987 - "GET /api/video/plan?seconds=55&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56965 - "GET /api/video/plan?seconds=50&style=cinematic HTTP/1.1" 200 OK
+2026-08-07T14:56:57 INFO  [video.store] Created project vid_19fdb8c129d3f5c8324 (50s, 7 segments)
+INFO:     127.0.0.1:50469 - "POST /api/video/projects HTTP/1.1" 201 Created
+INFO:     127.0.0.1:62708 - "GET /api/video/projects/vid_19fdb8c129d3f5c8324 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56877 - "GET /api/video/projects/vid_19fdb8c129d3f5c8324/events HTTP/1.1" 200 OK
+2026-08-07T14:57:03 INFO  [video.llm] chat ok in 13.4s (2174 tokens, deployment gpt-5.5)
+2026-08-07T14:57:03 INFO  [video.brief] Brief split: intent 981 chars (from 1721), 2 super(s), end card on, 2 unsupported.
+2026-08-07T14:57:14 INFO  [video.llm] chat ok in 14.8s (2174 tokens, deployment gpt-5.5)
+2026-08-07T14:57:14 INFO  [video.brief] Brief split: intent 981 chars (from 1721), 3 super(s), end card on, 2 unsupported.
+2026-08-07T14:58:26 INFO  [video.llm] treatments ok in 81.5s (26318 tokens, deployment gpt-5.5)
+2026-08-07T14:58:26 INFO  [video.jobs] Job job_19fdb8bec985ab77751 (storyboard) succeeded.
+2026-08-07T14:58:40 INFO  [video.llm] treatments ok in 84.6s (26352 tokens, deployment gpt-5.5)
+2026-08-07T14:58:40 INFO  [video.jobs] Job job_19fdb8c12abe409dc99 (storyboard) succeeded.
+INFO:     127.0.0.1:64387 - "POST /api/video/projects/vid_19fdb8c129d3f5c8324/select-story HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57410 - "POST /api/video/projects/vid_19fdb8c129d3f5c8324/select-story HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56391 - "POST /api/video/projects/vid_19fdb8c129d3f5c8324/stories/story_19fdb8da48049f39778/scenes HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:56389 - "POST /api/video/projects/vid_19fdb8c129d3f5c8324/select-story HTTP/1.1" 200 OK
+2026-08-07T15:03:26 INFO  [video.llm] scenes ok in 118.0s (31633 tokens, deployment gpt-5.5)
+2026-08-07T15:03:26 INFO  [video.storyboard] Story "The blue thread": audit found 10 blocking issue(s), running repair pass 1/2
+2026-08-07T15:04:18 INFO  [video.llm] scenes-repair-1 ok in 50.8s (29251 tokens, deployment gpt-5.5)
+2026-08-07T15:04:18 INFO  [video.storyboard] Story "The blue thread": audit found 10 blocking issue(s), running repair pass 2/2
+2026-08-07T15:05:21 INFO  [video.llm] scenes-repair-2 ok in 61.5s (30302 tokens, deployment gpt-5.5)
+2026-08-07T15:05:21 WARNING [video.storyboard] Story "The blue thread" finished with 9 unresolved issue(s), score 44.
+2026-08-07T15:05:21 ERROR [video.jobs] Job job_19fdb902a459ef6ef22 (storyboard) failed: "The blue thread" still fails 9 blocking check(s) after 2 repair pass(es), so it has not been sent to Veo. scene 1: The locked palette or lighting constant is not restated in this prompt. These are the two things that must be identical in every scene — Veo has no memory between generations.; scene 2: The locked palette or lighting constant is not restated in this prompt. These are the two things that must be identical in every scene — Veo has no memory between generations.; scene 3: The locked palette or lighting constant is not restated in this prompt. These are the two things that must be identical in every scene — Veo has no memory between generations.; scene 4: The locked palette or lighting constant is not restated in this prompt. These are the two things that must be identical in every scene — Veo has no memory between generations. (+5 more)
+Traceback (most recent call last):
+  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\jobs.py", line 66, in runner
+    result = await work(context)
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\routes\video.py", line 346, in work
+    written, repair_passes = await generate_scenes(
+                             ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\storyboard.py", line 734, in generate_scenes
+    raise BadRequest(
+app.errors.BadRequest: "The blue thread" still fails 9 blocking check(s) after 2 repair pass(es), so it has not been sent to Veo. scene 1: The locked palette or lighting constant is not restated in this prompt. These are the two things that must be identical in every scene — Veo has no memory between generations.; scene 2: The locked palette or lighting constant is not restated in this prompt. These are the two things that must be identical in every scene — Veo has no memory between generations.; scene 3: The locked palette or lighting constant is not restated in this prompt. These are the two things that must be identical in every scene — Veo has no memory between generations.; scene 4: The locked palette or lighting constant is not restated in this prompt. These are the two things that must be identical in every scene — Veo has no memory between generations. (+5 more)
+INFO:     127.0.0.1:62415 - "POST /api/video/projects/vid_19fdb8c129d3f5c8324/stories/story_19fdb8da48049f39778/scenes HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:62413 - "POST /api/video/projects/vid_19fdb8c129d3f5c8324/select-story HTTP/1.1" 200 OK
