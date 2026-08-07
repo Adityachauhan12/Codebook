@@ -1,502 +1,196 @@
-"""The dramaturgy and three-detail checks, enforced in code.
-
-The skill says its two checks — the six-point dramaturgy check and the
-three-detail audit — are the step writers skip, and that skipping them silently
-degrades everything downstream. An LLM asked to self-check will cheerfully claim
-it did.
-
-So the check runs here, against the structured scene the model returned.
-Anything at ``error`` severity is fed back to the model as a repair brief;
-warnings are surfaced in the UI but do not block.
-"""
-
-from __future__ import annotations
-
-import re
-
-from ..brand import brand_issues
-from ..domain.models import AuditIssue, AuditReport, Scene, StoryOption
-
-#: Words that mark an absent detail. Section 7 of PIPELINE.md.
-BANNED_PHRASES = [
-    "cinematic masterpiece",
-    "professional",
-    "high quality",
-    "highest quality",
-    "masterpiece",
-    "stunning",
-    "epic",
-    "amazing",
-    "beautiful lighting",
-    "beautiful light",
-    "dynamic camera",
-    "intense moment",
-    "powerful scene",
-    "breathtaking",
-    "award-winning",
-    "award winning",
-    "hyperrealistic",
-    "ultra realistic",
-    "ultra-realistic",
-    "photorealistic masterpiece",
-    "8k",
-    "4k",
-    "best quality",
-    "highly detailed",
-]
-
-#: "cinematic" alone is banned, but "cinematic naturalism" is a named grade the
-#: skill's own worked examples use. Allow the compound, reject the adjective.
-ALLOWED_CINEMATIC_COMPOUNDS = ("cinematic naturalism", "cinematic widescreen")
-
-TELL_NOT_SHOW = re.compile(
-    r"\b(?:he|she|they|the (?:man|woman|hero|subject|character)|it)\s+"
-    r"(?:is|are|was|were|looks?|seems?|feels?)\s+(?:very\s+|really\s+|so\s+)?"
-    r"(?:sad|angry|afraid|scared|happy|excited|nervous|anxious|joyful|frustrated|"
-    r"lonely|proud|confident|surprised)\b",
-    re.IGNORECASE,
-)
-
-LENS_PATTERN = re.compile(
-    r"\b(?:\d{2,3}\s?mm|macro|anamorphic|telephoto|wide-angle|wide angle)\b", re.IGNORECASE
-)
-
-CAMERA_MOVE_PATTERN = re.compile(
-    r"\b(?:static camera|locked[- ]off|slow push[- ]in|fast push[- ]in|push[- ]in|pull[- ]back|"
-    r"dolly[- ](?:in|out)|tracking|lateral track|handheld|whip pan|snap zoom|rack focus|"
-    r"tilt (?:up|down)|orbit|gimbal|crane|aerial|dolly[- ]zoom|pan (?:left|right)|drift|glide|"
-    r"arc|steadicam|FPV|top[- ]down)\b",
-    re.IGNORECASE,
-)
-
-LIGHT_PATTERN = re.compile(
-    r"\b(?:key(?:\s?light)?|rim(?:\s?light)?|backlight|back light|fill|bounce|practical|"
-    r"underlight|top light|side light|spill|silhouette|motivated)\b",
-    re.IGNORECASE,
-)
-
-LIGHT_DIRECTION_PATTERN = re.compile(
-    r"\b(?:frame[- ](?:left|right)|from (?:left|right|behind|above|below|"
-    r"the (?:window|door|screen|street))|overhead|off[- ]screen (?:left|right)|"
-    r"camera[- ](?:left|right)|three[- ]quarter)\b",
-    re.IGNORECASE,
-)
-
-COLOUR_PATTERN = re.compile(
-    r"\b(?:red|orange|amber|gold(?:en)?|yellow|green|teal|cyan|blue|indigo|violet|magenta|pink|"
-    r"crimson|scarlet|sepia|ochre|beige|cream|ivory|white|grey|gray|black|brown|tan|rust|bronze|"
-    r"copper|silver|charcoal|slate|desaturated|monochrome|warm|cool|cold)\b",
-    re.IGNORECASE,
-)
-
-AUDIO_LINE = re.compile(r"^\s*audio\s*:", re.IGNORECASE | re.MULTILINE)
-
-FINAL_IMAGE_PATTERN = re.compile(
-    r"\b(?:ends? on|final frame|final image|closes? on|last frame|holds? on|freezes? on|out on)\b",
-    re.IGNORECASE,
-)
-
-DIALOGUE_PATTERN = re.compile(
-    r"(?:says|whispers|shouts|mutters|asks|replies|answers)\s*[:,]\s*[\"“]([^\"”]+)",
-    re.IGNORECASE,
-)
-
-#: Words per second of natural speech; Veo caps spoken audio at ~8s.
-WORDS_PER_SECOND = 2.5
-
-
-def _contains_banned(text: str) -> list[str]:
-    lower = text.lower()
-    hits = [phrase for phrase in BANNED_PHRASES if phrase in lower]
-
-    # "cinematic" on its own, but not as part of an allowed compound.
-    for match in re.finditer(r"cinematic", lower):
-        index = match.start()
-        allowed = any(lower.startswith(compound, index) for compound in ALLOWED_CINEMATIC_COMPOUNDS)
-        if not allowed and "cinematic" not in hits:
-            hits.append("cinematic")
-            break
-
-    return hits
-
-
-def _filled(value: str | None, min_length: int = 12) -> bool:
-    return bool(value and len(value.strip()) >= min_length)
-
-
-def _significant_token(phrase: str) -> str | None:
-    """Longest word in a phrase, lowercased — a cheap proxy for "was this restated"."""
-    words = [word for word in re.sub(r"[^a-z0-9\s-]", " ", phrase.lower()).split() if len(word) > 4]
-    return max(words, key=len) if words else None
-
-
-def _audit_scene(scene: Scene, story: StoryOption) -> list[AuditIssue]:
-    issues: list[AuditIssue] = []
-
-    def at(rule: str, severity: str, message: str) -> None:
-        issues.append(
-            AuditIssue(
-                sceneId=scene.id,
-                sceneOrder=scene.order,
-                rule=rule,
-                severity=severity,  # type: ignore[arg-type]
-                message=message,
-            )
-        )
-
-    prompt = scene.prompt or ""
-    card = scene.shot_card
-    haystack = "\n".join(
-        [prompt, *(str(value) for value in card.model_dump().values() if isinstance(value, str))]
-    )
-
-    if len(prompt.strip()) < 120:
-        at("prompt-substance", "error", "Prompt is too thin to direct a shot.")
-
-    # --- Details Law: the three-detail check --------------------------------
-    if not _filled(card.environmental_pressure):
-        at(
-            "three-detail/environment",
-            "error",
-            "No environmental pressure. Name a physical fact of the space that carries the emotion.",
-        )
-    if not _filled(card.micro_action):
-        at(
-            "three-detail/micro-action",
-            "error",
-            "No physical micro-action. Translate the emotion onto the body — jaw, hands, breath, eyes.",
-        )
-    if not _filled(card.sound_anchor, 8):
-        at(
-            "three-detail/motif",
-            "error",
-            "No sound anchor or visual motif tying this shot to the spine of the piece.",
-        )
-
-    # --- Banned vocabulary --------------------------------------------------
-    banned = _contains_banned(haystack)
-    if banned:
-        at(
-            "banned-vocabulary",
-            "error",
-            f"Placeholder words instead of detail: {', '.join(banned)}. "
-            "Replace each with a concrete physical fact.",
-        )
-
-    if TELL_NOT_SHOW.search(haystack):
-        at("show-dont-tell", "error", "An emotion is named without a body. Render it as an action.")
-
-    # --- Camera and light ---------------------------------------------------
-    if not LENS_PATTERN.search(haystack):
-        at("lens", "error", "No lens stated. Add a focal length (24/35/50/85/100mm macro).")
-    if not CAMERA_MOVE_PATTERN.search(haystack):
-        at(
-            "camera-move",
-            "error",
-            "No camera direction. Name one primary move, or state 'static camera'.",
-        )
-    if not _filled(card.movement_reason, 6):
-        at("motivated-camera", "warning", "Camera move has no stated reason. Answer 'what changed?'")
-    if not LIGHT_PATTERN.search(haystack):
-        at("light-source", "error", "No named light source or role (key, rim, fill, practical).")
-    if not LIGHT_DIRECTION_PATTERN.search(haystack):
-        at("light-direction", "warning", "Light has no direction. Say where it comes from.")
-    if not COLOUR_PATTERN.search(f"{card.palette} {prompt}"):
-        at("palette", "warning", "Palette is not defined with concrete colours.")
-
-    # --- Composition and gaze -----------------------------------------------
-    if not _filled(card.eye_trace, 6):
-        at("controlled-gaze", "warning", "No eye-trace. Say where the viewer looks in the first 0.3s.")
-
-    # --- Veo specifics ------------------------------------------------------
-    if not AUDIO_LINE.search(prompt):
-        at(
-            "veo/audio-line",
-            "error",
-            "No `Audio:` line. Veo will not generate sound unless it is labelled explicitly.",
-        )
-    if not FINAL_IMAGE_PATTERN.search(prompt):
-        at(
-            "final-image",
-            "error",
-            "No explicit final frame. The model needs an emotional destination.",
-        )
-    if not re.search(rf"duration\s*:\s*{scene.seconds}\b", prompt, re.IGNORECASE):
-        at(
-            "duration-discipline",
-            "warning",
-            f'Prompt does not state "Duration: {scene.seconds} seconds", which is what this '
-            "segment will be generated at.",
-        )
-
-    # Dialogue budget — Veo speeds up delivery when a line does not fit.
-    for match in DIALOGUE_PATTERN.finditer(prompt):
-        line = match.group(1).strip()
-        words = len([word for word in line.split() if word])
-        budget = int(min(scene.seconds, 8) * WORDS_PER_SECOND)
-        if words > budget:
-            at(
-                "dialogue-budget",
-                "error",
-                f'"{line[:48]}…" is {words} words but this {scene.seconds}s shot only holds '
-                f"about {budget}. Cut the line.",
-            )
-
-    # --- Continuity ---------------------------------------------------------
-    # Two different bars, because they mean different things. Palette and
-    # lighting are the film's grade — every scene shares them, no exceptions.
-    # Characters and wardrobe are a roster — a multi-character story naturally
-    # has scenes that feature only some of them (a ground-crew scene has no
-    # reason to mention the flight attendant), so the bar is "at least one
-    # locked identity is present", not "the whole cast is present every time".
-    continuity = story.continuity
-    lower_prompt = prompt.lower()
-
-    universal_tokens = [
-        token
-        for token in (_significant_token(v) for v in (continuity.palette, continuity.lighting_constant))
-        if token
-    ]
-    missing_universal = [token for token in universal_tokens if token not in lower_prompt]
-    if missing_universal:
-        at(
-            "continuity-block",
-            "error",
-            "The locked palette or lighting constant is not restated in this prompt. These are "
-            "the two things that must be identical in every scene — Veo has no memory between "
-            "generations.",
-        )
-
-    roster_tokens = [
-        token
-        for token in (
-            _significant_token(v) for v in (*continuity.characters, *continuity.wardrobe)
-        )
-        if token
-    ]
-    if roster_tokens and not any(token in lower_prompt for token in roster_tokens):
-        at(
-            "continuity-block",
-            "error",
-            "None of the story's locked characters or wardrobe are referenced in this prompt. "
-            "Every scene should feature — and describe consistently with — at least one "
-            "identity from the continuity block, not a new unlocked person.",
-        )
-
-    if not _filled(scene.continuity_note, 10):
-        at(
-            "cut-match",
-            "warning",
-            "No note on how this scene joins the previous one. State the matching pose, light and "
-            "lens height.",
-        )
-
-    return issues
-
-
-def _audit_story(story: StoryOption) -> list[AuditIssue]:
-    issues: list[AuditIssue] = []
-
-    def push(rule: str, severity: str, message: str) -> None:
-        issues.append(AuditIssue(rule=rule, severity=severity, message=message))  # type: ignore[arg-type]
-
-    # --- The five anchors ---------------------------------------------------
-    anchors = story.anchors
-    missing = [
-        name
-        for name, value in (
-            ("emotion", anchors.emotion),
-            ("motif", anchors.motif),
-            ("object", anchors.object),
-            ("break", anchors.break_),
-            ("finalImage", anchors.final_image),
-        )
-        if not _filled(value, 3)
-    ]
-    if missing:
-        push("five-anchors", "error", f"Missing anchors: {', '.join(missing)}. Commit to all five.")
-
-    # --- Continuity block ---------------------------------------------------
-    continuity = story.continuity
-    if not continuity.characters:
-        push("continuity/characters", "warning", "No character identity locked for this story.")
-    if not _filled(continuity.palette, 8):
-        push("continuity/palette", "error", "No palette defined with concrete colours.")
-    if not _filled(continuity.lighting_constant, 8):
-        push(
-            "continuity/lighting",
-            "error",
-            "No lighting constant. Name the dominant source and direction.",
-        )
-
-    # --- The motif must actually recur --------------------------------------
-    motif_token = _significant_token(anchors.motif)
-    if motif_token and len(story.scenes) > 2:
-        recurrences = sum(
-            1
-            for scene in story.scenes
-            if motif_token in f"{scene.prompt} {scene.shot_card.sound_anchor}".lower()
-        )
-        if recurrences < 2:
-            push(
-                "motif-recurrence",
-                "warning",
-                f'The motif "{anchors.motif}" appears in {recurrences} scene(s). '
-                "A motif that does not recur is decoration.",
-            )
-
-    # --- The arc must be complete -------------------------------------------
-    beats = {scene.beat for scene in story.scenes}
-    for required in ("crack", "impact"):
-        if required not in beats:
-            push(
-                "beat-map",
-                "warning",
-                f'No "{required}" beat in the cut. Never skip the Crack or the Impact.',
-            )
-
-    # --- Every shot must do a job -------------------------------------------
-    functions = [scene.shot_function for scene in story.scenes]
-    if len(functions) > 3 and len(set(functions)) < 3:
-        push(
-            "three-jobs",
-            "warning",
-            "Nearly every shot has the same function. Vary establish / power / pressure / detail / "
-            "reaction / shift / impact.",
-        )
-
-    return issues
-
-
-#: Above this share of a prompt being reused verbatim in other scenes, the
-#: repeated mass starts to dominate what the model renders. Set from measured
-#: output: the film that prompted this check ran at roughly 0.67 and produced
-#: six near-identical framings out of seven.
-_BOILERPLATE_LIMIT = 0.45
-
-_SENTENCE = re.compile(r"[^.;\n]+[.;]?")
-
-
-def _sentences(text: str) -> list[str]:
-    """Prompt sentences, normalised enough that whitespace noise is not a diff."""
-    return [
-        " ".join(part.split())
-        for part in _SENTENCE.findall(text or "")
-        if len(part.strip()) > 24
-    ]
-
-
-def _audit_boilerplate(story: StoryOption) -> list[AuditIssue]:
-    """Flag scenes that are mostly copies of the other scenes.
-
-    Restating identity across clips is required — Veo has no memory. Restating
-    the palette, the camera grammar, the whole cast and every location is not,
-    and it is what collapses a multi-shot film into one repeated composition.
-    Instructions alone did not hold this line, so it is measured here.
-    """
-    scenes = [scene for scene in story.scenes if (scene.prompt or "").strip()]
-    if len(scenes) < 3:
-        return []
-
-    issues: list[AuditIssue] = []
-    per_scene = {scene.id: _sentences(scene.prompt) for scene in scenes}
-
-    for scene in scenes:
-        own = per_scene[scene.id]
-        # A very short prompt trips the ratio on almost any shared sentence, and
-        # the real fault there is thinness — which `prompt-depth` already
-        # reports. Diagnosing it as boilerplate would send the repair pass off
-        # cutting detail from a prompt that needs more of it.
-        if len(own) < 4 or len((scene.prompt or "").split()) < 60:
-            continue
-        elsewhere = {
-            sentence
-            for other in scenes
-            if other.id != scene.id
-            for sentence in per_scene[other.id]
-        }
-        shared = [sentence for sentence in own if sentence in elsewhere]
-        if not shared:
-            continue
-
-        total = sum(len(sentence) for sentence in own)
-        repeated = sum(len(sentence) for sentence in shared)
-        share = repeated / total if total else 0.0
-
-        if share > _BOILERPLATE_LIMIT:
-            issues.append(
-                AuditIssue(
-                    sceneId=scene.id,
-                    sceneOrder=scene.order,
-                    rule="craft/boilerplate",
-                    severity="error",
-                    message=(
-                        f"{share:.0%} of this prompt is text repeated verbatim in other "
-                        f"scenes ({len(shared)} of {len(own)} sentences). Veo weights the "
-                        "repeated mass, so every shot converges on the same framing. Keep "
-                        "the identity of whoever is in THIS shot and the lighting key; cut "
-                        "the restated palette, camera grammar, prop list, location list and "
-                        "rules, and spend the words on what this shot actually does."
-                    ),
-                )
-            )
-
-    return issues
-
-
-def audit_story_option(story: StoryOption) -> AuditReport:
-    issues = _audit_story(story)
-    for scene in story.scenes:
-        issues.extend(_audit_scene(scene, story))
-    issues.extend(_audit_boilerplate(story))
-
-    # Craft and brand are separate axes, but they share one report and one repair
-    # loop — a beautifully directed film in the wrong blue is still a reshoot.
-    issues.extend(brand_issues(story))
-
-    errors = sum(1 for issue in issues if issue.severity == "error")
-    warnings = len(issues) - errors
-
-    # A clean story scores 100; each error costs 6 points, each warning 1.5.
-    score = max(0, round(100 - errors * 6 - warnings * 1.5))
-
-    return AuditReport(passed=errors == 0, score=score, issues=issues)
-
-
-def build_repair_brief(story: StoryOption, report: AuditReport) -> str:
-    """Turn failed checks into a brief the model can act on, grouped by scene."""
-    errors = [issue for issue in report.issues if issue.severity == "error"]
-    if not errors:
-        return ""
-
-    story_level = [issue for issue in errors if issue.scene_order is None]
-    by_scene: dict[int, list[AuditIssue]] = {}
-    for issue in errors:
-        if issue.scene_order is None:
-            continue
-        by_scene.setdefault(issue.scene_order, []).append(issue)
-
-    lines = [
-        "The automated dramaturgy, three-detail and brand audit rejected this storyboard.",
-        "Fix every item below and return the corrected storyboard in the same JSON schema.",
-        "Rules prefixed `brand/` are brand-book violations and are not negotiable — never "
-        "satisfy one by removing the scene's substance.",
-        "Keep the scene count, the per-scene `seconds`, the beats and the shot functions exactly "
-        "as they are — only the writing changes.",
-        "",
-    ]
-
-    if story_level:
-        lines.append("## Story level")
-        lines.extend(f"- [{issue.rule}] {issue.message}" for issue in story_level)
-        lines.append("")
-
-    scenes_by_order = {scene.order: scene for scene in story.scenes}
-    for order in sorted(by_scene):
-        scene = scenes_by_order.get(order)
-        suffix = f" — {scene.title} ({scene.seconds}s, {scene.beat})" if scene else ""
-        lines.append(f"## Scene {order}{suffix}")
-        lines.extend(f"- [{issue.rule}] {issue.message}" for issue in by_scene[order])
-        lines.append("")
-
-    return "\n".join(lines)
+# Universal rules — apply to every video model
+
+These rules apply to Seedance, Kling, Veo, and any other AI video generator. They exist because all current video models share a common failure mode. They reward concrete physical direction. They punish abstraction, contradictions, and keyword spam. Ignoring these produces muddy generations regardless of which model you target.
+
+Read this file after `dramaturgy.md` and before any model-specific file. The model-specific syntax sits on top of these rules — it does not replace them.
+
+## Contents
+
+1. The non-negotiable. Details intensify emotion (Details Law)
+2. U1. Universal prompt skeleton
+3. U2. Weight-at-start
+4. U3. Show don't tell
+5. U4. Natural language beats tag spam
+6. U5. One primary camera move per shot
+7. U6. Precise lens language
+8. U7. Character consistency anchor
+9. U8. No contradictions
+10. U9. Concrete physical detail over abstract concept
+11. U10. Duration discipline
+12. U11. The final image rule
+13. U12. The three-detail check (audit before sending)
+14. U13. Reference role discipline
+15. U14. Priority declaration
+
+---
+
+## 1. The non-negotiable. Details intensify emotion. Laziness kills the prompt.
+
+This is the most violated rule in AI video, and the one reason most multi-shot prompts fail. The dramaturgy is fine — the writer just got lazy on a single shot, and that one thin shot drags the whole sequence into mush.
+
+Every shot in every prompt owns at least three concrete physical details:
+
+1. **One environmental pressure.** Cold blue refrigerator light. Steam off boiling water. Wet asphalt. Flickering fluorescent. Dripping tap. Curtain breathing in the AC. (Kurosawa: weather is a character. See `dramaturgy.md` §9.)
+2. **One physical micro-action.** Jaw locks. Knuckles whiten on the fork. Lips press into a line. He swallows hard. Fingers curl against the doorframe. (Show, not tell — the body is the only place where feelings render.)
+3. **One sound anchor or visual motif.** Stomach growl at 2.3s. Reflection in a darkened phone screen. Rain on the same windowpane. A single fluorescent flicker before each cut.
+
+If a shot has none of these — it is filler. Delete it or rewrite it. No exceptions for "establishing", "transition", or "hero product" shots — those are exactly the shots that go lazy first.
+
+Words that do not render and mark the writer being lazy:
+
+- "cinematic", "professional", "high quality", "masterpiece", "stunning", "epic", "amazing"
+- "beautiful lighting", "dynamic camera", "intense moment", "powerful scene"
+- "he is sad", "she is angry", "he is afraid" — emotions named without a body
+
+Replace each with concrete physical facts. The full theory of why this works lives in `dramaturgy.md` §2 (Second law).
+
+## 2. U1. Universal prompt skeleton
+
+Build every prompt from these layers, roughly in this order:
+
+```text
+[Subject / Character]
+[Action / Motion]
+[Scene / Environment]
+[Camera / Shot / Lens]
+[Lighting / Atmosphere]
+[Style / Mood / Palette]
+[Sound / Audio]
+[Duration / Aspect ratio / Resolution]
+[Continuity rules]
+[Negative constraints — only if the model supports them]
+```
+
+Model-specific skeletons live in their reference files (`seedance.md`, `kling.md`, `veo.md`). For dramatic / multi-shot / character-locked Seedance work, the production-grade 11-block skeleton in `seedance.md` §6 supersedes this generic skeleton.
+
+## 3. U2. Weight-at-start
+
+Generators put more attention on the first 30-40% of tokens. Lead with subject and action. Style modifiers go at the end. Camera, lighting, and environment live in the middle.
+
+## 4. U3. Show don't tell
+
+The model cannot render feelings. It renders bodies. Translate every emotion into a physical action.
+
+- Bad. "He is scared."
+- Good. "His jaw locks. He stops breathing for one beat. His fingers curl against the doorframe."
+
+Calibration: for one emotional transition, **2-4 observable cues** (eye movement, brow tension, mouth, breathing, throat swallow, hands) are enough. Fewer leaves the model guessing; more reads as overacting.
+
+## 5. U4. Natural language beats tag spam
+
+Video models are not image models. Tag stuffing like "masterpiece, 4k, cinematic, beautiful" fails. Write in full cinematic sentences as if briefing a human DOP.
+
+## 6. U5. One primary camera move per shot
+
+Do not stack three camera moves in a 5-second clip. Pick one dominant move (dolly-in, pan, tracking, static). Layer a subtle micro-adjustment if needed (slight handheld shake, gentle rack focus). More than that produces visual chaos.
+
+## 7. U6. Precise lens language
+
+State the lens. "Shot on 50mm" works across all major models. Quick map:
+
+- 24mm. wide, immersive, exaggerated space
+- 35mm. natural documentary
+- 50mm. intimate, human perspective
+- 85mm. portrait, compressed background
+- 100mm macro. texture, detail
+- anamorphic 40mm. cinematic widescreen
+
+Full vocabulary in `camera-lighting-vocabulary.md`.
+
+## 8. U7. Character consistency anchor
+
+Anchor identity at the START of every prompt. In a multi-clip sequence, repeat the full identity block in every single prompt. Video generators have no memory between generations. Treat every clip like briefing a brilliant intern with memory damage.
+
+Identity block must include: face shape, eye color, skin tone. Hair color, length, style. Facial hair. Exact clothing items. Distinctive accessories.
+
+**Repeat identity. Do not repeat the film.** This rule covers the people the camera can see in *this* shot, and nothing else. Two failures come from over-applying it, and both cost more than a small continuity drift:
+
+- **Describing absent characters renders them.** A prompt is a description of a frame, not a cast list. Name the whole ensemble in every clip and the ones who are not in the scene arrive anyway — a flight attendant standing in a train carriage, a child in an empty boardroom.
+- **Repeated mass flattens the film.** When most of a prompt is identical to the previous prompt, the model weights what repeats and every shot converges on the same composition. Eight perfectly consistent identical framings is a failed sequence.
+
+So restate per clip: the identity and wardrobe of whoever is physically in that shot, the lighting key, and the two or three palette colours actually in frame. Keep locations, prop inventories, camera-grammar manifests and film-level rules out of the prompt — they are your constraints as the writer, not text to paste. If more than roughly a third of a prompt could be moved unchanged into a different scene, that surplus is costing you the shot.
+
+Prohibitions belong in the negative prompt. Naming a thing inside a positive prompt in order to forbid it is one of the most reliable ways to summon it (see `fixes-and-skeletons.md`).
+
+Model-specific syntax for character locking:
+- Seedance: `@img1` reference + identity block (see `seedance.md` §10)
+- Kling 1.x – 2.x: Element Binding with 3-4 reference images (see `kling.md` §7)
+- Kling 3.0: in-prompt `[Character A: <full identity>]` labels, optionally combined with Element Library (see `kling.md` §3)
+- Veo: reference ingredients / JSON identity (see `veo.md`)
+
+## 9. U8. No contradictions
+
+The model obeys the strongest signal. Contradictions produce artifacts.
+
+- Bad. "Still pond" + "flowing water."
+- Bad. "Close-up" + "wide cinematic landscape."
+- Bad. "Quiet moment" + "explosive action."
+
+## 10. U9. Concrete physical detail over abstract concept
+
+"Loneliness" does not render. "A man sitting alone, shoulders collapsed, face lit by blue phone glow, empty bottles on the table" does.
+
+This is the same rule as the Details Law in section 1, viewed from a different angle. Section 1 is the audit. This is the principle.
+
+Corollary — **consequence prompting**. Current models render real physics, so describe the consequence of an action, not just the action: tires kick up water curtains; the hand grips the jar and the lid actually unscrews; the impact shatters the surface into a spider-web pattern. Action chains where each step forces the next also work as QA — a broken chain exposes a failed generation at a glance.
+
+## 11. U10. Duration discipline
+
+Most models work in 5-10 second clips. Longer narratives live in multiple clips stitched in the editor. Do not cram a 30-second story into a 5-second prompt.
+
+Default splits:
+
+- 10s = 2 clips × 5s
+- 15s = 3 × 5s
+- 30s = 6 × 5s
+- 60s = 12 × 5s
+
+Three exceptions:
+- Seedance — 2-3 shots inside one 5-10s clip via "Cut to" syntax (see `seedance.md` §8).
+- Kling 3.0 — up to 6 shots inside one generation, up to 15s, with native audio and dialogue (see `kling.md` §3).
+- Seedance 2.5 — up to 30s in one pass. The working structure is consecutive stages, each with one primary state change and an explicit visible end state (see `seedance-25.md` §6).
+
+## 12. U11. The final image rule
+
+Every clip needs a clear final frame. The model uses the ending as emotional destination.
+
+- "Ends on his face frozen in the blue refrigerator light" beats "he stands there sadly."
+
+The final image is also one of the five anchors (see `dramaturgy.md` §13). Naming it is non-negotiable.
+
+## 13. U12. The three-detail check (audit before sending)
+
+Before returning the final prompt to the user, audit every shot. Each shot must carry at least one of each:
+
+1. Environmental pressure (lighting, weather, surface, sound of the room).
+2. Physical micro-action on the body (jaw, hand, breath, eye, gesture).
+3. Sound anchor or recurring visual motif tied to the emotional spine.
+
+If a shot has zero, fix it before sending. If a shot has only one, ask whether you can make it two without bloat. The strongest prompts in this skill's worked examples always have all three.
+
+Empty descriptors that fail this check: "establishing wide shot", "beautiful lighting", "dynamic camera move", "cinematic look", "intense moment", "dramatic close-up". Replace each with three concrete physical facts.
+
+## 14. U13. Reference role discipline
+
+Wherever a model accepts reference assets (Seedance `@Image/@Video/@Audio`, Kling Element Binding and Omni references, Veo ingredients), **every asset gets an explicit role written in the prompt**: what it defines (appearance, motion, voice, scene, camera path) and what to ignore ("Do not use the image background", "Do not use the people in the image").
+
+- Bind each subject individually: "<Character A> corresponds to @Image 1 — use only the appearance, hairstyle, and clothing." Never the collective form "@Images 1 through 4 define four characters respectively" — it does not state which is which.
+- Do not restate what a reference already defines. If a video reference carries the motion, name only the attributes to inherit; re-describing every action fights the reference.
+- More assets is not more control. Control comes from role clarity; unassigned assets bleed into the frame.
+
+Model-specific limits and templates live in the model files (`seedance-25.md` §5 has the fullest system).
+
+## 15. U14. Priority declaration
+
+When a prompt is overloaded (10+ scenes, many subjects, spatial tricks), adding more description makes it worse. Instead, declare priorities — the model cannot know what matters most unless told what to protect and what to sacrifice:
+
+1. The core subject that must survive every shot.
+2. The key shots that must appear.
+3. The transitions where the model may freestyle.
+4. The mandatory final frame.
+
+This ranks above prompt-length discipline: a shorter prompt with declared priorities beats a longer one without them.
+
+---
+
+*Author: Serge Shima ([t.me/aimastersme](https://t.me/aimastersme) · [sergeshima.com](https://sergeshima.com) · [aimasters.me](https://aimasters.me)) · License: CC BY 4.0 — attribution required · Source: [smixs/visual-skills](https://github.com/smixs/visual-skills)*
