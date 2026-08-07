@@ -1,236 +1,151 @@
-"""Pre-flight check for the video pipeline. Run from `server/`:
+"""Show how a brief gets split, without generating a single frame.
 
-    python verify_setup.py
+    python test_brief.py                 # the Japan brief, as a regression test
+    python test_brief.py my_brief.txt    # your own
 
-Checks the things that fail silently or fail late — a missing font, an ffmpeg
-built without freetype, a half-copied brand asset, the `_REQUIRED_BLUE` crash.
-Exits non-zero if anything is broken, so it can gate a deploy.
+One cheap Azure call. Proves the fix that matters most — that on-screen copy is
+pulled out of the brief and never reaches a prompt — before any Veo spend.
 """
 
 from __future__ import annotations
 
-import subprocess
+import asyncio
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-PASS, FAIL, WARN = "PASS", "FAIL", "WARN"
-results: list[tuple[str, str, str]] = []
+from app.domain.models import ProjectBrief  # noqa: E402
+from app.services.brief import analyse_brief  # noqa: E402
+
+# The brief that produced "A new horizon awasts." — unchanged, on purpose.
+JAPAN = """\
+IndiGo x Japan - A New Journey Begins
+Duration: 45-60 seconds
+Style: Ultra-cinematic, luxury travel commercial, emotionally uplifting
+Aspect Ratio: 16:9
+Resolution: 4K HDR
+Lens: Anamorphic, shallow depth of field, natural cinematic motion
+Colour Grade: Cool blues with warm sunrise highlights, premium airline aesthetic
+
+Create a breathtaking cinematic airline launch film announcing IndiGo's new
+destination: Japan. Open with a sunrise above the clouds. An IndiGo aircraft
+emerges through golden morning light, soaring over a sea of clouds.
+
+Transition to aerial views of Japan: Mount Fuji at dawn, Tokyo's skyline,
+Shibuya Crossing at blue hour, Kyoto temples surrounded by cherry blossoms,
+bamboo forests, bullet trains, lakes reflecting autumn colours.
+
+Show elegant travel moments: a traveller gazing out of the aircraft window as
+Japan appears beneath the clouds; cabin crew welcoming passengers; close-ups of
+smiling travellers and children looking excited.
+
+Feature the aircraft landing at a modern Japanese airport during golden hour.
+
+Music
+Epic orchestral score blended with modern ambient textures and subtle Japanese
+instruments such as koto and shakuhachi. Build toward an emotional crescendo.
+
+On-Screen Text
+0-10 sec: "A new horizon awaits."
+10-30 sec: "From India to the heart of Japan."
+30-50 sec: "Discover timeless traditions. Experience tomorrow."
+
+Final Frame
+INDIGO NOW FLIES TO JAPAN
+Your Next Journey Begins
+Logo reveal with elegant fade over clouds.
+
+Negative Prompt
+Low quality, cartoon, CGI look, oversaturated colours, distorted aircraft,
+incorrect airline branding, extra aircraft, text artifacts, watermark, blurry
+faces, warped architecture, incorrect Japanese landmarks, shaky camera.
+"""
 
 
-def record(status: str, name: str, detail: str = "") -> None:
-    results.append((status, name, detail))
-    mark = {PASS: "  ok  ", FAIL: " FAIL ", WARN: " warn "}[status]
-    print(f"[{mark}] {name}" + (f"\n           {detail}" if detail else ""))
+def rule(title: str) -> None:
+    print(f"\n{'=' * 68}\n{title}\n{'=' * 68}")
 
 
-# --- 1. Modules import -----------------------------------------------------
+async def main() -> None:
+    raw = Path(sys.argv[1]).read_text(encoding="utf-8") if len(sys.argv) > 1 else JAPAN
+    seconds = 50
 
-try:
-    from app.brand import brand_issues
-    from app.brand.assets import font_path, icon, reference_images, wordmark
     from app.config import settings
-    from app.services.ffmpeg import FFMPEG, FFPROBE, Lockup, Super, burn_brand
-    from app.services.brief import analyse_brief  # noqa: F401
-    from app.services.clips import _generate_chained  # noqa: F401
-    from app.skills.audit import _audit_boilerplate  # noqa: F401
 
-    record(PASS, "Python modules import")
-except Exception as error:  # noqa: BLE001
-    record(FAIL, "Python modules import", f"{type(error).__name__}: {error}")
-    print("\nStop here — nothing else can be checked. Copy the files again.")
-    raise SystemExit(1)
+    smart = bool(settings.azure_openai_key and settings.azure_openai_base_url)
+    print(f"Raw brief: {len(raw):,} characters")
+    print(f"Path     : {'Azure model' if smart else 'DETERMINISTIC FALLBACK (no Azure configured)'}")
+    if not smart:
+        print("           The fallback cuts at the copy heading. It keeps copy away from")
+        print("           Veo — the thing that matters — but cannot recover timings, so")
+        print("           expect 0 supers. Configure Azure for the full split.")
 
+    analysis = await analyse_brief(raw, seconds=seconds)
 
-# --- 2. The NameError that took the whole brand audit down -----------------
+    rule("INTENT — the ONLY part the scene writer sees")
+    print(analysis.intent)
 
-try:
-    from app.domain.models import ContinuityBlock, Scene, ShotCard, StoryOption
+    rule(f"SUPERS — {len(analysis.supers)} line(s), composited in post, never prompted")
+    for item in analysis.supers:
+        print(f"  {item.start:5.1f}-{item.end:5.1f}s  [{item.position}]  {item.text!r}")
+    if not analysis.supers:
+        print("  (none)")
 
-    probe_scene = Scene(
-        id="v1", order=1, seconds=8, startsAt=0, beat="context", shotFunction="establish",
-        title="verify", summary="verify",
-        prompt="Anamorphic 40mm. Deep indigo navy cabin, pearl white surfaces.",
-        shotCard=ShotCard(palette="deep indigo navy-blue", lighting="pale sky blue key"),
-    )
-    probe_story = StoryOption(
-        id="v", title="verify", summary="s", treatment="t", angle="a", scenes=[probe_scene],
-        continuity=ContinuityBlock(palette="Deep indigo navy-blue, pearl white"),
-    )
-    issues = brand_issues(probe_story)
-    record(PASS, "Brand audit runs", f"returned {len(issues)} issue(s) on the probe story")
-except NameError as error:
-    record(FAIL, "Brand audit runs",
-           f"{error} — this is the bug that silently disabled ALL brand checks. "
-           "Re-copy server/app/brand/checks.py.")
-except Exception as error:  # noqa: BLE001
-    record(FAIL, "Brand audit runs", f"{type(error).__name__}: {error}")
-
-
-# --- 2b. Windows path escaping ---------------------------------------------
-
-# Runs on every platform on purpose. This escaping only *does* anything on
-# Windows, so on macOS it was a no-op that passed every test while being wrong —
-# a single backslash gets eaten by the filtergraph parser before the filter's
-# own argument parser sees it, and the drive colon then reads as a separator.
-try:
-    from pathlib import PureWindowsPath
-
-    from app.services.ffmpeg import _filter_path
-
-    escaped = _filter_path(PureWindowsPath(r"C:\Windows\Fonts\GOTHIC.TTF"))
-    expected = r"C\\:/Windows/Fonts/GOTHIC.TTF"
-    if escaped == expected:
-        record(PASS, "Windows path escaping", escaped)
+    rule("END CARD")
+    card = analysis.end_card
+    if card.enabled:
+        print(f"  headline : {card.headline!r}")
+        print(f"  subline  : {card.subline!r}")
+        print(f"  mark     : {card.mark}   last {card.seconds}s")
     else:
-        record(FAIL, "Windows path escaping",
-               f"got {escaped!r}, expected {expected!r} — drawtext will fail on Windows "
-               "with \"No option name near\". Re-copy app/services/ffmpeg.py.")
-except Exception as error:  # noqa: BLE001
-    record(FAIL, "Windows path escaping", f"{type(error).__name__}: {error}")
+        print("  disabled")
 
+    rule("ROUTED ELSEWHERE")
+    print(f"  music -> composer : {(analysis.music or '(none)')[:150]}")
+    print(f"  avoid -> negative : {len(analysis.avoid)} item(s)")
+    for item in analysis.avoid[:6]:
+        print(f"      - {item}")
 
-# --- 3. ffmpeg, and specifically drawtext ----------------------------------
+    rule("REFUSED OUT LOUD instead of silently ignored")
+    for item in analysis.unsupported:
+        print(f"  ! {item}")
+    if not analysis.unsupported:
+        print("  (nothing unsupported)")
 
+    # --- The actual regression assertions ---------------------------------
+    rule("VERDICT")
+    brief = ProjectBrief(brief=raw, seconds=seconds, intent=analysis.intent)
+    seen = brief.creative().lower()
 
-def run(args: list[str]) -> tuple[int, str]:
-    try:
-        done = subprocess.run(args, capture_output=True, text=True, timeout=60)
-        return done.returncode, (done.stdout or "") + (done.stderr or "")
-    except FileNotFoundError:
-        return 127, "not found"
-    except Exception as error:  # noqa: BLE001
-        return 1, str(error)
+    # The load-bearing check is the first one. The rest describe quality of the
+    # split, not safety of it.
+    critical = [
+        ("no super copy leaked into intent",
+         not any(item.text.lower()[:24] in seen for item in analysis.supers if len(item.text) > 8)),
+        ("the literal end-card copy is not in intent",
+         "now flies to japan" not in seen and "new horizon awaits" not in seen),
+        ("intent is shorter than the raw brief", len(analysis.intent) < len(raw)),
+    ]
+    quality = [
+        ("copy was extracted with timings", bool(analysis.supers)),
+        ("end card recognised", card.enabled),
+        ("music routed to the composer", bool(analysis.music)),
+        ("4K/HDR refused out loud",
+         any("4K" in u or "HDR" in u for u in analysis.unsupported)),
+    ]
 
+    for label, ok in critical:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {label}   (critical)")
+    for label, ok in quality:
+        print(f"  [{'PASS' if ok else '  - '}] {label}")
 
-code, out = run([FFMPEG, "-hide_banner", "-version"])
-if code != 0:
-    record(FAIL, "ffmpeg present", f"{FFMPEG} — {out[:120]}. Set FFMPEG_PATH in .env.")
-else:
-    record(PASS, "ffmpeg present", out.splitlines()[0][:90] if out else "")
-
-code, out = run([FFPROBE, "-hide_banner", "-version"])
-record(PASS if code == 0 else FAIL, "ffprobe present",
-       "" if code == 0 else f"{FFPROBE} — set FFPROBE_PATH in .env.")
-
-# drawtext needs libfreetype compiled in. Some minimal Windows builds omit it,
-# and the failure mode is an ffmpeg error only at render time.
-code, out = run([FFMPEG, "-hide_banner", "-filters"])
-if code == 0 and "drawtext" in out:
-    record(PASS, "ffmpeg has drawtext")
-else:
-    record(FAIL, "ffmpeg has drawtext",
-           "This build cannot draw text, so every super will be dropped. "
-           "Install a full build (gyan.dev 'full' or 'essentials' both include it).")
-
-
-# --- 4. Font ---------------------------------------------------------------
-
-font = font_path()
-if font is None:
-    record(FAIL, "Font for supers",
-           "No usable font found. Set BRAND_FONT_PATH in .env, or drop a .ttf into "
-           "server/app/brand/assets/fonts/.")
-else:
-    record(PASS, "Font for supers", str(font))
-
-
-# --- 5. Brand artwork ------------------------------------------------------
-
-if settings.brand.strip().lower() not in {"indigo"}:
-    record(WARN, f"Brand enforcement is OFF (BRAND={settings.brand!r})",
-           "Every IndiGo guardrail is a no-op and the end card gets NO logo, because "
-           "brand.supers.build_lockups() gates on the active brand. Set BRAND=indigo "
-           "in .env to switch the brand layer on.")
-
-marks = [wordmark(on_dark=True), wordmark(on_dark=False), icon(on_dark=True), icon(on_dark=False)]
-missing = [path for path in marks if not path.is_file()]
-have_marks = not missing
-if missing:
-    record(FAIL, "Brand marks present",
-           "Missing: " + ", ".join(path.name for path in missing) +
-           f" — expected in {marks[0].parent}. Copy the whole "
-           "server/app/brand/assets/ folder as BINARY, not text.")
-else:
-    # A PNG truncated by a text-mode copy still exists but is unreadable.
-    sizes = {path.name: path.stat().st_size for path in marks}
-    tiny = [name for name, size in sizes.items() if size < 2000]
-    if tiny:
-        have_marks = False
-        record(FAIL, "Brand marks present",
-               f"Suspiciously small, likely corrupted by a text-mode copy: {', '.join(tiny)}")
+    if all(ok for _, ok in critical):
+        print("\nSAFE: nothing a viewer reads can reach Veo.")
+        if not all(ok for _, ok in quality) and not smart:
+            print("Quality items are blank because the fallback ran. Expected without Azure.")
     else:
-        record(PASS, "Brand marks present", ", ".join(f"{n} {s:,}B" for n, s in sizes.items()))
-
-record(PASS if reference_images() else WARN, "Brand reference images",
-       f"{len(reference_images())} found" if reference_images()
-       else "none found — only affects future keyframe conditioning")
+        print("\nUNSAFE: copy survived into the intent. Read the INTENT block above.")
 
 
-# --- 6. The real test: burn a super onto a frame ---------------------------
-
-if font is not None:
-    import asyncio
-
-    async def smoke() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            work = Path(tmp)
-            plate, out = work / "plate.mp4", work / "out.mp4"
-            code, message = run([
-                FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-                "-f", "lavfi", "-i", "color=c=navy:s=640x360:d=2", str(plate),
-            ])
-            if code != 0:
-                record(FAIL, "Super compositing smoke test", message[:160])
-                return
-            # Only composite the mark if it is actually there. Otherwise a
-            # missing PNG fails the whole step and hides whether drawtext — the
-            # part that matters for spelling — works at all.
-            lockups = [Lockup(file=wordmark(on_dark=True), start=0.5, width=200)] if have_marks else []
-            await burn_brand(
-                plate, out, seconds=2.0,
-                supers=[Super(text="IndiGo x Japan - 100% ready", start=0.1, end=1.9,
-                              x="20", y="20", size=28)],
-                lockups=lockups, font=font, work_dir=work / "supers",
-            )
-            if out.is_file() and out.stat().st_size > 1000:
-                what = "text and lockup" if have_marks else "text only (marks missing)"
-                record(PASS, "Super compositing smoke test",
-                       f"rendered {out.stat().st_size:,}B with {what}")
-            else:
-                record(FAIL, "Super compositing smoke test", "produced no output")
-
-    try:
-        asyncio.run(smoke())
-    except Exception as error:  # noqa: BLE001
-        # UpstreamError carries ffmpeg's stderr in `.details`. Without it all
-        # you get is an exit code, and -22 (4294967274 unsigned) means only
-        # "invalid argument" — not which argument.
-        detail = getattr(error, "details", None)
-        message = f"{type(error).__name__}: {error}"
-        if detail:
-            tail = "\n           ".join(str(detail).strip().splitlines()[-6:])
-            message += f"\n           ffmpeg said:\n           {tail}"
-        message += "\n           Run `python diagnose_drawtext.py` to pinpoint it."
-        record(FAIL, "Super compositing smoke test", message)
-
-
-# --- 7. Settings worth eyeballing ------------------------------------------
-
-print("\nSettings:")
-for name in ("brand", "brand_enforce_audit", "veo_model", "veo_resolution",
-             "veo_use_keyframes", "veo_chain_keyframes", "veo_concurrency",
-             "music_provider", "render_fps"):
-    print(f"    {name:22} = {getattr(settings, name, '?')}")
-
-
-# --- Summary ---------------------------------------------------------------
-
-failures = [name for status, name, _ in results if status == FAIL]
-print("\n" + "-" * 62)
-if failures:
-    print(f"{len(failures)} check(s) FAILED: {', '.join(failures)}")
-    raise SystemExit(1)
-print(f"All {len(results)} checks passed.")
+asyncio.run(main())
