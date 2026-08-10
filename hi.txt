@@ -1,30 +1,273 @@
-import tailwindcss from '@tailwindcss/vite';
-import react from '@vitejs/plugin-react';
-import path from 'path';
-import {defineConfig, loadEnv} from 'vite';
+"""Decompose a raw brief before anything else reads it.
 
-export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
-  return {
-    plugins: [react(), tailwindcss()],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
-    resolve: {
-      alias: {
-        '@': path.resolve(__dirname, '.'),
-      },
-    },
-    server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
-      proxy: {
-        '/api': {
-          target: 'http://localhost:8000',
-          changeOrigin: true,
+The pipeline used to treat the brief as one opaque string and hand it to the
+scene writer whole. That is the root of several unrelated-looking failures:
+
+  * "On-Screen Text: A new horizon awaits." reached Veo as an instruction to
+    render type, and came back as "A new horizon awasts."
+  * "4K HDR" was silently ignored, because nothing in the pipeline is allowed
+    to say "no".
+  * Music direction competed for the scene writer's attention with camera
+    direction, and neither the composer nor Veo ever saw it.
+
+Splitting the brief is what lets each of those go to the right place — or be
+refused out loud. Only ``intent`` is ever allowed into a prompt.
+"""
+
+from __future__ import annotations
+
+import re
+
+from ..brand import brand_system_block
+from ..domain.models import BriefAnalysis, EndCard, SuperSpec
+from ..logging_setup import get_logger
+from .llm import ChatMessage, chat_json
+
+log = get_logger("brief")
+
+#: Headings a human writes above the copy they want burnt in. Matching these is
+#: the deterministic fallback for when no model is configured — crude, but it
+#: catches the common shape and is better than passing copy through to Veo.
+_COPY_HEADING = re.compile(
+    r"^\s*(?:on[- ]screen\s+text|on[- ]screen\s+copy|supers?|captions?|titles?|"
+    r"text\s+overlay|end\s?card|final\s+frame|copy)\s*[:\-]?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+#: A brief specifies an end card with a *heading* — a line that opens a section,
+#: the same shape as "On-Screen Text". Anchoring to that rather than to the
+#: words anywhere in the text is what separates a brief asking for a closing
+#: frame from a brief talking about one.
+#:
+#: Keyword matching fails here, and fails on the one brief that matters:
+#: `generic_test_2.txt` says "no end card" *and* "if the brief parser invents
+#: supers or an end card here". Negation handling catches the first and not the
+#: second, so the loudest warning in this module would fire on the brief written
+#: to prove the parser is not pattern-matching. Structure has no such problem.
+#:
+#: Used only to catch the split disagreeing with an obvious signal — never to
+#: build an end card, because inventing one the brief did not ask for is the
+#: failure in the other direction.
+_END_CARD_HEADING = re.compile(
+    r"^[ \t]*(?:end\s?card|final\s+frame|closing\s+frame|logo\s+(?:reveal|lockup))"
+    r"[ \t]*(?::.*)?$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _asks_for_end_card(raw: str) -> bool:
+    """True when the brief opens a section asking for a closing brand frame."""
+    return _END_CARD_HEADING.search(raw) is not None
+
+
+#: Asks that read as achievable but are not, on this pipeline. Kept short and
+#: specific: a false positive here tells the user "no" about something we could
+#: in fact do, which is worse than staying quiet.
+_UNSUPPORTED = (
+    (re.compile(r"\b(?:4k|uhd|2160p|8k)\b", re.IGNORECASE),
+     "4K/8K delivery — Veo renders at 1080p maximum. The film will be 1080p."),
+    (re.compile(r"\bhdr\b|\bdolby\s+vision\b", re.IGNORECASE),
+     "HDR — Veo output is SDR. The grade will be delivered in SDR."),
+    (re.compile(r"\b(?:60|120)\s?fps\b", re.IGNORECASE),
+     "High frame rate — clips are conformed to the project frame rate."),
+)
+
+
+_SYSTEM = """\
+You split an advertising brief into parts that go to different systems. You do \
+not write, improve, critique or expand the brief. You sort it.
+
+Return JSON with exactly these keys:
+
+  intent      string. The creative brief: story, subject, mood, setting, casting, \
+camera and grade direction. Everything a director needs and nothing else. \
+Remove on-screen copy, duration/resolution/aspect specification, music \
+direction, and prohibition lists — those are captured separately below. Keep \
+the user's own wording wherever you can; you are deleting, not rewriting.
+
+  supers      array. Every piece of text the VIEWER READS ON SCREEN. Each item: \
+{"text": string, "start": number, "end": number, "position": one of \
+"upper-left"|"upper-centre"|"lower-left"|"lower-centre"|"centre"}. If the brief \
+gives timings, use them. If it gives a range like "0-10 sec", use it. If it \
+gives no timing, distribute the lines evenly across the runtime. Copy the text \
+EXACTLY as written, including capitalisation. Do not invent copy that is not \
+in the brief. Empty array if the brief asks for no on-screen text.
+POSITION: unless the brief actually specifies placement, use "upper-left". \
+Narrative supers sit in a corner so they do not cover the face or the action; \
+dead-centre type over a subject is what an amateur edit looks like. Reserve \
+"centre" for the end card, which is handled separately below.
+
+  endCard     object. The closing brand frame, if the brief describes one: \
+{"enabled": bool, "headline": string|null, "subline": string|null, \
+"mark": "wordmark"|"icon"|"none", "seconds": number}. A "final frame" or "logo \
+reveal" instruction belongs here, not in supers. enabled=false if absent.
+
+  avoid       array of strings. Things the brief says must NOT appear. Split a \
+comma-separated negative prompt into individual items.
+
+  music       string or null. Music and sound-design direction, verbatim.
+
+Rules:
+- Text a CHARACTER reads (a sign, a boarding pass, a phone screen) is NOT a \
+super. It stays in intent. Supers are only what is composited over the picture.
+- Never put copy in both intent and supers.
+- If the brief contains no on-screen text at all, supers is [] and endCard.enabled \
+is false. Do not helpfully invent an end card.
+"""
+
+
+def _fallback(raw: str) -> BriefAnalysis:
+    """Split the brief without a model.
+
+    Cuts at the first copy heading and treats everything above it as intent.
+    Crude, and it does not recover timings — but it stops copy reaching Veo,
+    which is the failure that matters.
+    """
+    match = _COPY_HEADING.search(raw)
+    intent = raw[: match.start()].strip() if match else raw.strip()
+    if match:
+        log.info("No model configured; split the brief at %r.", match.group(0).strip())
+    # This path recovers no timings, so it yields no supers and no end card. It
+    # keeps copy away from Veo, which is the failure that matters — but the film
+    # then renders with no burnt-in copy and no brand mark, and that is worth
+    # saying rather than discovering in the deliverable.
+    log.warning(
+        "Falling back to a heading split: this film will have NO supers and NO "
+        "end card. Check that Azure is configured and reachable."
+    )
+    return BriefAnalysis(intent=intent or raw.strip(), unsupported=_unsupported_in(raw))
+
+
+def _unsupported_in(raw: str) -> list[str]:
+    return [note for pattern, note in _UNSUPPORTED if pattern.search(raw)]
+
+
+_POSITIONS = frozenset(
+    {"upper-left", "upper-centre", "lower-left", "lower-centre", "centre"}
+)
+
+
+def _coerce_supers(items: object, seconds: int) -> list[SuperSpec]:
+    """Build ``SuperSpec``s from model output, dropping anything malformed.
+
+    A super with a broken time window is worse than a missing one: it either
+    never appears or sits on screen for the whole film.
+    """
+    if not isinstance(items, list):
+        return []
+
+    supers: list[SuperSpec] = []
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        text = str(entry.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            start = max(0.0, float(entry.get("start", 0)))
+            end = min(float(seconds), float(entry.get("end", 0)))
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        position = entry.get("position")
+        supers.append(
+            SuperSpec(
+                text=text,
+                start=start,
+                end=end,
+                position=position if position in _POSITIONS else "upper-left",  # type: ignore[arg-type]
+            )
+        )
+    return supers
+
+
+#: The model is asked for `endCard`, but a JSON-mode model asked for one
+#: camelCase key among four lowercase ones returns `end_card` often enough to
+#: matter. Reading only the documented spelling turns that into a silently
+#: disabled end card — no lockup, no closing copy, no error. The key is the
+#: on/off switch for the entire brand mark, so it accepts every spelling.
+_END_CARD_KEYS = ("endCard", "end_card", "endcard", "end card")
+
+
+def _end_card_payload(payload: dict) -> object:
+    for key in _END_CARD_KEYS:
+        if key in payload:
+            return payload[key]
+    return None
+
+
+def _coerce_end_card(value: object) -> EndCard:
+    if not isinstance(value, dict) or not value.get("enabled"):
+        return EndCard(enabled=False)
+    mark = value.get("mark")
+    return EndCard(
+        enabled=True,
+        headline=(str(value["headline"]).strip() if value.get("headline") else None),
+        subline=(str(value["subline"]).strip() if value.get("subline") else None),
+        mark=mark if mark in {"wordmark", "icon", "none"} else "wordmark",
+        seconds=float(value.get("seconds") or 4.0),
+    )
+
+
+async def analyse_brief(raw: str, *, seconds: int) -> BriefAnalysis:
+    """Split a raw brief into intent, copy, constraints and refusals.
+
+    Falls back to a deterministic split when no model is configured, so the
+    pipeline still boots and still keeps copy away from Veo.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return BriefAnalysis(intent="")
+
+    messages: list[ChatMessage] = [
+        {"role": "system", "content": _SYSTEM + brand_system_block(safety_only=True)},
+        {
+            "role": "user",
+            "content": f"Runtime: {seconds} seconds.\n\n--- BRIEF ---\n{raw}\n--- END ---",
         },
-      },
-    },
-  };
-});
+    ]
+
+    try:
+        payload = await chat_json(messages)
+    except Exception as error:  # noqa: BLE001 - any upstream failure degrades the same way
+        log.warning("Brief analysis failed, falling back to a heading split. %s", error)
+        return _fallback(raw)
+
+    if not isinstance(payload, dict):
+        return _fallback(raw)
+
+    intent = str(payload.get("intent") or "").strip()
+    if not intent:
+        log.warning("Brief analysis returned no intent; keeping the raw brief.")
+        intent = raw
+
+    avoid = [str(item).strip() for item in payload.get("avoid") or [] if str(item).strip()]
+    music = payload.get("music")
+
+    analysis = BriefAnalysis(
+        intent=intent,
+        supers=_coerce_supers(payload.get("supers"), seconds),
+        end_card=_coerce_end_card(_end_card_payload(payload)),
+        avoid=avoid,
+        unsupported=_unsupported_in(raw),
+        music=str(music).strip() if music else None,
+    )
+
+    log.info(
+        "Brief split: intent %d chars (from %d), %d super(s), end card %s, %d unsupported.",
+        len(analysis.intent), len(raw), len(analysis.supers),
+        "on" if analysis.end_card.enabled else "off", len(analysis.unsupported),
+    )
+
+    # A disabled end card is indistinguishable from a brief that asked for none,
+    # and it silently removes the brand mark from the film — the render just
+    # skips compositing and nothing anywhere says so. When the brief plainly
+    # asks for one and the split disagrees, say it out loud.
+    if not analysis.end_card.enabled and _asks_for_end_card(raw):
+        log.warning(
+            "The brief asks for an end card but the split returned enabled=false — "
+            "the film will render with NO brand mark. Model returned keys: %s.",
+            ", ".join(sorted(payload)) or "(none)",
+        )
+    return analysis
