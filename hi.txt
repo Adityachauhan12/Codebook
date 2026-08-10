@@ -1,79 +1,112 @@
-from contextlib import contextmanager
+"""
+Azure Application Insights telemetry via azure-monitor-opentelemetry.
+
+configure_appinsights() — call once at startup. Wires Azure Monitor into
+FastAPI via OpenTelemetry auto-instrumentation (HTTP requests → requests table)
+and sets up structured log export (logger.info/warning/error → traces table).
+
+track_event()        — emit a named structured log to the traces table.
+claims_props()       — extract standard user fields from a JWT claims dict.
+log_blocked_prompt() — DB audit + telemetry for safety-blocked prompts.
+"""
+
 import logging
 import os
-import psycopg2
-from azure.identity import ClientSecretCredential
-from dotenv import load_dotenv
+from contextvars import ContextVar
+from typing import Any, Dict, Optional
 
-_logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
-load_dotenv()
+# Dedicated logger whose records are exported to App Insights as traces.
+_ai_logger = logging.getLogger("marketing-platform.events")
 
-
-def _is_keyvault_ref(value: str) -> bool:
-    return value.strip().startswith("@Microsoft.KeyVault(")
-
-
-_client_secret = os.getenv("AZURE_CLIENT_SECRET", "")
-if _is_keyvault_ref(_client_secret):
-    _logger.warning(
-        "AZURE_CLIENT_SECRET is a Key Vault reference — DB connections will fail locally. "
-        "Replace it with the actual secret value in your .env file."
-    )
-    _credential = None
-else:
-    _credential = ClientSecretCredential(
-        tenant_id=os.getenv("AZURE_TENANT_ID", ""),
-        client_id=os.getenv("AZURE_CLIENT_ID", ""),
-        client_secret=_client_secret,
-    )
+# Set once per request in middleware; inherited by background tasks spawned
+# within the same request context. Falls back to APP_BASE_URL env var for
+# startup events or scheduled jobs that have no request context.
+_request_url: ContextVar[str] = ContextVar("_request_url", default="")
 
 
-def _get_token() -> str:
-    if _credential is None:
-        raise RuntimeError(
-            "DB credential not initialised — AZURE_CLIENT_SECRET is a Key Vault reference. "
-            "Set the actual secret value in your local .env file."
-        )
-    token = _credential.get_token("https://token.postgres.cosmos.azure.com/.default")
-    return token.token
+def set_request_url(url: str) -> None:
+    """Called from HTTP middleware to record the current request base URL."""
+    _request_url.set(url)
 
 
-def _connect() -> psycopg2.extensions.connection:
-    return psycopg2.connect(
-        host=os.getenv("PGHOST"),
-        port=int(os.getenv("PGPORT", "5432")),
-        dbname=os.getenv("PGDATABASE"),
-        user=os.getenv("PGUSER"),
-        password=_get_token(),
-        sslmode="require",
-    )
+def _url_prop() -> Dict[str, str]:
+    url = _request_url.get() or os.getenv("APP_BASE_URL", "unknown")
+    return {"environment_url": url}
 
 
-@contextmanager
-def get_db():
-    conn = _connect()
+def configure_appinsights() -> None:
+    """Wire up Azure Monitor + FastAPI auto-instrumentation at startup."""
+    conn_str = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip()
+    if not conn_str:
+        logger.warning("App Insights disabled: APPLICATIONINSIGHTS_CONNECTION_STRING not set")
+        return
+    if conn_str.startswith("@Microsoft.KeyVault("):
+        logger.warning("App Insights disabled: APPLICATIONINSIGHTS_CONNECTION_STRING is a Key Vault reference — replace with the actual value in your local .env")
+        return
     try:
-        yield conn
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-def log_blocked_prompt(user_id: str, blocked_prompt: str, category: str, blocked_reason: str) -> None:
-    """Insert a blocked-prompt audit row. Swallows errors so it never blocks the main request path."""
-    try:
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO blocked_prompts (user_id, blocked_prompt, category, blocked_reason)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (user_id, blocked_prompt, category, blocked_reason),
-                )
-                conn.commit()
+        from azure.monitor.opentelemetry import configure_azure_monitor
+        configure_azure_monitor(connection_string=conn_str)
+        logger.info("App Insights initialised via azure-monitor-opentelemetry")
     except Exception as exc:
-        _logger.error("log_blocked_prompt | failed | user=%s | category=%s | error=%s", user_id, category, exc)
+        logger.error("App Insights setup failed | error=%s", exc)
+
+
+def claims_props(claims: Dict[str, Any]) -> Dict[str, str]:
+    """Extract standard user fields from a JWT claims dict."""
+    return {
+        "user_oid":   claims.get("oid", ""),
+        "user_name":  claims.get("name", ""),
+        "user_email": claims.get("preferred_username") or claims.get("upn") or claims.get("email", ""),
+        "user_roles": str(claims.get("roles", [])),
+    }
+
+
+def track_event(
+    name: str,
+    properties: Optional[Dict[str, str]] = None,
+    measurements: Optional[Dict[str, float]] = None,
+) -> None:
+    """Emit a structured log entry to the App Insights traces table.
+
+    All fields land in customDimensions, queryable via KQL:
+        traces | where customDimensions["event_name"] == "<name>"
+    Fire-and-forget — never raises.
+    """
+    try:
+        dimensions: Dict[str, object] = {"event_name": name, **_url_prop()}
+        if properties:
+            dimensions.update(properties)
+        if measurements:
+            dimensions.update(measurements)
+        _ai_logger.info(name, extra={"custom_dimensions": dimensions})
+    except Exception as exc:
+        logger.error("track_event failed | event=%s | error=%s", name, exc)
+
+
+def log_blocked_prompt(
+    user_id: str,
+    prompt: str,
+    category: str,
+    real_reason: str,
+    endpoint: str = "",
+) -> None:
+    """DB audit log + App Insights telemetry for a safety-blocked prompt.
+
+    Single call replaces the previous pattern of calling db.connection.log_blocked_prompt
+    and track_event separately at every block site.
+    """
+    try:
+        from db.connection import log_blocked_prompt as _db_log
+        _db_log(user_id, prompt, category, real_reason)
+    except Exception as exc:
+        logger.error("log_blocked_prompt DB write failed | user=%s | error=%s", user_id, exc)
+
+    track_event("prompt.blocked", properties={
+        "user_id":        user_id,
+        "category":       category,
+        "blocked_reason": real_reason,
+        "endpoint":       endpoint,
+        "prompt_snippet": prompt[:200],
+    })
