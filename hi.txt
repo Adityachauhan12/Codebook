@@ -1,3 +1,14 @@
+
+(venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend>python main.py 
+Directory 'campaign_assets' ready
+Directory 'campaign_images' ready
+Directory 'campaign_logo' ready
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\main.py:203: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
   @app.on_event("startup")
 INFO:     Started server process [23732]
 INFO:     Waiting for application startup.
@@ -101,3 +112,18 @@ INFO:     127.0.0.1:53325 - "POST /api/v1/video/projects/vid_19feb620d53bc238b11
 2026-08-10T16:53:21 INFO  [video.jobs] Job job_19feb669b5f18b25caf (clips) succeeded.
 INFO:     127.0.0.1:52900 - "POST /api/v1/video/projects/vid_19feb620d53bc238b11/audio/suggest HTTP/1.1" 202 Accepted
 INFO:     127.0.0.1:54906 - "POST /api/v1/video/projects/vid_19feb620d53bc238b11/render HTTP/1.1" 202 Accepted
+2026-08-10T16:54:26 INFO  [video.llm] audio-directions ok in 27.2s (11831 tokens, deployment gpt-5.5)
+2026-08-10T16:54:27 INFO  [video.jobs] Job job_19feb6a41294517c7be (audio) succeeded.
+2026-08-10T16:59:14 INFO  [video.render] Rendered project vid_19feb620d53bc238b11: 30.00s, 24.4MB from 4 clips.
+2026-08-10T16:59:14 INFO  [video.jobs] Job job_19feb6a5b261cfdfdbb (render) succeeded.
+INFO:     127.0.0.1:60062 - "GET /api/v1/video/media/projects/vid_19feb620d53bc238b11/output/final.mp4 HTTP/1.1" 401 Unauthorized
+2026-08-10T16:59:14 ERROR [asyncio] Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Program Files\Python312\Lib\asyncio\events.py", line 88, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Program Files\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+2026-08-10T16:59:33 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
+INFO:     127.0.0.1:62147 - "GET /api/v1/video/media/pro
