@@ -1,198 +1,336 @@
-"""Optional scene keyframes, via the Gemini image model.
+"""One scene in, one clip file out.
 
-Veo has no memory between generations, so the strongest continuity lever
-available is image-to-video: render the scene's opening frame as a still, then
-hand that still to Veo as the first frame. The character, wardrobe, location and
-grade are then fixed by pixels rather than by hoping twelve independent prompts
-converge.
-
-Off by default (``VEO_USE_KEYFRAMES``) because it adds one image call per clip.
+This is where the "Veo only does 8 seconds" constraint stops being a problem and
+becomes a loop: each scene of the plan is generated on its own, written to
+``storage/projects/<id>/clips/``, measured, and recorded back on the project.
+The renderer later accumulates whatever is ready.
 """
 
 from __future__ import annotations
 
-import base64
-import re
-from functools import lru_cache
+import asyncio
 from pathlib import Path
 
-import httpx
-
-from ..brand import active_brand
-from ..brand.assets import livery_references
 from ..config import settings
-from ..domain.models import Scene, StoryOption, VeoAspectRatio
+from ..domain.formats import veo_aspect_for
+from ..domain.models import Clip, Project, Scene, StoryOption, now_iso
+from ..errors import BadRequest, Conflict
 from ..logging_setup import get_logger
+from ..storage import clips_dir, ensure_dir, persist_media, resolve_in_storage, work_dir
+from . import veo
 from .veo import InlineAsset
+from .ffmpeg import extract_poster, probe
+from .imagegen import asset_from_image, generate_keyframe, livery_assets
+from .jobs import JobContext, map_with_concurrency
+from .store import require_project, update_project
 
-log = get_logger("imagegen")
-
-_MIME_BY_SUFFIX = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-}
-
-#: Sent alongside the reference photographs. Colour words alone get the blues
-#: approximately right and the tail form entirely wrong; naming the airline
-#: without pixels to copy makes the model invent a wordmark it cannot spell.
-#: The references fix both, but only if the prompt says to follow them.
-_LIVERY_DIRECTION = (
-    "Reference photographs of the real IndiGo aircraft and cabin are attached. "
-    "Brand accuracy is the point of this frame — match them exactly: pearl-white "
-    "fuselage, deep indigo navy-blue tail with its upward-sweeping form, the blue "
-    "sweep along the lower fuselage, deep blue engine nacelles, and the IndiGo "
-    "wordmark reproduced exactly as it appears in the reference, correctly spelt "
-    "with a capital I and a capital G. Cabin: blue fabric seats, pale blue "
-    "headrest covers, white panels. Crew: deep navy uniform. Do not invent a "
-    "different airline, a different livery, or a plain unbranded white aircraft."
-)
+log = get_logger("clips")
 
 
-def asset_from_image(path: Path) -> InlineAsset | None:
-    """Read an image file as a Veo inline asset. ``None`` if unusable.
-
-    Used for tail-frame chaining: the last frame of clip N becomes the first
-    frame of clip N+1, which is the only continuity mechanism that costs no
-    extra generation and carries a face across a cut exactly.
-    """
-    try:
-        data = path.read_bytes()
-    except OSError as error:
-        log.warning("Could not read keyframe %s: %s", path.name, error)
-        return None
-    if not data:
-        return None
-    return InlineAsset(
-        mime_type=_MIME_BY_SUFFIX.get(path.suffix.lower(), "image/png"),
-        data=base64.b64encode(data).decode("ascii"),
-    )
-
-#: Strip camera movement out of the shot card's camera field — a still has none.
-_MOVEMENT = re.compile(
-    r"\b(push[- ]in|pull[- ]back|tracking|pan|tilt|orbit|dolly|handheld|whip|crane|glide)\b.*",
-    re.IGNORECASE,
-)
+def selected_story(project: Project) -> StoryOption:
+    story = next((s for s in project.stories if s.id == project.selected_story_id), None)
+    if story is None:
+        raise BadRequest("No story is selected for this project yet.")
+    if not story.scenes:
+        raise BadRequest("The selected story has no scenes yet. Generate the storyboard first.")
+    return story
 
 
-def _keyframe_prompt(scene: Scene, story: StoryOption, aspect: VeoAspectRatio) -> str:
-    """Direct a still, not a shot.
+def _find_scene(project: Project, scene_id: str) -> tuple[StoryOption, Scene]:
+    story = selected_story(project)
+    scene = next((s for s in story.scenes if s.id == scene_id), None)
+    if scene is None:
+        raise BadRequest(f"Scene {scene_id} is not part of the selected story.")
+    return story, scene
 
-    The image model must not be told about camera movement or audio, and it must
-    be told to leave the frame clean.
-    """
-    card = scene.shot_card
-    continuity = story.continuity
-    lens = _MOVEMENT.sub("", card.camera).strip() or "50mm"
 
-    return "\n".join(
-        [
-            f"A single film frame, {aspect} aspect ratio. This is the opening frame of a shot.",
-            "",
-            f"Framing: {card.frame}. {card.composition}",
-            f"Lens: {lens}.",
-            f"Subject and action at the start of the shot: {card.action}",
-            f"On the body: {card.micro_action}",
-            f"In the space: {card.environmental_pressure}",
-            "",
-            f"Characters: {' | '.join(continuity.characters) or '—'}",
-            f"Wardrobe: {' | '.join(continuity.wardrobe) or '—'}",
-            f"Location: {continuity.location}",
-            f"Lighting: {card.lighting or continuity.lighting_constant}",
-            f"Palette: {card.palette or continuity.palette}",
-            "",
-            # "no logos" used to sit in this line, which stripped IndiGo out of
-            # the very frame the film is an advertisement for. Only *overlay*
-            # graphics are unwanted here; branding inside the scene is the point.
-            "Photographic, natural skin texture, motivated lighting. No captions, no "
-            "subtitles, no overlay graphics or text, no watermark, no borders, no collage, "
-            "no split frames. Branding that belongs in the world of the shot — aircraft "
-            "livery, crew uniform, gate signage — is wanted in frame.",
-            *(("", _LIVERY_DIRECTION) if livery_assets() else ()),
+def sync_clips(project: Project) -> list[Clip]:
+    """Derive the clip rows from the selected story, keeping what is generated."""
+    story = next((s for s in project.stories if s.id == project.selected_story_id), None)
+    if story is None:
+        return []
+
+    existing = {clip.scene_id: clip for clip in project.clips}
+    clips: list[Clip] = []
+
+    for scene in story.scenes:
+        previous = existing.get(scene.id)
+        # A scene whose length changed invalidates the clip generated from the
+        # old version — the renderer would otherwise pad or cut the wrong shot.
+        stale = previous is not None and previous.seconds != scene.seconds
+
+        if previous is not None and not stale:
+            refreshed = previous.model_copy(update={"order": scene.order, "seconds": scene.seconds})
+            clips.append(refreshed)
+        else:
+            clips.append(
+                Clip(sceneId=scene.id, order=scene.order, status="idle", seconds=scene.seconds)
+            )
+
+    return clips
+
+
+async def _patch_clip(project_id: str, scene_id: str, **patch) -> None:
+    def mutate(project: Project) -> Project:
+        project.clips = [
+            clip.model_copy(update=patch) if clip.scene_id == scene_id else clip
+            for clip in project.clips
         ]
-    )
+        return project
+
+    await update_project(project_id, mutate)
 
 
-@lru_cache(maxsize=1)
-def livery_assets() -> tuple[InlineAsset, ...]:
-    """Real IndiGo photography, read once and reused for every keyframe."""
-    if active_brand() != "indigo":
-        return ()
-    assets = tuple(
-        asset for path in livery_references() if (asset := asset_from_image(path))
-    )
-    if not assets:
-        log.warning(
-            "No livery references found; keyframes will be text-only and the aircraft "
-            "will not reliably read as IndiGo. Add photographs to brand/assets/references/livery/."
-        )
-    return assets
+async def generate_scene_clip(
+    project: Project,
+    scene_id: str,
+    *,
+    force: bool = False,
+    on_progress=None,
+    seed_frame: InlineAsset | None = None,
+) -> Clip:
+    """Generate one scene's clip.
 
-
-async def generate_keyframe(
-    scene: Scene, story: StoryOption, aspect: VeoAspectRatio
-) -> InlineAsset | None:
-    """Render the scene's first frame. Returns ``None`` on any failure.
-
-    A keyframe is an optimisation, never a reason to fail a clip.
+    ``seed_frame`` is the previous clip's final frame, supplied by the chained
+    path in ``generate_all_clips``. It takes precedence over a generated
+    keyframe: a real frame of the film we are already making is a stronger
+    continuity anchor than a fresh still of what that frame should have been.
     """
-    key = settings.google_key
-    if not key:
-        return None
+    story, scene = _find_scene(project, scene_id)
+    current = next((clip for clip in project.clips if clip.scene_id == scene_id), None)
 
-    url = f"{settings.gemini_api_base.rstrip('/')}/models/{settings.gemini_image_model_name}:generateContent"
+    if current and current.status == "generating" and not force:
+        raise Conflict(f"Scene {scene.order} is already generating.")
+    if current and current.status == "ready" and not force:
+        return current
 
-    # Text first, then the reference photographs. The livery is the one thing a
-    # prompt cannot specify accurately — this is what makes the aircraft read as
-    # IndiGo rather than as a generic white jet.
-    request_parts: list[dict[str, object]] = [
-        {"text": _keyframe_prompt(scene, story, aspect)}
-    ]
-    request_parts.extend({"inlineData": asset.to_payload()} for asset in livery_assets())
+    aspect = veo_aspect_for(project.brief.ratio)
+    destination = Path(clips_dir(project.id)) / f"scene-{scene.order:02d}.mp4"
+    poster = destination.with_suffix(".jpg")
+
+    await _patch_clip(
+        project.id,
+        scene_id,
+        status="generating",
+        progress=0.0,
+        error=None,
+        started_at=now_iso(),
+        attempts=(current.attempts if current else 0) + 1,
+    )
+
+    async def report(fraction: float, message: str) -> None:
+        if on_progress is not None:
+            result = on_progress(fraction, message)
+            if asyncio.iscoroutine(result):
+                await result
+        await _patch_clip(project.id, scene_id, progress=fraction)
 
     try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            response = await client.post(
-                url,
-                headers={"x-goog-api-key": key, "content-type": "application/json"},
-                json={
-                    "contents": [{"role": "user", "parts": request_parts}],
-                    "generationConfig": {
-                        "responseModalities": ["IMAGE"],
-                        "imageConfig": {"aspectRatio": aspect},
-                    },
-                },
-            )
+        # Lock continuity with a first frame: the previous clip's tail if we are
+        # chaining, otherwise an optional generated still.
+        first_frame = seed_frame
+        if first_frame is None and settings.veo_use_keyframes:
+            await report(0.02, "Rendering the opening frame…")
+            first_frame = await generate_keyframe(scene, story, aspect)
 
-        if response.status_code >= 400:
-            log.warning(
-                "Keyframe for scene %d failed (%s): %s",
-                scene.order, response.status_code, response.text[:200],
-            )
-            return None
+        # A keyframe already carries the livery in its pixels, and Veo rejects
+        # reference images combined with a first frame. So the reference slot is
+        # the fallback: it is what keeps the aircraft recognisably IndiGo when no
+        # keyframe was produced.
+        references = None if first_frame else list(livery_assets())
 
-        payload = response.json()
-
-        block_reason = (payload.get("promptFeedback") or {}).get("blockReason")
-        if block_reason:
-            log.warning("Keyframe for scene %d was blocked (%s).", scene.order, block_reason)
-            return None
-
-        candidates = payload.get("candidates") or []
-        parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
-        inline = next((part.get("inlineData") for part in parts if part.get("inlineData")), None)
-
-        if not inline or not inline.get("data"):
-            log.warning(
-                "Keyframe for scene %d returned no image; continuing text-to-video.", scene.order
-            )
-            return None
-
-        return InlineAsset(mime_type=inline.get("mimeType") or "image/png", data=inline["data"])
-
-    except Exception as error:  # noqa: BLE001 — never fail a clip over a keyframe
-        log.warning(
-            "Keyframe for scene %d failed; falling back to text-to-video: %s", scene.order, error
+        generated = await veo.generate_clip(
+            destination,
+            prompt=scene.prompt,
+            seconds=scene.seconds,
+            aspect_ratio=aspect,
+            negative_prompt=scene.negative_prompt,
+            model=project.model or None,
+            first_frame=first_frame,
+            reference_images=references or None,
+            on_progress=report,
         )
+
+        info = await probe(generated.file)
+
+        try:
+            await extract_poster(generated.file, poster, min(0.5, max(0.0, info.seconds / 2)))
+            poster_file, poster_url = await asyncio.to_thread(
+                persist_media, poster, project.id, "posters"
+            )
+        except Exception as error:  # noqa: BLE001 — a missing poster is cosmetic
+            log.warning("Poster extraction failed for scene %d: %s", scene.order, error)
+            poster_file = None
+            poster_url = None
+
+        if info.seconds < scene.seconds - 0.5:
+            log.warning(
+                "Scene %d came back at %.2fs for a %ds request; the renderer will hold the last "
+                "frame to fill the slot.",
+                scene.order, info.seconds, scene.seconds,
+            )
+
+        durable_file, durable_url = await asyncio.to_thread(
+            persist_media, generated.file, project.id, "clips"
+        )
+        await _patch_clip(
+            project.id,
+            scene_id,
+            status="ready",
+            progress=1.0,
+            actual_seconds=info.seconds,
+            file=durable_file,
+            url=durable_url,
+            poster_file=poster_file,
+            poster_url=poster_url,
+            operation=generated.operation,
+            error=None,
+            completed_at=now_iso(),
+        )
+
+        log.info("Scene %d ready (%.2fs).", scene.order, info.seconds)
+        refreshed = await require_project(project.id)
+        return next(clip for clip in refreshed.clips if clip.scene_id == scene_id)
+
+    except asyncio.CancelledError:
+        await _patch_clip(project.id, scene_id, status="idle", progress=0.0, error=None)
+        raise
+    except Exception as error:
+        await _patch_clip(
+            project.id,
+            scene_id,
+            status="failed",
+            progress=0.0,
+            error=str(error),
+            completed_at=now_iso(),
+        )
+        raise
+
+
+async def generate_all_clips(
+    project: Project, context: JobContext, *, force: bool = False
+) -> dict[str, int]:
+    """Generate every scene that is not already done, ``VEO_CONCURRENCY`` at a time.
+
+    One clip failing does not stop the others — the UI shows which one broke and
+    offers a retry, which is much better than losing eleven good generations.
+    """
+    story = selected_story(project)
+
+    by_scene = {clip.scene_id: clip for clip in project.clips}
+    pending = [
+        scene
+        for scene in story.scenes
+        if force or (by_scene.get(scene.id) is None or by_scene[scene.id].status != "ready")
+    ]
+
+    if not pending:
+        return {"ready": len(story.scenes), "failed": 0}
+
+    log.info(
+        "Generating %d clip(s) for project %s, %d at a time.",
+        len(pending), project.id, settings.veo_concurrency,
+    )
+
+    per_scene: dict[str, float] = {}
+
+    def publish() -> None:
+        done = sum(per_scene.values())
+        context.progress(
+            done / len(pending), f"{int(done)} of {len(pending)} clips generated"
+        )
+
+    async def run(scene: Scene, seed_frame: InlineAsset | None = None) -> Clip:
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+
+                async def track(fraction: float, _message: str) -> None:
+                    per_scene[scene.id] = fraction
+                    publish()
+
+                return await generate_scene_clip(
+                    project, scene.id, force=True, on_progress=track, seed_frame=seed_frame
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                if attempt >= settings.veo_max_attempts:
+                    raise
+                log.warning(
+                    "Scene %d failed on attempt %d; retrying. %s", scene.order, attempt, error
+                )
+
+    if settings.veo_chain_keyframes:
+        return await _generate_chained(project, pending, run_scene=run, publish=publish)
+
+    results = await map_with_concurrency(pending, settings.veo_concurrency, run)
+    failed = sum(1 for result in results if isinstance(result, BaseException))
+
+    return {"ready": len(pending) - failed, "failed": failed}
+
+
+async def _tail_frame(clip: Clip, work: Path) -> InlineAsset | None:
+    """The last frame of a finished clip, as a seed for the next one.
+
+    Sampled a beat before the true end: the final frame of a generated clip is
+    the one most likely to carry compression mush or the start of a fade, and
+    seeding the next shot with a smeared frame propagates the smear.
+    """
+    if not clip.file:
         return None
+    try:
+        source = resolve_in_storage(clip.file)
+        info = await probe(source)
+        at = max(0.0, (info.seconds or 0.0) - 0.15)
+        frame = work / f"tail-{clip.scene_id}.jpg"
+        await extract_poster(source, frame, at)
+        return asset_from_image(frame)
+    except Exception as error:  # noqa: BLE001 — chaining is an optimisation
+        log.warning("Could not take a tail frame from %s: %s", clip.scene_id, error)
+        return None
+
+
+async def _generate_chained(
+    project: Project,
+    pending: list[Scene],
+    *,
+    run_scene,
+    publish,
+) -> dict[str, int]:
+    """Generate clips in story order, each seeded with the previous tail frame.
+
+    Serial by necessity — clip N+1 cannot start until N has produced a frame.
+    That is the cost of the feature, and it is why it is off by default.
+
+    A failure breaks the chain but not the run: the next scene simply starts
+    from its own keyframe, which is exactly the behaviour without chaining.
+    """
+    ordered = sorted(pending, key=lambda scene: scene.order)
+    work = Path(work_dir(project.id)) / "chain"
+    ensure_dir(work)
+
+    log.info("Chaining %d clip(s) for project %s in story order.", len(ordered), project.id)
+
+    ready = 0
+    failed = 0
+    seed: InlineAsset | None = None
+
+    for scene in ordered:
+        try:
+            clip = await run_scene(scene, seed_frame=seed)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 — one bad clip must not stop the film
+            log.warning("Scene %d failed; the chain restarts from scene %d. %s",
+                        scene.order, scene.order + 1, error)
+            failed += 1
+            seed = None
+            continue
+
+        ready += 1
+        seed = await _tail_frame(clip, work)
+        publish()
+
+    return {"ready": ready, "failed": failed}
