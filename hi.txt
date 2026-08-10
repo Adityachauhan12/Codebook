@@ -1,264 +1,28 @@
-"""The accumulation step.
-
-Takes the N independently generated Veo clips and produces one file of exactly
-``plan.target_seconds``. Three phases, weighted for the progress bar roughly by
-how long they actually take.
-"""
-
-from __future__ import annotations
-
-import shutil
-from pathlib import Path
-
-from ..brand import active_brand
-from ..brand.assets import font_path
-from ..brand.supers import build_lockups, build_supers
-from ..config import settings
-from ..domain.formats import output_size_for
-from ..domain.models import Project, RenderResult, now_iso
-from ..errors import BadRequest
-from ..logging_setup import get_logger
-from ..storage import (
-    ensure_dir,
-    media_url,
-    output_dir,
-    resolve_in_storage,
-    to_storage_relative,
-    work_dir,
-)
-from .clips import selected_story
-from .ffmpeg import (
-    MixTrack,
-    Segment,
-    burn_brand,
-    concat_segments,
-    mix_and_finalise,
-    normalise_segment,
-    probe,
-)
-from .jobs import JobContext
-from .store import update_project
-
-log = get_logger("render")
-
-PHASE_NORMALISE = 0.50
-PHASE_CONCAT = 0.18
-PHASE_BRAND = 0.12
-PHASE_MIX = 0.20
+Create a **30-second vertical 9:16 Instagram Reel for IndiGo Airlines’ Winter Sale**, with a premium, energetic, modern aviation aesthetic. Use **IndiGo’s signature deep blue and bright orange brand colors**, clean contemporary typography, realistic commercial-style visuals, cinematic lighting, smooth camera movement, subtle winter atmosphere, and upbeat travel-inspired music. Showcase exciting winter travel moments, passengers boarding an IndiGo aircraft, beautiful snowy destinations, comfortable in-flight experiences, airport energy, and stunning aerial views, while maintaining a polished and aspirational brand feel. Integrate IndiGo’s recognizable aircraft livery and brand identity accurately, with **IndiGo** prominently featured. Build excitement around limited-time winter fares and spontaneous getaways, with bold on-screen messaging such as **“WINTER SALE”**, **“Fly More. Pay Less.”**, **“Special Winter Fares”**, and **“Book Now”**. Keep the design clean, high-impact, youthful, and trustworthy, with smooth transitions and visually engaging motion graphics. End with a strong IndiGo-branded call-to-action: **“Book Your Winter Escape with IndiGo”**. Ensure all text is sharp, correctly spelled, and positioned within Instagram Reel safe zones.
 
 
-async def _set_render(project_id: str, **patch) -> Project:
-    def mutate(project: Project) -> Project:
-        project.render = project.render.model_copy(update=patch)
-        return project
+The film follows a quiet, spontaneous winter getaway through the journey of a scarf: packed at dawn, held while boarding, resting on a cabin seat, then lifted into snow-bright air at arrival. The emotional arc moves from longing to anticipation to warm relief, with flying shown as the effortless bridge between distance and reunion. The rhythm is slow and precise: clean glides, held smiles, tactile inserts, and soft winter breath. It ends on the traveller and her sister sharing the scarf in fresh snow, framed against clean white and deep indigo navy-blue travel details
 
-    return await update_project(project_id, mutate)
+50mm close-up, gentle forward glide at hand height. Maya, 29, oval face, warm medium-brown skin, dark brown almond eyes, shoulder-length black hair in a low neat bun, small silver stud earrings, wearing a clean white turtleneck, deep indigo navy-blue tailored winter coat, slim dark trousers and white sneakers, lifts a deep indigo navy-blue wool scarf with pale sky blue stitching from a clean white airport bench. She slides the scarf over her forearm, picks up a deep indigo navy-blue carry-on bag with a pale sky blue tag, and turns toward a sunlit jet bridge entrance. Bright winter daylight presses through tall terminal glass, making pale reflections on the polished floor. Her thumb rubs the scarf edge once before her lips soften into a small private smile. Lighting. Generous winter daylight as key from frame-left, clean white bounce fill from frame-right. Palette. Deep indigo navy-blue, pale sky blue, clean white, soft winter grey. Continuity. Maya and her scarf are the only visible characters. Ends on the scarf trailing forward beside the carry-on as she steps toward the jet bridge.
 
+Audio: Soft airport room tone, distant rolling suitcase wheels, gentle fabric rustle as Maya lifts the scarf, one quiet breath, faint glassy terminal ambience.
 
-async def render_project(project: Project, context: JobContext) -> dict:
-    story = selected_story(project)
-    plan = project.plan
+Duration: 8 seconds.
 
-    # Order matters: the timeline is the story order, not the order clips finished.
-    by_scene = {clip.scene_id: clip for clip in project.clips}
-    ordered = [(scene, by_scene.get(scene.id)) for scene in story.scenes]
+35mm medium close-up, slow forward push-in from the jet bridge toward the aircraft door. Maya, 29, oval face, warm medium-brown skin, dark brown almond eyes, shoulder-length black hair in a low neat bun, small silver stud earrings, clean white turtleneck, deep indigo navy-blue tailored winter coat, slim dark trousers and white sneakers, approaches with a deep indigo navy-blue wool scarf with pale sky blue stitching draped over her arm. A crew member, warm medium-brown skin, neatly groomed hair, wearing a deep indigo navy-blue uniform with clean white shirt elements, stands at the doorway with relaxed shoulders, steady eye contact and hands held still at waist height. The crew member gently frees the scarf edge from the carry-on handle and returns it to Maya’s hand. Sunlit jet bridge glass creates pale sky blue reflections; a partial blue-and-white aircraft curve stays soft and abstract beyond the glass. Maya’s shoulders drop slightly and her smile opens. Lighting. Generous winter daylight as key from frame-left, clean white bounce from the corridor. Palette. Deep indigo navy-blue, pale sky blue, clean white. Continuity. Maya and one crew member are visible. Ends on the scarf resting neatly in Maya’s hand at the aircraft threshold.
 
-    missing = [scene for scene, clip in ordered if clip is None or clip.status != "ready" or not clip.file]
-    if missing:
-        listed = ", ".join(str(scene.order) for scene in missing)
-        raise BadRequest(
-            f"{len(missing)} of {len(ordered)} clips are not ready yet: scene {listed}."
-        )
+Audio: Jet bridge air tone, soft footsteps on the bridge floor, wool brushing against the carry-on handle, a gentle cabin-door chime, the crew member’s quiet welcoming murmur without distinct words.
 
-    work = Path(work_dir(project.id))
-    out = Path(output_dir(project.id))
-    ensure_dir(work)
-    ensure_dir(out)
+Duration: 8 seconds.
 
-    segments_dir = work / "segments"
-    # A re-render must not concatenate last run's leftovers.
-    shutil.rmtree(segments_dir, ignore_errors=True)
-    ensure_dir(segments_dir)
+50mm medium shot, slow push-in at eye level. Maya, 29, oval face, warm medium-brown skin, dark brown almond eyes, shoulder-length black hair in a low neat bun, small silver stud earrings, wearing a clean white turtleneck, deep indigo navy-blue tailored winter coat, slim dark trousers and white sneakers, stops at a clean glass arrival door holding a deep indigo navy-blue wool scarf with pale sky blue stitching. Anika, 31, heart-shaped face, warm medium-brown skin, dark brown eyes, chin-length wavy black hair tucked behind one ear, wearing a clean white quilted winter jacket, deep indigo navy-blue gloves, pale sky blue knitted beanie, slim dark trousers and white winter boots, waits beyond the glass. Cold glass separates them for one held beat in snow-bright daylight. Maya inhales, her fingers tighten once around the scarf, then she lifts it and steps forward as the door opens. A partial blue-and-white aircraft shape appears only as a soft reflection in the glass. Lighting. Generous winter daylight as key from frame-left, clean white bounce from snow. Palette. Deep indigo navy-blue, pale sky blue, clean white, soft winter grey. Continuity. Maya and Anika are visible. Ends on the scarf lifting between them just before the embrace closes.
 
-    width, height = output_size_for(project.brief.ratio, settings.veo_resolution)
-    started_at = now_iso()
+Audio: Quiet arrival hall tone, softened sliding glass door movement, wool rustle as the scarf lifts, Anika’s delighted inhale, light winter air through the doorway.
 
-    await _set_render(
-        project.id,
-        status="rendering",
-        progress=0.0,
-        stage="Preparing clips…",
-        started_at=started_at,
-        error=None,
-    )
+Duration: 6 seconds.
 
-    try:
-        # --- Phase 1: conform every clip to identical parameters -------------
-        normalised: list[Segment] = []
-        total = len(ordered)
+50mm medium wide, gentle pull-back from eye level. Maya, 29, oval face, warm medium-brown skin, dark brown almond eyes, shoulder-length black hair in a low neat bun, small silver stud earrings, wearing a clean white turtleneck, deep indigo navy-blue tailored winter coat, slim dark trousers and white sneakers, stands beside Anika, 31, heart-shaped face, warm medium-brown skin, dark brown eyes, chin-length wavy black hair tucked behind one ear, wearing a clean white quilted winter jacket, deep indigo navy-blue gloves, pale sky blue knitted beanie, slim dark trousers and white winter boots. They share one deep indigo navy-blue wool scarf with pale sky blue stitching around both shoulders in fresh clean snow outside an airy glass arrival area. Soft winter air moves the scarf fringe. Anika squeezes Maya’s gloved hand; Maya closes her eyes for half a beat, then smiles with quiet relief. Behind them, glass holds a soft partial blue-and-white aircraft shape as a reflection only. Lighting. Generous winter daylight as key from frame-left, clean white snow bounce from below. Palette. Deep indigo navy-blue, pale sky blue, clean white, soft winter grey. Continuity. Maya and Anika are visible. Ends on both sisters wrapped in the same scarf, framed by clean snow and a soft blue-and-white aircraft reflection behind them.
 
-        for index, (scene, clip) in enumerate(ordered):
-            assert clip is not None and clip.file
-            source = resolve_in_storage(clip.file)
-            target = segments_dir / f"seg-{index:03d}.mp4"
-            stage = f"Conforming clip {index + 1} of {total}"
+Audio: Soft winter room tone outdoors, faint breath in cold air, scarf fringe flutter, quiet snow under boots, a small shared laugh, distant airport ambience softened behind glass.
 
-            await _set_render(project.id, stage=stage, progress=(index / total) * PHASE_NORMALISE)
-
-            async def on_progress(fraction: float, _message: str, i: int = index) -> None:
-                context.progress(((i + fraction) / total) * PHASE_NORMALISE, stage)
-
-            await normalise_segment(
-                source,
-                target,
-                width=width,
-                height=height,
-                seconds=scene.seconds,
-                fps=settings.render_fps,
-                on_progress=on_progress,
-            )
-
-            normalised.append(Segment(file=target, seconds=scene.seconds))
-
-        # --- Phase 2: accumulate ---------------------------------------------
-        joined_path = work / "joined.mp4"
-        await _set_render(
-            project.id,
-            stage=f"Accumulating {len(normalised)} clips into one timeline…",
-            progress=PHASE_NORMALISE,
-        )
-
-        async def concat_progress(fraction: float, message: str) -> None:
-            context.progress(PHASE_NORMALISE + fraction * PHASE_CONCAT, message)
-
-        joined_seconds = await concat_segments(
-            normalised,
-            joined_path,
-            transition=project.transition,
-            crossfade_seconds=0.4,
-            work_dir=work,
-            on_progress=concat_progress,
-        )
-
-        # Hard cuts land on the plan exactly; a crossfade eats (n-1) x fade seconds.
-        final_seconds = round(min(plan.target_seconds, joined_seconds), 3)
-        if final_seconds < plan.target_seconds - 0.05:
-            log.info(
-                "Crossfade overlap shortened the film to %.2fs against a %ds target.",
-                final_seconds, plan.target_seconds,
-            )
-
-        # --- Phase 2b: burn supers and the brand mark ------------------------
-        # Veo returns a clean plate by policy; everything a viewer reads is
-        # drawn here, from a font file, so it is spelled the way it was written.
-        supers = build_supers(
-            project.supers, project.end_card, seconds=final_seconds, height=height
-        )
-        lockups = build_lockups(project.end_card, seconds=final_seconds, width=width)
-
-        if supers or lockups:
-            branded_path = work / "branded.mp4"
-            await _set_render(
-                project.id,
-                stage=f"Compositing {len(supers)} super(s) and the brand mark…",
-                progress=PHASE_NORMALISE + PHASE_CONCAT,
-            )
-
-            async def brand_progress(fraction: float, message: str) -> None:
-                context.progress(
-                    PHASE_NORMALISE + PHASE_CONCAT + fraction * PHASE_BRAND, message
-                )
-
-            await burn_brand(
-                joined_path,
-                branded_path,
-                seconds=final_seconds,
-                supers=supers,
-                lockups=lockups,
-                font=font_path(),
-                work_dir=work / "supers",
-                on_progress=brand_progress,
-            )
-            mix_source = branded_path
-        else:
-            # Phase 2b is the only thing that puts copy or the brand mark on the
-            # picture. Skipping it is legitimate for a brandless film, but it is
-            # also how a film that was supposed to be branded ships plain — the
-            # compositor never runs and nothing reports a failure, because there
-            # was none. Name the reason instead.
-            log.warning(
-                "Nothing to composite: %d super(s), %d lockup(s). The film will have "
-                "no burnt-in copy and no brand mark. end_card.enabled=%s mark=%s brand=%s.",
-                len(supers), len(lockups),
-                project.end_card.enabled, project.end_card.mark, active_brand(),
-            )
-            mix_source = joined_path
-
-        # --- Phase 3: mix and trim -------------------------------------------
-        tracks = [
-            MixTrack(
-                file=resolve_in_storage(track.file),
-                gain=track.gain,
-                # Music loops to cover the runtime; voiceover plays once from the top.
-                loop=track.kind == "music",
-                fade_in=1.0 if track.kind == "music" else 0.0,
-                fade_out=2.0 if track.kind == "music" else 0.0,
-            )
-            for track in project.audio
-            if track.selected and track.status == "ready" and track.file
-        ]
-
-        final_path = out / "final.mp4"
-        done_before_mix = PHASE_NORMALISE + PHASE_CONCAT + PHASE_BRAND
-        await _set_render(
-            project.id,
-            stage="Mixing audio…" if tracks else "Finishing…",
-            progress=done_before_mix,
-        )
-
-        async def mix_progress(fraction: float, message: str) -> None:
-            context.progress(done_before_mix + fraction * PHASE_MIX, message)
-
-        await mix_and_finalise(
-            mix_source,
-            final_path,
-            seconds=final_seconds,
-            tracks=tracks,
-            fade_out_seconds=0.6,
-            on_progress=mix_progress,
-        )
-
-        info = await probe(final_path)
-        size = final_path.stat().st_size
-        relative = to_storage_relative(final_path)
-
-        result = RenderResult(
-            status="ready",
-            progress=1.0,
-            stage="Done.",
-            file=relative,
-            url=media_url(relative),
-            seconds=info.seconds,
-            bytes=size,
-            startedAt=started_at,
-            completedAt=now_iso(),
-        )
-
-        await _set_render(project.id, **result.model_dump())
-        log.info(
-            "Rendered project %s: %.2fs, %.1fMB from %d clips.",
-            project.id, info.seconds, size / 1_048_576, total,
-        )
-
-        # The conformed intermediates are large and reproducible. Keep the
-        # joined file — a re-mix with different music skips phases 1 and 2 —
-        # and drop the rest.
-        shutil.rmtree(segments_dir, ignore_errors=True)
-
-        return result.model_dump(by_alias=True, mode="json")
-
-    except Exception as error:
-        await _set_render(
-            project.id, status="failed", stage=None, error=str(error), completed_at=now_iso()
-        )
-        raise
+Duration: 8 seconds.
