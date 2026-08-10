@@ -1,1 +1,62 @@
-A warm, cinematic 30-second ad for IndiGo Airlines' Diwali sale. Open on a young woman in a cozy apartment at dusk, scrolling her phone, a single diya flickering beside her. Her face lights up as she sees a fare drop notification. Smash cut to a montage synced to upbeat festive percussion: an IndiGo A320neo (signature deep-blue tail with dotted livery) taxiing on a runway bathed in golden-hour light; a family embracing at arrivals under strings of marigold and fairy lights; hands lighting diyas on a rangoli-covered doorstep; sparklers held by laughing kids. Cut back to the woman now stepping off the jet bridge, greeted by her grandmother in a warm hug. Confetti of soft light and floating diya glows. End on a clean product frame: IndiGo's blue-and-white brand card with text "This Diwali, come home. Fares from ₹1,499"* and the IndiGo logo. Warm color grade, shallow depth of field, emotional but energetic pacing, subtle festive bokeh throughout. Aspect ratio 9:16 for social, no on-screen dialogue, music-and-visuals driven.
+(venv) C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server>cd C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server && venv\Scripts\activate && uvicorn app.main:app --reload --port 8787
+INFO:     Will watch for changes in these directories: ['C:\\Users\\aditya.chauhan2\\Downloads\\marketing-autonomous-video\\server']
+INFO:     Uvicorn running on http://127.0.0.1:8787 (Press CTRL+C to quit)
+INFO:     Started reloader process [17508] using WatchFiles
+INFO:     Started server process [20088]
+INFO:     Waiting for application startup.
+2026-08-10T10:12:43 INFO  [video.main] Storage at C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\storage
+2026-08-10T10:12:43 INFO  [video.main]   storyboard  ready           Azure OpenAI gpt-5.5 (deployment gpt-5.5)
+2026-08-10T10:12:43 INFO  [video.main]   clips       ready           veo-3.1-generate-preview, max 8s per generation
+2026-08-10T10:12:43 INFO  [video.main]   keyframes   not configured  Set VEO_USE_KEYFRAMES=true to lock continuity with generated first frames.
+2026-08-10T10:12:43 INFO  [video.main]   voiceover   not configured  Set AZURE_OPENAI_TTS_DEPLOYMENT_NAME for voiceover. Veo still generates in-scene dialogue without it.
+2026-08-10T10:12:43 INFO  [video.main]   music       not configured  No music generator configured — upload a track instead, or set MUSIC_PROVIDER.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:57151 - "GET /api/video/projects/vid_19fdb9b7ccc12948022/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57150 - "GET /api/video/projects/vid_19fdb9b7ccc12948022 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51301 - "GET /api/video/projects/vid_19fdb9b7ccc12948022 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57147 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57543 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59754 - "GET /api/video/projects/vid_19fdb9b7ccc12948022 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59757 - "GET /api/video/projects/vid_19fdb9b7ccc12948022/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59759 - "GET /api/video/projects/vid_19fdb9b7ccc12948022 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59764 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62061 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59755 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51135 - "GET /api/health HTTP/1.1" 200 OK
+2026-08-10T10:19:58 INFO  [video.store] Created project vid_19fea018ce3d360483e (30s, 4 segments)
+INFO:     127.0.0.1:53148 - "POST /api/video/projects HTTP/1.1" 201 Created
+INFO:     127.0.0.1:57647 - "GET /api/video/projects/vid_19fea018ce3d360483e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57648 - "GET /api/video/projects/vid_19fea018ce3d360483e/events HTTP/1.1" 200 OK
+2026-08-10T10:20:22 INFO  [video.llm] chat ok in 16.3s (2670 tokens, deployment gpt-5.5)
+2026-08-10T10:20:22 INFO  [video.brief] Brief split: intent 2005 chars (from 3111), 2 super(s), end card on, 2 unsupported.
+2026-08-10T10:21:39 INFO  [video.llm] treatments ok in 63.5s (25758 tokens, deployment gpt-5.5)
+2026-08-10T10:21:39 INFO  [video.jobs] Job job_19fea018d3e997fc4d2 (storyboard) succeeded.
+INFO:     127.0.0.1:60133 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58119 - "GET /api/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+2026-08-10T10:25:00 INFO  [video.store] Created project vid_19fea06297d384cf3a8 (30s, 4 segments)
+INFO:     127.0.0.1:53358 - "POST /api/video/projects HTTP/1.1" 201 Created
+INFO:     127.0.0.1:55902 - "GET /api/video/projects/vid_19fea06297d384cf3a8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55904 - "GET /api/video/projects/vid_19fea06297d384cf3a8/events HTTP/1.1" 200 OK
+2026-08-10T10:25:19 INFO  [video.llm] chat ok in 12.2s (1835 tokens, deployment gpt-5.5)
+2026-08-10T10:25:19 INFO  [video.brief] Brief split: intent 769 chars (from 1035), 0 super(s), end card on, 0 unsupported.
+2026-08-10T10:26:32 INFO  [video.llm] treatments ok in 66.6s (25892 tokens, deployment gpt-5.5)
+2026-08-10T10:26:33 INFO  [video.jobs] Job job_19fea062a1865fb7f79 (storyboard) succeeded.
+INFO:     127.0.0.1:65153 - "POST /api/video/projects/vid_19fea06297d384cf3a8/stories/story_19fea07935823cf65e1/scenes HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:65152 - "POST /api/video/projects/vid_19fea06297d384cf3a8/select-story HTTP/1.1" 200 OK
+2026-08-10T10:29:06 INFO  [video.llm] scenes ok in 52.2s (27005 tokens, deployment gpt-5.5)
+2026-08-10T10:29:06 INFO  [video.storyboard] Story "The waiting diya": audit found 4 blocking issue(s), running repair pass 1/2
+2026-08-10T10:29:42 INFO  [video.llm] scenes-repair-1 ok in 29.6s (23931 tokens, deployment gpt-5.5)
+2026-08-10T10:29:42 INFO  [video.storyboard] Story "The waiting diya": audit found 1 blocking issue(s), running repair pass 2/2
+2026-08-10T10:30:24 INFO  [video.llm] scenes-repair-2 ok in 38.2s (24313 tokens, deployment gpt-5.5)
+2026-08-10T10:30:24 WARNING [video.storyboard] Story "The waiting diya" finished with 1 unresolved issue(s), score 92.
+2026-08-10T10:30:24 ERROR [video.jobs] Job job_19fea08ff946b8efaef (storyboard) failed: "The waiting diya" still fails 1 blocking check(s) after 2 repair pass(es), so it has not been sent to Veo. The locked palette contains prohibited colours: violet. Red and purple palettes are banned.
+Traceback (most recent call last):
+  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\jobs.py", line 66, in runner
+    result = await work(context)
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\routes\video.py", line 346, in work
+    written, repair_passes = await generate_scenes(
+                             ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\storyboard.py", line 734, in generate_scenes
+    raise BadRequest(
+app.errors.BadRequest: "The waiting diya" still fails 1 blocking check(s) after 2 repair pass(es), so it has not been sent to Veo. The locked palette contains prohibited colours: violet. Red and purple palettes are banned.
