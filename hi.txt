@@ -1,355 +1,313 @@
-"""Veo, via the Gemini API.
+"""Decompose a raw brief before anything else reads it.
 
-Shape of the world:
+The pipeline used to treat the brief as one opaque string and hand it to the
+scene writer whole. That is the root of several unrelated-looking failures:
 
-  - One generation returns one clip of 4, 6 or 8 seconds. That is the ceiling,
-    and it is the reason the whole segment plan exists.
-  - Generation is a long-running operation: POST returns an operation name, you
-    poll it until ``done``, then download the result from a URI that still needs
-    the API key on the request.
-  - ``extend`` continues a Veo-produced video by ~7s, up to 20 times. Not used
-    by the main pipeline — see ``extend_clip`` for why.
+  * "On-Screen Text: A new horizon awaits." reached Veo as an instruction to
+    render type, and came back as "A new horizon awasts."
+  * "4K HDR" was silently ignored, because nothing in the pipeline is allowed
+    to say "no".
+  * Music direction competed for the scene writer's attention with camera
+    direction, and neither the composer nor Veo ever saw it.
+
+Splitting the brief is what lets each of those go to the right place — or be
+refused out loud. Only ``intent`` is ever allowed into a prompt.
 """
 
 from __future__ import annotations
 
-import asyncio
-import base64
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Awaitable, Callable
+import re
 
-import httpx
-
-from ..config import settings
-from ..domain.models import VeoAspectRatio
-from ..errors import Unavailable, UpstreamError
+from ..brand import brand_system_block
+from ..domain.models import BriefAnalysis, EndCard, SuperSpec
 from ..logging_setup import get_logger
-from ..storage import ensure_dir
-
-log = get_logger("veo")
-
-ProgressFn = Callable[[float, str], Awaitable[None] | None]
-
-
-@dataclass(slots=True)
-class InlineAsset:
-    mime_type: str
-    #: base64, without a ``data:`` prefix.
-    data: str
-
-    def to_payload(self) -> dict[str, str]:
-        return {"mimeType": self.mime_type, "data": self.data}
-
-
-@dataclass(slots=True)
-class GeneratedClip:
-    file: Path
-    bytes: int
-    operation: str
-    model: str
-
-
-def _require_key() -> str:
-    key = settings.google_key
-    if not key:
-        raise Unavailable(
-            "GEMINI_IMAGE_API_KEY is not set. Add it to server/.env "
-            "(see server/.env.example) and restart the server."
-        )
-    return key
-
-
-def _api_url(path: str) -> str:
-    return f"{settings.gemini_api_base.rstrip('/')}/{path.lstrip('/')}"
-
-
-def normalise_seconds(seconds: int) -> int:
-    """Veo accepts 4, 6 or 8. Anything else snaps down to a legal value."""
-    allowed = settings.allowed_clip_seconds
-    if seconds in allowed:
-        return seconds
-    below = [value for value in allowed if value <= seconds]
-    return max(below) if below else min(allowed)
-
-
-async def _report(callback: ProgressFn | None, fraction: float, message: str) -> None:
-    if callback is None:
-        return
-    result = callback(fraction, message)
-    if asyncio.iscoroutine(result):
-        await result
-
-
-# ---------------------------------------------------------------------------
-# Start
-# ---------------------------------------------------------------------------
-
-
-async def start_generation(
-    *,
-    prompt: str,
-    seconds: int,
-    aspect_ratio: VeoAspectRatio,
-    negative_prompt: str | None = None,
-    model: str | None = None,
-    resolution: str | None = None,
-    first_frame: InlineAsset | None = None,
-    last_frame: InlineAsset | None = None,
-    reference_images: list[InlineAsset] | None = None,
-    video: InlineAsset | None = None,
-) -> tuple[str, str]:
-    """Submit a generation. Returns ``(operation_name, model)``."""
-    key = _require_key()
-    target_model = model or settings.veo_model
-    duration = normalise_seconds(seconds)
-
-    instance: dict[str, Any] = {"prompt": prompt}
-    if first_frame:
-        instance["image"] = {"inlineData": first_frame.to_payload()}
-    if last_frame:
-        instance["lastFrame"] = {"inlineData": last_frame.to_payload()}
-    if video:
-        instance["video"] = {"inlineData": video.to_payload()}
-    if reference_images:
-        instance["referenceImages"] = [
-            {"image": {"inlineData": image.to_payload()}, "referenceType": "asset"}
-            for image in reference_images
-        ]
-
-    # Veo only supports 1080p for 8-second clips; shorter durations require 720p.
-    effective_resolution = resolution or settings.veo_resolution
-    if duration < 8 and effective_resolution == "1080p":
-        effective_resolution = "720p"
-
-    parameters: dict[str, Any] = {
-        "aspectRatio": aspect_ratio,
-        "resolution": effective_resolution,
-        "durationSeconds": duration,
-        "personGeneration": settings.veo_person_generation,
-    }
-    if negative_prompt and negative_prompt.strip():
-        parameters["negativePrompt"] = negative_prompt.strip()
-
-    async def _submit() -> httpx.Response:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            return await client.post(
-                _api_url(f"models/{target_model}:predictLongRunning"),
-                headers={"x-goog-api-key": key, "content-type": "application/json"},
-                json={"instances": [instance], "parameters": parameters},
-            )
-
-    response = await _submit()
-
-    # `referenceImages` is a newer Veo capability and not every model or API
-    # version accepts it. Dropping the brand reference costs one less accurate
-    # frame; failing the request costs the whole film. Retry once without.
-    if response.status_code >= 400 and "referenceImages" in instance:
-        log.warning(
-            "Veo rejected the request (%s) with %d reference image(s) attached; retrying "
-            "without them. The aircraft may not read as IndiGo in this clip. %s",
-            response.status_code,
-            len(instance["referenceImages"]),
-            response.text[:300],
-        )
-        instance.pop("referenceImages")
-        response = await _submit()
-
-    if response.status_code >= 400:
-        log.error("Veo %s error body: %s", response.status_code, response.text[:1200])
-        raise UpstreamError(
-            f"Veo rejected the generation request ({response.status_code}).",
-            details=response.text[:800],
-        )
-
-    operation = response.json()
-    name = operation.get("name")
-    if not name:
-        raise UpstreamError("Veo accepted the request but returned no operation name.", details=operation)
-
-    log.info("Started %s generation (%ds, %s): %s", target_model, duration, aspect_ratio, name)
-    return name, target_model
-
-
-# ---------------------------------------------------------------------------
-# Poll
-# ---------------------------------------------------------------------------
-
-
-async def poll_operation(name: str, on_progress: ProgressFn | None = None) -> dict[str, Any]:
-    key = _require_key()
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + settings.veo_poll_timeout_seconds
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        while True:
-            if loop.time() > deadline:
-                raise UpstreamError(
-                    f"Veo did not finish within {int(settings.veo_poll_timeout_seconds)}s. "
-                    f"Operation {name} is still running — raise VEO_POLL_TIMEOUT_SECONDS if this "
-                    "is normal for your quota."
-                )
-
-            await asyncio.sleep(settings.veo_poll_interval_seconds)
-
-            response = await client.get(_api_url(name), headers={"x-goog-api-key": key})
-
-            if response.status_code >= 400:
-                # A transient 5xx while polling should not kill a generation
-                # that is probably fine; only 4xx is fatal.
-                if response.status_code >= 500:
-                    log.warning("Polling %s returned %s; retrying.", name, response.status_code)
-                    continue
-                raise UpstreamError(
-                    f"Veo polling failed ({response.status_code}).", details=response.text[:600]
-                )
-
-            operation = response.json()
-
-            if operation.get("error"):
-                error = operation["error"]
-                raise UpstreamError(
-                    f"Veo generation failed: {error.get('message', 'unknown error')}", details=error
-                )
-
-            metadata = operation.get("metadata") or {}
-            percent = metadata.get("progressPercent")
-            if isinstance(percent, (int, float)):
-                await _report(on_progress, min(0.95, percent / 100), f"Rendering… {round(percent)}%")
-            else:
-                state = metadata.get("state")
-                await _report(
-                    on_progress, 0.5, f"Veo {state.lower()}…" if state else "Rendering…"
-                )
-
-            if operation.get("done"):
-                return operation
-
-
-def _extract_video_uri(operation: dict[str, Any]) -> str:
-    result = (operation.get("response") or {}).get("generateVideoResponse") or {}
-    samples = result.get("generatedSamples") or []
-    uri = (samples[0].get("video") or {}).get("uri") if samples else None
-
-    if not uri:
-        filtered = result.get("raiMediaFilteredCount") or 0
-        if filtered:
-            reasons = "; ".join(result.get("raiMediaFilteredReasons") or []) or "no reason given"
-            raise UpstreamError(
-                f"Veo filtered the generation before it produced a clip ({reasons}). Rewrite the "
-                "scene prompt — usually it names a real person, a brand, or content the safety "
-                "filter blocks.",
-                details={"filtered": filtered, "reasons": reasons},
-            )
-        raise UpstreamError("Veo finished but returned no video.", details=operation.get("response"))
-
-    return uri
-
-
-# ---------------------------------------------------------------------------
-# Download
-# ---------------------------------------------------------------------------
-
-
-async def download_video(uri: str, destination: Path) -> int:
-    key = _require_key()
-    ensure_dir(destination.parent)
-
-    # The URI is on a Google host and still requires the API key.
-    async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
-        response = await client.get(uri, headers={"x-goog-api-key": key})
-
-    if response.status_code >= 400:
-        raise UpstreamError(
-            f"Downloading the generated clip failed ({response.status_code}).",
-            details=response.text[:400],
-        )
-
-    payload = response.content
-    if not payload:
-        raise UpstreamError("The generated clip downloaded as an empty file.")
-
-    destination.write_bytes(payload)
-    return len(payload)
-
-
-# ---------------------------------------------------------------------------
-# The whole round trip
-# ---------------------------------------------------------------------------
-
-
-async def generate_clip(
-    destination: Path,
-    *,
-    prompt: str,
-    seconds: int,
-    aspect_ratio: VeoAspectRatio,
-    negative_prompt: str | None = None,
-    model: str | None = None,
-    first_frame: InlineAsset | None = None,
-    reference_images: list[InlineAsset] | None = None,
-    on_progress: ProgressFn | None = None,
-) -> GeneratedClip:
-    await _report(on_progress, 0.05, "Submitting to Veo…")
-
-    operation, used_model = await start_generation(
-        prompt=prompt,
-        seconds=seconds,
-        aspect_ratio=aspect_ratio,
-        negative_prompt=negative_prompt,
-        model=model,
-        first_frame=first_frame,
-        reference_images=reference_images,
-    )
-
-    async def relay(fraction: float, message: str) -> None:
-        await _report(on_progress, 0.05 + fraction * 0.8, message)
-
-    finished = await poll_operation(operation, relay)
-
-    await _report(on_progress, 0.9, "Downloading clip…")
-    size = await download_video(_extract_video_uri(finished), destination)
-
-    await _report(on_progress, 1.0, "Clip ready.")
-    log.info("Downloaded %.1fMB to %s", size / 1_048_576, destination.name)
-
-    return GeneratedClip(file=destination, bytes=size, operation=operation, model=used_model)
-
-
-# ---------------------------------------------------------------------------
-# Extend
-# ---------------------------------------------------------------------------
-
-
-async def extend_clip(
-    source_mp4: Path,
-    prompt: str,
-    destination: Path,
-    *,
-    aspect_ratio: VeoAspectRatio = "16:9",
-    model: str | None = None,
-) -> GeneratedClip:
-    """Continue a Veo-produced clip by roughly ``VEO_EXTEND_SECONDS``.
-
-    Not used by the main pipeline: extension carries the previous shot's motion
-    forward, which is what you want for one continuous take and precisely what
-    you do not want for a cut sequence with distinct framings per beat. It also
-    serialises — twelve extensions is twelve round trips end to end, where
-    twelve independent segments run three at a time.
-
-    Kept because it is the right tool for a future "one continuous take" mode,
-    and because it is the only way past 8 seconds without a cut.
+from .llm import ChatMessage, chat_json
+
+log = get_logger("brief")
+
+#: Headings a human writes above the copy they want burnt in. Matching these is
+#: the deterministic fallback for when no model is configured — crude, but it
+#: catches the common shape and is better than passing copy through to Veo.
+_COPY_HEADING = re.compile(
+    r"^\s*(?:on[- ]screen\s+text|on[- ]screen\s+copy|supers?|captions?|titles?|"
+    r"text\s+overlay|end\s?card|final\s+frame|copy)\s*[:\-]?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+#: A brief specifies an end card with a *heading* — a line that opens a section,
+#: the same shape as "On-Screen Text". Anchoring to that rather than to the
+#: words anywhere in the text is what separates a brief asking for a closing
+#: frame from a brief talking about one.
+#:
+#: Keyword matching fails here, and fails on the one brief that matters:
+#: `generic_test_2.txt` says "no end card" *and* "if the brief parser invents
+#: supers or an end card here". Negation handling catches the first and not the
+#: second, so the loudest warning in this module would fire on the brief written
+#: to prove the parser is not pattern-matching. Structure has no such problem.
+#:
+#: Used only to catch the split disagreeing with an obvious signal — never to
+#: build an end card, because inventing one the brief did not ask for is the
+#: failure in the other direction.
+_END_CARD_HEADING = re.compile(
+    r"^[ \t]*(?:end\s?card|final\s+frame|closing\s+frame|logo\s+(?:reveal|lockup))"
+    r"[ \t]*(?::.*)?$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+#: The heading form above is how a *structured* brief specifies an end card. A
+#: prose brief asks in a sentence instead — "End with a strong IndiGo-branded
+#: call-to-action", "close on the logo". The heading pattern is blind to those,
+#: which reopens the silent-no-mark failure through a different door: the split
+#: returns enabled=false, nothing warns, and the film ships without the mark.
+#:
+#: Deliberately narrow — a closing verb AND a brand/CTA object inside one clause.
+#: "Ends on the scarf trailing forward" has the verb and no object; "the logo on
+#: her bag" has the object and no closing verb. Neither fires.
+_END_CARD_PROSE = re.compile(
+    r"\b(?:end|ends|ending|close|closes|closing|finish|finishes|final|last)\b"
+    r"[^.\n]{0,80}?"
+    r"\b(?:call[- ]to[- ]action|cta|logo|lockup|wordmark|end\s?card|final\s+frame|"
+    r"brand(?:ed|ing)?\s+(?:frame|card|sign[- ]?off|moment))\b",
+    re.IGNORECASE,
+)
+
+#: A brief that rules an end card out names the same words in order to forbid
+#: them. Suppressing the warning is the safe direction: this signal only ever
+#: makes a warning louder, and firing it on the brief that said "no end card" is
+#: how a check trains people to ignore it.
+_NO_END_CARD = re.compile(
+    r"\b(?:no|without|avoid|skip|omit|never|exclude)\b[^.\n]{0,40}?"
+    r"\b(?:end\s?card|logo|lockup|wordmark|call[- ]to[- ]action|cta)\b",
+    re.IGNORECASE,
+)
+
+
+def _asks_for_end_card(raw: str) -> bool:
+    """True when the brief asks for a closing brand frame, as heading or prose."""
+    if _NO_END_CARD.search(raw):
+        return False
+    return bool(_END_CARD_HEADING.search(raw) or _END_CARD_PROSE.search(raw))
+
+
+#: Asks that read as achievable but are not, on this pipeline. Kept short and
+#: specific: a false positive here tells the user "no" about something we could
+#: in fact do, which is worse than staying quiet.
+_UNSUPPORTED = (
+    (re.compile(r"\b(?:4k|uhd|2160p|8k)\b", re.IGNORECASE),
+     "4K/8K delivery — Veo renders at 1080p maximum. The film will be 1080p."),
+    (re.compile(r"\bhdr\b|\bdolby\s+vision\b", re.IGNORECASE),
+     "HDR — Veo output is SDR. The grade will be delivered in SDR."),
+    (re.compile(r"\b(?:60|120)\s?fps\b", re.IGNORECASE),
+     "High frame rate — clips are conformed to the project frame rate."),
+)
+
+
+_SYSTEM = """\
+You split an advertising brief into parts that go to different systems. You do \
+not write, improve, critique or expand the brief. You sort it.
+
+Return JSON with exactly these keys:
+
+  intent      string. The creative brief: story, subject, mood, setting, casting, \
+camera and grade direction. Everything a director needs and nothing else. \
+Remove on-screen copy, duration/resolution/aspect specification, music \
+direction, and prohibition lists — those are captured separately below. Keep \
+the user's own wording wherever you can; you are deleting, not rewriting.
+
+  supers      array. Every piece of text the VIEWER READS ON SCREEN. Each item: \
+{"text": string, "start": number, "end": number, "position": one of \
+"upper-left"|"upper-centre"|"lower-left"|"lower-centre"|"centre"}. If the brief \
+gives timings, use them. If it gives a range like "0-10 sec", use it. If it \
+gives no timing, distribute the lines evenly across the runtime. Copy the text \
+EXACTLY as written, including capitalisation. Do not invent copy that is not \
+in the brief. Empty array if the brief asks for no on-screen text.
+POSITION: unless the brief actually specifies placement, use "upper-left". \
+Narrative supers sit in a corner so they do not cover the face or the action; \
+dead-centre type over a subject is what an amateur edit looks like. Reserve \
+"centre" for the end card, which is handled separately below.
+
+  endCard     object. The closing brand frame, if the brief describes one: \
+{"enabled": bool, "headline": string|null, "subline": string|null, \
+"mark": "wordmark"|"icon"|"none", "seconds": number}. A "final frame" or "logo \
+reveal" instruction belongs here, not in supers. enabled=false if absent.
+
+  avoid       array of strings. Things the brief says must NOT appear. Split a \
+comma-separated negative prompt into individual items.
+
+  music       string or null. Music and sound-design direction, verbatim.
+
+Rules:
+- Text a CHARACTER reads (a sign, a boarding pass, a phone screen) is NOT a \
+super. It stays in intent. Supers are only what is composited over the picture.
+- Never put copy in both intent and supers.
+- If the brief contains no on-screen text at all, supers is [] and endCard.enabled \
+is false. Do not helpfully invent an end card.
+"""
+
+
+def _fallback(raw: str) -> BriefAnalysis:
+    """Split the brief without a model.
+
+    Cuts at the first copy heading and treats everything above it as intent.
+    Crude, and it does not recover timings — but it stops copy reaching Veo,
+    which is the failure that matters.
     """
-    encoded = base64.b64encode(source_mp4.read_bytes()).decode("ascii")
+    match = _COPY_HEADING.search(raw)
+    intent = raw[: match.start()].strip() if match else raw.strip()
+    if match:
+        log.info("No model configured; split the brief at %r.", match.group(0).strip())
+    # This path recovers no timings, so it yields no supers and no end card. It
+    # keeps copy away from Veo, which is the failure that matters — but the film
+    # then renders with no burnt-in copy and no brand mark, and that is worth
+    # saying rather than discovering in the deliverable.
+    log.warning(
+        "Falling back to a heading split: this film will have NO supers and NO "
+        "end card. Check that Azure is configured and reachable."
+    )
+    # The cut only protects a brief that *has* a heading. A prose brief has none,
+    # so the whole thing — quoted campaign copy included — becomes intent and
+    # reaches the scene writer. That copy then gets generated into the picture
+    # AND composited over it, if the split is later rerun successfully.
+    if not match:
+        log.warning(
+            "No copy heading found, so the entire brief became intent. Any quoted "
+            "on-screen copy in it will reach the scene writer. Give the brief an "
+            "'On-screen text:' heading, or fix Azure so the split can run."
+        )
+    return BriefAnalysis(intent=intent or raw.strip(), unsupported=_unsupported_in(raw))
 
-    operation, used_model = await start_generation(
-        prompt=prompt,
-        seconds=settings.veo_max_clip_seconds,
-        aspect_ratio=aspect_ratio,
-        model=model,
-        video=InlineAsset(mime_type="video/mp4", data=encoded),
+
+def _unsupported_in(raw: str) -> list[str]:
+    return [note for pattern, note in _UNSUPPORTED if pattern.search(raw)]
+
+
+_POSITIONS = frozenset(
+    {"upper-left", "upper-centre", "lower-left", "lower-centre", "centre"}
+)
+
+
+def _coerce_supers(items: object, seconds: int) -> list[SuperSpec]:
+    """Build ``SuperSpec``s from model output, dropping anything malformed.
+
+    A super with a broken time window is worse than a missing one: it either
+    never appears or sits on screen for the whole film.
+    """
+    if not isinstance(items, list):
+        return []
+
+    supers: list[SuperSpec] = []
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        text = str(entry.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            start = max(0.0, float(entry.get("start", 0)))
+            end = min(float(seconds), float(entry.get("end", 0)))
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        position = entry.get("position")
+        supers.append(
+            SuperSpec(
+                text=text,
+                start=start,
+                end=end,
+                position=position if position in _POSITIONS else "upper-left",  # type: ignore[arg-type]
+            )
+        )
+    return supers
+
+
+#: The model is asked for `endCard`, but a JSON-mode model asked for one
+#: camelCase key among four lowercase ones returns `end_card` often enough to
+#: matter. Reading only the documented spelling turns that into a silently
+#: disabled end card — no lockup, no closing copy, no error. The key is the
+#: on/off switch for the entire brand mark, so it accepts every spelling.
+_END_CARD_KEYS = ("endCard", "end_card", "endcard", "end card")
+
+
+def _end_card_payload(payload: dict) -> object:
+    for key in _END_CARD_KEYS:
+        if key in payload:
+            return payload[key]
+    return None
+
+
+def _coerce_end_card(value: object) -> EndCard:
+    if not isinstance(value, dict) or not value.get("enabled"):
+        return EndCard(enabled=False)
+    mark = value.get("mark")
+    return EndCard(
+        enabled=True,
+        headline=(str(value["headline"]).strip() if value.get("headline") else None),
+        subline=(str(value["subline"]).strip() if value.get("subline") else None),
+        mark=mark if mark in {"wordmark", "icon", "none"} else "wordmark",
+        seconds=float(value.get("seconds") or 4.0),
     )
 
-    finished = await poll_operation(operation)
-    size = await download_video(_extract_video_uri(finished), destination)
-    return GeneratedClip(file=destination, bytes=size, operation=operation, model=used_model)
+
+async def analyse_brief(raw: str, *, seconds: int) -> BriefAnalysis:
+    """Split a raw brief into intent, copy, constraints and refusals.
+
+    Falls back to a deterministic split when no model is configured, so the
+    pipeline still boots and still keeps copy away from Veo.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return BriefAnalysis(intent="")
+
+    messages: list[ChatMessage] = [
+        {"role": "system", "content": _SYSTEM + brand_system_block(safety_only=True)},
+        {
+            "role": "user",
+            "content": f"Runtime: {seconds} seconds.\n\n--- BRIEF ---\n{raw}\n--- END ---",
+        },
+    ]
+
+    try:
+        payload = await chat_json(messages)
+    except Exception as error:  # noqa: BLE001 - any upstream failure degrades the same way
+        log.warning("Brief analysis failed, falling back to a heading split. %s", error)
+        return _fallback(raw)
+
+    if not isinstance(payload, dict):
+        return _fallback(raw)
+
+    intent = str(payload.get("intent") or "").strip()
+    if not intent:
+        log.warning("Brief analysis returned no intent; keeping the raw brief.")
+        intent = raw
+
+    avoid = [str(item).strip() for item in payload.get("avoid") or [] if str(item).strip()]
+    music = payload.get("music")
+
+    analysis = BriefAnalysis(
+        intent=intent,
+        supers=_coerce_supers(payload.get("supers"), seconds),
+        end_card=_coerce_end_card(_end_card_payload(payload)),
+        avoid=avoid,
+        unsupported=_unsupported_in(raw),
+        music=str(music).strip() if music else None,
+    )
+
+    log.info(
+        "Brief split: intent %d chars (from %d), %d super(s), end card %s, %d unsupported.",
+        len(analysis.intent), len(raw), len(analysis.supers),
+        "on" if analysis.end_card.enabled else "off", len(analysis.unsupported),
+    )
+
+    # A disabled end card is indistinguishable from a brief that asked for none,
+    # and it silently removes the brand mark from the film — the render just
+    # skips compositing and nothing anywhere says so. When the brief plainly
+    # asks for one and the split disagrees, say it out loud.
+    if not analysis.end_card.enabled and _asks_for_end_card(raw):
+        log.warning(
+            "The brief asks for an end card but the split returned enabled=false — "
+            "the film will render with NO brand mark. Model returned keys: %s.",
+            ", ".join(sorted(payload)) or "(none)",
+        )
+    return analysis
