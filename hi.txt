@@ -1,148 +1,153 @@
-"""Brand guardrails.
+"""Brand master files and the exact colours sampled from them.
 
-Brand is a separate axis from craft. ``app/skills`` teaches the model how to
-direct a film; this package tells it whose film it is, and refuses the result
-when it is off-brand.
+The composite-in-post design in ``policy.py`` only works if there is a master
+file to composite. This module is that file's address, plus the colour values
+taken from the artwork itself rather than from a brand deck nobody can find.
 
-Everything routes through ``BRAND`` in the environment, so the pipeline is not
-hardwired to one client — set ``BRAND=none`` and every hook below turns into a
-no-op, leaving the craft layer untouched.
+Marks are straight (unpremultiplied) RGBA PNGs, trimmed to their alpha bounding
+box, so ``overlay`` in ffmpeg places them without a halo and without guesswork
+about padding.
 """
 
 from __future__ import annotations
 
-from ..config import get_settings
-from ..domain.models import AuditIssue, StoryOption
-from .checks import brand_issues as _indigo_issues
-from .checks import normalise_story as _normalise_indigo_story
-from .policy import (
-    INDIGO_BEAT_LABELS,
-    INDIGO_BRAND_POLICY,
-    INDIGO_BRAND_SURFACE,
-    INDIGO_CONTINUITY_REQUIREMENTS,
-    INDIGO_NEGATIVE_PROMPT,
-    INDIGO_VIDEO_BRAND_POLICY,
-    INDIGO_VIDEO_SAFETY_POLICY,
-)
+import sys
+from pathlib import Path
+
+from ..config import settings
 
 __all__ = [
-    "active_brand",
-    "brand_name",
-    "brand_system_block",
-    "brand_brief_block",
-    "brand_negative_prompt",
-    "brand_beat_label",
-    "brand_issues",
-    "brand_normalise_story",
+    "INDIGO_BLUE",
+    "INDIGO_BLUE_HEX",
+    "INDIGO_SKY",
+    "INDIGO_SKY_HEX",
+    "INDIGO_MID_BLUE_HEX",
+    "MARKS_DIR",
+    "REFERENCES_DIR",
+    "LIVERY_DIR",
+    "FONTS_DIR",
+    "wordmark",
+    "icon",
+    "reference_images",
+    "livery_references",
+    "font_path",
 ]
 
+ASSETS_DIR = Path(__file__).parent / "assets"
+MARKS_DIR = ASSETS_DIR / "marks"
+REFERENCES_DIR = ASSETS_DIR / "references"
+LIVERY_DIR = REFERENCES_DIR / "livery"
+FONTS_DIR = ASSETS_DIR / "fonts"
 
-def active_brand() -> str | None:
-    """The configured brand id, or ``None`` when brand enforcement is off."""
-    value = (get_settings().brand or "").strip().lower()
-    return value if value and value not in {"none", "off", "false", "generic"} else None
+#: Sampled from ``marks/wordmark-blue.png`` and ``marks/icon.svg`` — both give
+#: exactly this value. This is the brand's primary deep blue.
+INDIGO_BLUE = (0, 0, 153)
+INDIGO_BLUE_HEX = "#000099"
+
+#: The secondary light blue, sampled from the BluChip campaign headline.
+INDIGO_SKY = (151, 201, 234)
+INDIGO_SKY_HEX = "#97C9EA"
+
+#: The mid blue used in mailer headers. Useful for gradients, never for type.
+INDIGO_MID_BLUE_HEX = "#0058AC"
 
 
-def brand_name() -> str:
-    return "IndiGo" if active_brand() == "indigo" else ""
+def wordmark(*, on_dark: bool = True) -> Path:
+    """The full IndiGo lockup — wordmark plus 20-dot device. 1543x466.
 
-
-def brand_system_block(*, safety_only: bool = False) -> str:
-    """The policy text to append to a task's system prompt.
-
-    ``safety_only`` is for paths driven by a raw user instruction, where the full
-    styling document would fight the thing the user just asked for, but the
-    content prohibitions still hold absolutely.
+    ``on_dark`` picks the white cut, which is what an end card over sky or
+    cloud wants. The blue cut is for light plates only.
     """
-    if active_brand() != "indigo":
-        return ""
+    name = "wordmark-white.png" if on_dark else "wordmark-blue.png"
+    return MARKS_DIR / name
 
-    if safety_only:
-        return "\n".join(
-            ["---", "", "# Brand safety — IndiGo", "", INDIGO_VIDEO_SAFETY_POLICY.strip()]
+
+def icon(*, on_dark: bool = True) -> Path:
+    """The 20-dot arrow-plane device on its own. 835x832."""
+    return MARKS_DIR / ("icon-white.png" if on_dark else "icon-blue.png")
+
+
+#: Ordered best-first. IndiGo's own typeface is not redistributable and is not in
+#: the asset drop, so these are the closest widely installed geometric sans
+#: faces. Anything dropped into ``assets/fonts`` wins over all of them.
+_FONT_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "darwin": (
+        "/System/Library/Fonts/Supplemental/Futura.ttc",
+        "/System/Library/Fonts/Avenir Next.ttc",
+        "/System/Library/Fonts/HelveticaNeue.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ),
+    "win32": (
+        r"C:\Windows\Fonts\GOTHIC.TTF",
+        r"C:\Windows\Fonts\Futura.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+    ),
+    "linux": (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ),
+}
+
+
+def font_path() -> Path | None:
+    """The font file for burnt-in supers, or ``None`` if nothing usable exists.
+
+    Order: the configured override, then anything bundled in ``assets/fonts``,
+    then the platform's best geometric sans. Returning ``None`` rather than
+    raising lets the caller decide — a film with no supers is still a film.
+    """
+    configured = (settings.brand_font_path or "").strip()
+    if configured:
+        candidate = Path(configured)
+        return candidate if candidate.is_file() else None
+
+    if FONTS_DIR.is_dir():
+        bundled = sorted(
+            path
+            for path in FONTS_DIR.iterdir()
+            if path.suffix.lower() in {".ttf", ".otf", ".ttc"}
         )
+        if bundled:
+            return bundled[0]
 
-    return "\n".join(
-        [
-            "---",
-            "",
-            "# Brand guardrails — IndiGo",
-            "",
-            "This film is for IndiGo. The rules below are not style preferences; they are the "
-            "brand book, and they override any conflicting instinct from the craft references "
-            "above. A technically excellent film that breaks them is a failed film.",
-            "",
-            INDIGO_BRAND_POLICY.strip(),
-            "",
-            INDIGO_VIDEO_BRAND_POLICY.strip(),
-        ]
+    platform = "win32" if sys.platform.startswith("win") else sys.platform
+    for name in _FONT_CANDIDATES.get(platform, _FONT_CANDIDATES["linux"]):
+        path = Path(name)
+        if path.is_file():
+            return path
+    return None
+
+
+def reference_images() -> list[Path]:
+    """Campaign reference art — type, palette and product-photography tone.
+
+    Deliberately excludes ``livery/``: these are food creatives and mailers, and
+    conditioning an aircraft shot on them biases the frame toward product
+    photography. For aircraft and cabin, use `livery_references`.
+    """
+    if not REFERENCES_DIR.is_dir():
+        return []
+    return sorted(
+        path
+        for path in REFERENCES_DIR.iterdir()
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg"}
     )
 
 
-def brand_brief_block() -> str:
-    """Concrete brand requirements for the *user* message.
+def livery_references() -> list[Path]:
+    """Real IndiGo aircraft and cabin photography, for keyframe conditioning.
 
-    The system prompt carries the policy; this carries the values the model has
-    to physically write into the continuity block and every scene prompt.
+    The livery is the one thing a text prompt cannot specify accurately — colour
+    words get the blues roughly right and the tail form entirely wrong, and
+    naming the airline alone makes the model invent a wordmark it cannot spell.
+    Conditioning on real pixels is what fixes both. See
+    ``imagegen.generate_keyframe``.
     """
-    if active_brand() != "indigo":
-        return ""
-
-    return "\n".join(
-        [
-            "## Brand — IndiGo (non-negotiable)",
-            "",
-            "This is an advertisement for IndiGo. Its job is to make the viewer feel good about "
-            "flying IndiGo. A beautiful film that could be for any airline has failed the brief.",
-            "",
-            INDIGO_CONTINUITY_REQUIREMENTS.strip(),
-            "",
-            "### What makes a frame read as IndiGo",
-            INDIGO_BRAND_SURFACE.strip(),
-            "",
-            "### Emotional register",
-            "The beat map below is written for drama, but this is a brand film. Keep the dramatic "
-            "shape and change the colour: the obstacle is never IndiGo and never flying — flying "
-            "is what RESOLVES the story. 'Pressure' means anticipation, not anxiety. The 'crack' "
-            "is a moment of warmth or recognition, not a breakdown. Nobody is frightened, "
-            "panicked, stressed, or overwhelmed. Longing, anticipation, relief and delight: yes.",
-            "",
-            "Four failures are automatically rejected before this reaches Veo:",
-            "1. Any request for OVERLAY type — supers, captions, lower-thirds, an end card. "
-            "Campaign copy and the end-card lockup are composited from the master files "
-            "after the render, so a generated one only has to be painted back out. Branding "
-            "inside the world of the shot — livery, uniforms, gate signage — is wanted, and "
-            "is not what this rule is about.",
-            "2. Any scene whose palette is not blue-dominant, or that uses red or purple.",
-            "3. Any scene carrying no IndiGo surface at all — no aircraft, no cabin, no crew, "
-            "no branded airport surface. A navy prop is not a brand surface.",
-            "4. Any scene that plays as fear, stress, or anxiety, or that blames the journey "
-            "(delays, queues, lost bags, turbulence, cramped cabins).",
-        ]
+    if not LIVERY_DIR.is_dir():
+        return []
+    return sorted(
+        path
+        for path in LIVERY_DIR.iterdir()
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg"}
     )
-
-
-def brand_negative_prompt() -> str:
-    """Brand terms appended to every scene's negative prompt."""
-    return INDIGO_NEGATIVE_PROMPT if active_brand() == "indigo" else ""
-
-
-def brand_beat_label(beat: str) -> str | None:
-    """The brand's reading of a dramatic beat, or ``None`` to use the craft default.
-
-    The craft beat map is written for short drama — its own `hook` label is
-    "Hero already in tension. Problem on screen." Fed to the writer scene by
-    scene, that is what puts a frightened woman in an airport. The beat
-    *structure* is kept; only its emotional colour is rebranded.
-    """
-    return INDIGO_BEAT_LABELS.get(beat) if active_brand() == "indigo" else None
-
-
-def brand_issues(story: StoryOption) -> list[AuditIssue]:
-    """Brand compliance issues for one story, or none when brand is off."""
-    return _indigo_issues(story) if active_brand() == "indigo" else []
-
-
-def brand_normalise_story(story: StoryOption) -> StoryOption:
-    """Normalise deterministic brand fields before a story enters the pipeline."""
-    return _normalise_indigo_story(story) if active_brand() == "indigo" else story
