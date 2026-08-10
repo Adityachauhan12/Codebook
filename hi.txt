@@ -60,3 +60,24 @@ Traceback (most recent call last):
   File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\storyboard.py", line 734, in generate_scenes
     raise BadRequest(
 app.errors.BadRequest: "The waiting diya" still fails 1 blocking check(s) after 2 repair pass(es), so it has not been sent to Veo. The locked palette contains prohibited colours: violet. Red and purple palettes are banned.
+
+
+INFO:     127.0.0.1:61976 - "POST /api/video/projects/vid_19fea06297d384cf3a8/stories/story_19fea07935823cf65e1/scenes HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:61975 - "POST /api/video/projects/vid_19fea06297d384cf3a8/select-story HTTP/1.1" 200 OK
+2026-08-10T10:32:33 INFO  [video.llm] scenes ok in 51.7s (27059 tokens, deployment gpt-5.5)
+2026-08-10T10:32:33 INFO  [video.storyboard] Story "The waiting diya": audit found 3 blocking issue(s), running repair pass 1/2
+2026-08-10T10:33:26 INFO  [video.llm] scenes-repair-1 ok in 48.0s (25003 tokens, deployment gpt-5.5)
+2026-08-10T10:33:26 INFO  [video.storyboard] Story "The waiting diya": audit found 3 blocking issue(s), running repair pass 2/2
+2026-08-10T10:34:14 INFO  [video.llm] scenes-repair-2 ok in 39.5s (24922 tokens, deployment gpt-5.5)
+2026-08-10T10:34:14 WARNING [video.storyboard] Story "The waiting diya" finished with 3 unresolved issue(s), score 80.
+2026-08-10T10:34:14 ERROR [video.jobs] Job job_19fea0c2cb2e1dc7cd4 (storyboard) failed: "The waiting diya" still fails 3 blocking check(s) after 2 repair pass(es), so it has not been sent to Veo. The locked palette contains prohibited colours: violet. Red and purple palettes are banned.; scene 1: Nothing in this scene reads as IndiGo. With the logo and all type banned from the plate, brand has to be carried by what Veo can render — cabin interior, crew uniform, aircraft form, or a blue brand object. Otherwise this is stock footage with a blue grade.; scene 2: Nothing in this scene reads as IndiGo. With the logo and all type banned from the plate, brand has to be carried by what Veo can render — cabin interior, crew uniform, aircraft form, or a blue brand object. Otherwise this is stock footage with a blue grade.
+Traceback (most recent call last):
+  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\jobs.py", line 66, in runner
+    result = await work(context)
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\routes\video.py", line 346, in work
+    written, repair_passes = await generate_scenes(
+                             ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\Downloads\marketing-autonomous-video\server\app\services\storyboard.py", line 734, in generate_scenes
+    raise BadRequest(
+app.errors.BadRequest: "The waiting diya" still fails 3 blocking check(s) after 2 repair pass(es), so it has not been sent to Veo. The locked palette contains prohibited colours: violet. Red and purple palettes are banned.; scene 1: Nothing in this scene reads as IndiGo. With the logo and all type banned from the plate, brand has to be carried by what Veo can render — cabin interior, crew uniform, aircraft form, or a blue brand object. Otherwise this is stock footage with a blue grade.; scene 2: Nothing in this scene reads as IndiGo. With the logo and all type banned from the plate, brand has to be carried by what Veo can render — cabin interior, crew uniform, aircraft form, or a blue brand object. Otherwise this is stock footage with a blue grade.
