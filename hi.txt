@@ -1,9 +1,79 @@
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git status
-On branch dev-aditya
-nothing to commit, working tree clean
+from contextlib import contextmanager
+import logging
+import os
+import psycopg2
+from azure.identity import ClientSecretCredential
+from dotenv import load_dotenv
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git push
-fatal: The current branch dev-aditya has no upstream branch.
-To push the current branch and set the remote as upstream, use
+_logger = logging.getLogger(__name__)
 
-    git push --set-upstream origin dev-aditya
+load_dotenv()
+
+
+def _is_keyvault_ref(value: str) -> bool:
+    return value.strip().startswith("@Microsoft.KeyVault(")
+
+
+_client_secret = os.getenv("AZURE_CLIENT_SECRET", "")
+if _is_keyvault_ref(_client_secret):
+    _logger.warning(
+        "AZURE_CLIENT_SECRET is a Key Vault reference — DB connections will fail locally. "
+        "Replace it with the actual secret value in your .env file."
+    )
+    _credential = None
+else:
+    _credential = ClientSecretCredential(
+        tenant_id=os.getenv("AZURE_TENANT_ID", ""),
+        client_id=os.getenv("AZURE_CLIENT_ID", ""),
+        client_secret=_client_secret,
+    )
+
+
+def _get_token() -> str:
+    if _credential is None:
+        raise RuntimeError(
+            "DB credential not initialised — AZURE_CLIENT_SECRET is a Key Vault reference. "
+            "Set the actual secret value in your local .env file."
+        )
+    token = _credential.get_token("https://token.postgres.cosmos.azure.com/.default")
+    return token.token
+
+
+def _connect() -> psycopg2.extensions.connection:
+    return psycopg2.connect(
+        host=os.getenv("PGHOST"),
+        port=int(os.getenv("PGPORT", "5432")),
+        dbname=os.getenv("PGDATABASE"),
+        user=os.getenv("PGUSER"),
+        password=_get_token(),
+        sslmode="require",
+    )
+
+
+@contextmanager
+def get_db():
+    conn = _connect()
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def log_blocked_prompt(user_id: str, blocked_prompt: str, category: str, blocked_reason: str) -> None:
+    """Insert a blocked-prompt audit row. Swallows errors so it never blocks the main request path."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO blocked_prompts (user_id, blocked_prompt, category, blocked_reason)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (user_id, blocked_prompt, category, blocked_reason),
+                )
+                conn.commit()
+    except Exception as exc:
+        _logger.error("log_blocked_prompt | failed | user=%s | category=%s | error=%s", user_id, category, exc)
