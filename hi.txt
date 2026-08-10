@@ -1,273 +1,264 @@
-"""Decompose a raw brief before anything else reads it.
+"""The accumulation step.
 
-The pipeline used to treat the brief as one opaque string and hand it to the
-scene writer whole. That is the root of several unrelated-looking failures:
-
-  * "On-Screen Text: A new horizon awaits." reached Veo as an instruction to
-    render type, and came back as "A new horizon awasts."
-  * "4K HDR" was silently ignored, because nothing in the pipeline is allowed
-    to say "no".
-  * Music direction competed for the scene writer's attention with camera
-    direction, and neither the composer nor Veo ever saw it.
-
-Splitting the brief is what lets each of those go to the right place — or be
-refused out loud. Only ``intent`` is ever allowed into a prompt.
+Takes the N independently generated Veo clips and produces one file of exactly
+``plan.target_seconds``. Three phases, weighted for the progress bar roughly by
+how long they actually take.
 """
 
 from __future__ import annotations
 
-import re
+import shutil
+from pathlib import Path
 
-from ..brand import brand_system_block
-from ..domain.models import BriefAnalysis, EndCard, SuperSpec
+from ..brand import active_brand
+from ..brand.assets import font_path
+from ..brand.supers import build_lockups, build_supers
+from ..config import settings
+from ..domain.formats import output_size_for
+from ..domain.models import Project, RenderResult, now_iso
+from ..errors import BadRequest
 from ..logging_setup import get_logger
-from .llm import ChatMessage, chat_json
-
-log = get_logger("brief")
-
-#: Headings a human writes above the copy they want burnt in. Matching these is
-#: the deterministic fallback for when no model is configured — crude, but it
-#: catches the common shape and is better than passing copy through to Veo.
-_COPY_HEADING = re.compile(
-    r"^\s*(?:on[- ]screen\s+text|on[- ]screen\s+copy|supers?|captions?|titles?|"
-    r"text\s+overlay|end\s?card|final\s+frame|copy)\s*[:\-]?\s*$",
-    re.IGNORECASE | re.MULTILINE,
+from ..storage import (
+    ensure_dir,
+    media_url,
+    output_dir,
+    resolve_in_storage,
+    to_storage_relative,
+    work_dir,
 )
-
-#: A brief specifies an end card with a *heading* — a line that opens a section,
-#: the same shape as "On-Screen Text". Anchoring to that rather than to the
-#: words anywhere in the text is what separates a brief asking for a closing
-#: frame from a brief talking about one.
-#:
-#: Keyword matching fails here, and fails on the one brief that matters:
-#: `generic_test_2.txt` says "no end card" *and* "if the brief parser invents
-#: supers or an end card here". Negation handling catches the first and not the
-#: second, so the loudest warning in this module would fire on the brief written
-#: to prove the parser is not pattern-matching. Structure has no such problem.
-#:
-#: Used only to catch the split disagreeing with an obvious signal — never to
-#: build an end card, because inventing one the brief did not ask for is the
-#: failure in the other direction.
-_END_CARD_HEADING = re.compile(
-    r"^[ \t]*(?:end\s?card|final\s+frame|closing\s+frame|logo\s+(?:reveal|lockup))"
-    r"[ \t]*(?::.*)?$",
-    re.IGNORECASE | re.MULTILINE,
+from .clips import selected_story
+from .ffmpeg import (
+    MixTrack,
+    Segment,
+    burn_brand,
+    concat_segments,
+    mix_and_finalise,
+    normalise_segment,
+    probe,
 )
+from .jobs import JobContext
+from .store import update_project
+
+log = get_logger("render")
+
+PHASE_NORMALISE = 0.50
+PHASE_CONCAT = 0.18
+PHASE_BRAND = 0.12
+PHASE_MIX = 0.20
 
 
-def _asks_for_end_card(raw: str) -> bool:
-    """True when the brief opens a section asking for a closing brand frame."""
-    return _END_CARD_HEADING.search(raw) is not None
+async def _set_render(project_id: str, **patch) -> Project:
+    def mutate(project: Project) -> Project:
+        project.render = project.render.model_copy(update=patch)
+        return project
+
+    return await update_project(project_id, mutate)
 
 
-#: Asks that read as achievable but are not, on this pipeline. Kept short and
-#: specific: a false positive here tells the user "no" about something we could
-#: in fact do, which is worse than staying quiet.
-_UNSUPPORTED = (
-    (re.compile(r"\b(?:4k|uhd|2160p|8k)\b", re.IGNORECASE),
-     "4K/8K delivery — Veo renders at 1080p maximum. The film will be 1080p."),
-    (re.compile(r"\bhdr\b|\bdolby\s+vision\b", re.IGNORECASE),
-     "HDR — Veo output is SDR. The grade will be delivered in SDR."),
-    (re.compile(r"\b(?:60|120)\s?fps\b", re.IGNORECASE),
-     "High frame rate — clips are conformed to the project frame rate."),
-)
+async def render_project(project: Project, context: JobContext) -> dict:
+    story = selected_story(project)
+    plan = project.plan
 
+    # Order matters: the timeline is the story order, not the order clips finished.
+    by_scene = {clip.scene_id: clip for clip in project.clips}
+    ordered = [(scene, by_scene.get(scene.id)) for scene in story.scenes]
 
-_SYSTEM = """\
-You split an advertising brief into parts that go to different systems. You do \
-not write, improve, critique or expand the brief. You sort it.
-
-Return JSON with exactly these keys:
-
-  intent      string. The creative brief: story, subject, mood, setting, casting, \
-camera and grade direction. Everything a director needs and nothing else. \
-Remove on-screen copy, duration/resolution/aspect specification, music \
-direction, and prohibition lists — those are captured separately below. Keep \
-the user's own wording wherever you can; you are deleting, not rewriting.
-
-  supers      array. Every piece of text the VIEWER READS ON SCREEN. Each item: \
-{"text": string, "start": number, "end": number, "position": one of \
-"upper-left"|"upper-centre"|"lower-left"|"lower-centre"|"centre"}. If the brief \
-gives timings, use them. If it gives a range like "0-10 sec", use it. If it \
-gives no timing, distribute the lines evenly across the runtime. Copy the text \
-EXACTLY as written, including capitalisation. Do not invent copy that is not \
-in the brief. Empty array if the brief asks for no on-screen text.
-POSITION: unless the brief actually specifies placement, use "upper-left". \
-Narrative supers sit in a corner so they do not cover the face or the action; \
-dead-centre type over a subject is what an amateur edit looks like. Reserve \
-"centre" for the end card, which is handled separately below.
-
-  endCard     object. The closing brand frame, if the brief describes one: \
-{"enabled": bool, "headline": string|null, "subline": string|null, \
-"mark": "wordmark"|"icon"|"none", "seconds": number}. A "final frame" or "logo \
-reveal" instruction belongs here, not in supers. enabled=false if absent.
-
-  avoid       array of strings. Things the brief says must NOT appear. Split a \
-comma-separated negative prompt into individual items.
-
-  music       string or null. Music and sound-design direction, verbatim.
-
-Rules:
-- Text a CHARACTER reads (a sign, a boarding pass, a phone screen) is NOT a \
-super. It stays in intent. Supers are only what is composited over the picture.
-- Never put copy in both intent and supers.
-- If the brief contains no on-screen text at all, supers is [] and endCard.enabled \
-is false. Do not helpfully invent an end card.
-"""
-
-
-def _fallback(raw: str) -> BriefAnalysis:
-    """Split the brief without a model.
-
-    Cuts at the first copy heading and treats everything above it as intent.
-    Crude, and it does not recover timings — but it stops copy reaching Veo,
-    which is the failure that matters.
-    """
-    match = _COPY_HEADING.search(raw)
-    intent = raw[: match.start()].strip() if match else raw.strip()
-    if match:
-        log.info("No model configured; split the brief at %r.", match.group(0).strip())
-    # This path recovers no timings, so it yields no supers and no end card. It
-    # keeps copy away from Veo, which is the failure that matters — but the film
-    # then renders with no burnt-in copy and no brand mark, and that is worth
-    # saying rather than discovering in the deliverable.
-    log.warning(
-        "Falling back to a heading split: this film will have NO supers and NO "
-        "end card. Check that Azure is configured and reachable."
-    )
-    return BriefAnalysis(intent=intent or raw.strip(), unsupported=_unsupported_in(raw))
-
-
-def _unsupported_in(raw: str) -> list[str]:
-    return [note for pattern, note in _UNSUPPORTED if pattern.search(raw)]
-
-
-_POSITIONS = frozenset(
-    {"upper-left", "upper-centre", "lower-left", "lower-centre", "centre"}
-)
-
-
-def _coerce_supers(items: object, seconds: int) -> list[SuperSpec]:
-    """Build ``SuperSpec``s from model output, dropping anything malformed.
-
-    A super with a broken time window is worse than a missing one: it either
-    never appears or sits on screen for the whole film.
-    """
-    if not isinstance(items, list):
-        return []
-
-    supers: list[SuperSpec] = []
-    for entry in items:
-        if not isinstance(entry, dict):
-            continue
-        text = str(entry.get("text") or "").strip()
-        if not text:
-            continue
-        try:
-            start = max(0.0, float(entry.get("start", 0)))
-            end = min(float(seconds), float(entry.get("end", 0)))
-        except (TypeError, ValueError):
-            continue
-        if end <= start:
-            continue
-        position = entry.get("position")
-        supers.append(
-            SuperSpec(
-                text=text,
-                start=start,
-                end=end,
-                position=position if position in _POSITIONS else "upper-left",  # type: ignore[arg-type]
-            )
+    missing = [scene for scene, clip in ordered if clip is None or clip.status != "ready" or not clip.file]
+    if missing:
+        listed = ", ".join(str(scene.order) for scene in missing)
+        raise BadRequest(
+            f"{len(missing)} of {len(ordered)} clips are not ready yet: scene {listed}."
         )
-    return supers
 
+    work = Path(work_dir(project.id))
+    out = Path(output_dir(project.id))
+    ensure_dir(work)
+    ensure_dir(out)
 
-#: The model is asked for `endCard`, but a JSON-mode model asked for one
-#: camelCase key among four lowercase ones returns `end_card` often enough to
-#: matter. Reading only the documented spelling turns that into a silently
-#: disabled end card — no lockup, no closing copy, no error. The key is the
-#: on/off switch for the entire brand mark, so it accepts every spelling.
-_END_CARD_KEYS = ("endCard", "end_card", "endcard", "end card")
+    segments_dir = work / "segments"
+    # A re-render must not concatenate last run's leftovers.
+    shutil.rmtree(segments_dir, ignore_errors=True)
+    ensure_dir(segments_dir)
 
+    width, height = output_size_for(project.brief.ratio, settings.veo_resolution)
+    started_at = now_iso()
 
-def _end_card_payload(payload: dict) -> object:
-    for key in _END_CARD_KEYS:
-        if key in payload:
-            return payload[key]
-    return None
-
-
-def _coerce_end_card(value: object) -> EndCard:
-    if not isinstance(value, dict) or not value.get("enabled"):
-        return EndCard(enabled=False)
-    mark = value.get("mark")
-    return EndCard(
-        enabled=True,
-        headline=(str(value["headline"]).strip() if value.get("headline") else None),
-        subline=(str(value["subline"]).strip() if value.get("subline") else None),
-        mark=mark if mark in {"wordmark", "icon", "none"} else "wordmark",
-        seconds=float(value.get("seconds") or 4.0),
+    await _set_render(
+        project.id,
+        status="rendering",
+        progress=0.0,
+        stage="Preparing clips…",
+        started_at=started_at,
+        error=None,
     )
-
-
-async def analyse_brief(raw: str, *, seconds: int) -> BriefAnalysis:
-    """Split a raw brief into intent, copy, constraints and refusals.
-
-    Falls back to a deterministic split when no model is configured, so the
-    pipeline still boots and still keeps copy away from Veo.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return BriefAnalysis(intent="")
-
-    messages: list[ChatMessage] = [
-        {"role": "system", "content": _SYSTEM + brand_system_block(safety_only=True)},
-        {
-            "role": "user",
-            "content": f"Runtime: {seconds} seconds.\n\n--- BRIEF ---\n{raw}\n--- END ---",
-        },
-    ]
 
     try:
-        payload = await chat_json(messages)
-    except Exception as error:  # noqa: BLE001 - any upstream failure degrades the same way
-        log.warning("Brief analysis failed, falling back to a heading split. %s", error)
-        return _fallback(raw)
+        # --- Phase 1: conform every clip to identical parameters -------------
+        normalised: list[Segment] = []
+        total = len(ordered)
 
-    if not isinstance(payload, dict):
-        return _fallback(raw)
+        for index, (scene, clip) in enumerate(ordered):
+            assert clip is not None and clip.file
+            source = resolve_in_storage(clip.file)
+            target = segments_dir / f"seg-{index:03d}.mp4"
+            stage = f"Conforming clip {index + 1} of {total}"
 
-    intent = str(payload.get("intent") or "").strip()
-    if not intent:
-        log.warning("Brief analysis returned no intent; keeping the raw brief.")
-        intent = raw
+            await _set_render(project.id, stage=stage, progress=(index / total) * PHASE_NORMALISE)
 
-    avoid = [str(item).strip() for item in payload.get("avoid") or [] if str(item).strip()]
-    music = payload.get("music")
+            async def on_progress(fraction: float, _message: str, i: int = index) -> None:
+                context.progress(((i + fraction) / total) * PHASE_NORMALISE, stage)
 
-    analysis = BriefAnalysis(
-        intent=intent,
-        supers=_coerce_supers(payload.get("supers"), seconds),
-        end_card=_coerce_end_card(_end_card_payload(payload)),
-        avoid=avoid,
-        unsupported=_unsupported_in(raw),
-        music=str(music).strip() if music else None,
-    )
+            await normalise_segment(
+                source,
+                target,
+                width=width,
+                height=height,
+                seconds=scene.seconds,
+                fps=settings.render_fps,
+                on_progress=on_progress,
+            )
 
-    log.info(
-        "Brief split: intent %d chars (from %d), %d super(s), end card %s, %d unsupported.",
-        len(analysis.intent), len(raw), len(analysis.supers),
-        "on" if analysis.end_card.enabled else "off", len(analysis.unsupported),
-    )
+            normalised.append(Segment(file=target, seconds=scene.seconds))
 
-    # A disabled end card is indistinguishable from a brief that asked for none,
-    # and it silently removes the brand mark from the film — the render just
-    # skips compositing and nothing anywhere says so. When the brief plainly
-    # asks for one and the split disagrees, say it out loud.
-    if not analysis.end_card.enabled and _asks_for_end_card(raw):
-        log.warning(
-            "The brief asks for an end card but the split returned enabled=false — "
-            "the film will render with NO brand mark. Model returned keys: %s.",
-            ", ".join(sorted(payload)) or "(none)",
+        # --- Phase 2: accumulate ---------------------------------------------
+        joined_path = work / "joined.mp4"
+        await _set_render(
+            project.id,
+            stage=f"Accumulating {len(normalised)} clips into one timeline…",
+            progress=PHASE_NORMALISE,
         )
-    return analysis
+
+        async def concat_progress(fraction: float, message: str) -> None:
+            context.progress(PHASE_NORMALISE + fraction * PHASE_CONCAT, message)
+
+        joined_seconds = await concat_segments(
+            normalised,
+            joined_path,
+            transition=project.transition,
+            crossfade_seconds=0.4,
+            work_dir=work,
+            on_progress=concat_progress,
+        )
+
+        # Hard cuts land on the plan exactly; a crossfade eats (n-1) x fade seconds.
+        final_seconds = round(min(plan.target_seconds, joined_seconds), 3)
+        if final_seconds < plan.target_seconds - 0.05:
+            log.info(
+                "Crossfade overlap shortened the film to %.2fs against a %ds target.",
+                final_seconds, plan.target_seconds,
+            )
+
+        # --- Phase 2b: burn supers and the brand mark ------------------------
+        # Veo returns a clean plate by policy; everything a viewer reads is
+        # drawn here, from a font file, so it is spelled the way it was written.
+        supers = build_supers(
+            project.supers, project.end_card, seconds=final_seconds, height=height
+        )
+        lockups = build_lockups(project.end_card, seconds=final_seconds, width=width)
+
+        if supers or lockups:
+            branded_path = work / "branded.mp4"
+            await _set_render(
+                project.id,
+                stage=f"Compositing {len(supers)} super(s) and the brand mark…",
+                progress=PHASE_NORMALISE + PHASE_CONCAT,
+            )
+
+            async def brand_progress(fraction: float, message: str) -> None:
+                context.progress(
+                    PHASE_NORMALISE + PHASE_CONCAT + fraction * PHASE_BRAND, message
+                )
+
+            await burn_brand(
+                joined_path,
+                branded_path,
+                seconds=final_seconds,
+                supers=supers,
+                lockups=lockups,
+                font=font_path(),
+                work_dir=work / "supers",
+                on_progress=brand_progress,
+            )
+            mix_source = branded_path
+        else:
+            # Phase 2b is the only thing that puts copy or the brand mark on the
+            # picture. Skipping it is legitimate for a brandless film, but it is
+            # also how a film that was supposed to be branded ships plain — the
+            # compositor never runs and nothing reports a failure, because there
+            # was none. Name the reason instead.
+            log.warning(
+                "Nothing to composite: %d super(s), %d lockup(s). The film will have "
+                "no burnt-in copy and no brand mark. end_card.enabled=%s mark=%s brand=%s.",
+                len(supers), len(lockups),
+                project.end_card.enabled, project.end_card.mark, active_brand(),
+            )
+            mix_source = joined_path
+
+        # --- Phase 3: mix and trim -------------------------------------------
+        tracks = [
+            MixTrack(
+                file=resolve_in_storage(track.file),
+                gain=track.gain,
+                # Music loops to cover the runtime; voiceover plays once from the top.
+                loop=track.kind == "music",
+                fade_in=1.0 if track.kind == "music" else 0.0,
+                fade_out=2.0 if track.kind == "music" else 0.0,
+            )
+            for track in project.audio
+            if track.selected and track.status == "ready" and track.file
+        ]
+
+        final_path = out / "final.mp4"
+        done_before_mix = PHASE_NORMALISE + PHASE_CONCAT + PHASE_BRAND
+        await _set_render(
+            project.id,
+            stage="Mixing audio…" if tracks else "Finishing…",
+            progress=done_before_mix,
+        )
+
+        async def mix_progress(fraction: float, message: str) -> None:
+            context.progress(done_before_mix + fraction * PHASE_MIX, message)
+
+        await mix_and_finalise(
+            mix_source,
+            final_path,
+            seconds=final_seconds,
+            tracks=tracks,
+            fade_out_seconds=0.6,
+            on_progress=mix_progress,
+        )
+
+        info = await probe(final_path)
+        size = final_path.stat().st_size
+        relative = to_storage_relative(final_path)
+
+        result = RenderResult(
+            status="ready",
+            progress=1.0,
+            stage="Done.",
+            file=relative,
+            url=media_url(relative),
+            seconds=info.seconds,
+            bytes=size,
+            startedAt=started_at,
+            completedAt=now_iso(),
+        )
+
+        await _set_render(project.id, **result.model_dump())
+        log.info(
+            "Rendered project %s: %.2fs, %.1fMB from %d clips.",
+            project.id, info.seconds, size / 1_048_576, total,
+        )
+
+        # The conformed intermediates are large and reproducible. Keep the
+        # joined file — a re-mix with different music skips phases 1 and 2 —
+        # and drop the rest.
+        shutil.rmtree(segments_dir, ignore_errors=True)
+
+        return result.model_dump(by_alias=True, mode="json")
+
+    except Exception as error:
+        await _set_render(
+            project.id, status="failed", stage=None, error=str(error), completed_at=now_iso()
+        )
+        raise
