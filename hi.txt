@@ -16,7 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STORAGE_DIR=/tmp/marketing-video \
     VIDEO_STORAGE_DIR=/tmp/marketing-video
 
-RUN apt-get update --fix-missing \
+RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
         fontconfig \
