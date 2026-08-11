@@ -1,342 +1,376 @@
-"""One scene in, one clip file out.
+"""Veo, via the Gemini API.
 
-This is where the "Veo only does 8 seconds" constraint stops being a problem and
-becomes a loop: each scene of the plan is generated on its own, written to
-``storage/projects/<id>/clips/``, measured, and recorded back on the project.
-The renderer later accumulates whatever is ready.
+Shape of the world:
+
+  - One generation returns one clip of 4, 6 or 8 seconds. That is the ceiling,
+    and it is the reason the whole segment plan exists.
+  - Generation is a long-running operation: POST returns an operation name, you
+    poll it until ``done``, then download the result from a URI that still needs
+    the API key on the request.
+  - ``extend`` continues a Veo-produced video by ~7s, up to 20 times. Not used
+    by the main pipeline — see ``extend_clip`` for why.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+import httpx
 
 from ..config import settings
-from ..domain.formats import veo_aspect_for
-from ..domain.models import Clip, Project, Scene, StoryOption, now_iso
-from ..errors import BadRequest, Conflict
+from ..domain.models import VeoAspectRatio
+from ..errors import Unavailable, UpstreamError
 from ..logging_setup import get_logger
-from ..storage import clips_dir, ensure_dir, persist_media, resolve_in_storage, work_dir
-from . import veo
-from .veo import InlineAsset
-from .ffmpeg import extract_poster, probe
-from .imagegen import asset_from_image, generate_keyframe, livery_assets
-from .jobs import JobContext, map_with_concurrency
-from .store import require_project, update_project
+from ..storage import ensure_dir
 
-log = get_logger("clips")
+log = get_logger("veo")
+
+ProgressFn = Callable[[float, str], Awaitable[None] | None]
 
 
-def selected_story(project: Project) -> StoryOption:
-    story = next((s for s in project.stories if s.id == project.selected_story_id), None)
-    if story is None:
-        raise BadRequest("No story is selected for this project yet.")
-    if not story.scenes:
-        raise BadRequest("The selected story has no scenes yet. Generate the storyboard first.")
-    return story
+@dataclass(slots=True)
+class InlineAsset:
+    mime_type: str
+    #: base64, without a ``data:`` prefix.
+    data: str
+
+    def to_payload(self) -> dict[str, str]:
+        return {"mimeType": self.mime_type, "data": self.data}
 
 
-def _find_scene(project: Project, scene_id: str) -> tuple[StoryOption, Scene]:
-    story = selected_story(project)
-    scene = next((s for s in story.scenes if s.id == scene_id), None)
-    if scene is None:
-        raise BadRequest(f"Scene {scene_id} is not part of the selected story.")
-    return story, scene
+@dataclass(slots=True)
+class GeneratedClip:
+    file: Path
+    bytes: int
+    operation: str
+    model: str
 
 
-def sync_clips(project: Project) -> list[Clip]:
-    """Derive the clip rows from the selected story, keeping what is generated."""
-    story = next((s for s in project.stories if s.id == project.selected_story_id), None)
-    if story is None:
-        return []
-
-    existing = {clip.scene_id: clip for clip in project.clips}
-    clips: list[Clip] = []
-
-    for scene in story.scenes:
-        previous = existing.get(scene.id)
-        # A scene whose length changed invalidates the clip generated from the
-        # old version — the renderer would otherwise pad or cut the wrong shot.
-        stale = previous is not None and previous.seconds != scene.seconds
-
-        if previous is not None and not stale:
-            refreshed = previous.model_copy(update={"order": scene.order, "seconds": scene.seconds})
-            clips.append(refreshed)
-        else:
-            clips.append(
-                Clip(sceneId=scene.id, order=scene.order, status="idle", seconds=scene.seconds)
-            )
-
-    return clips
+def _require_key() -> str:
+    key = settings.google_key
+    if not key:
+        raise Unavailable(
+            "GEMINI_IMAGE_API_KEY is not set. Add it to server/.env "
+            "(see server/.env.example) and restart the server."
+        )
+    return key
 
 
-async def _patch_clip(project_id: str, scene_id: str, **patch) -> None:
-    def mutate(project: Project) -> Project:
-        project.clips = [
-            clip.model_copy(update=patch) if clip.scene_id == scene_id else clip
-            for clip in project.clips
+def _api_url(path: str) -> str:
+    return f"{settings.gemini_api_base.rstrip('/')}/{path.lstrip('/')}"
+
+
+def normalise_seconds(seconds: int) -> int:
+    """Veo accepts 4, 6 or 8. Anything else snaps down to a legal value."""
+    allowed = settings.allowed_clip_seconds
+    if seconds in allowed:
+        return seconds
+    below = [value for value in allowed if value <= seconds]
+    return max(below) if below else min(allowed)
+
+
+async def _report(callback: ProgressFn | None, fraction: float, message: str) -> None:
+    if callback is None:
+        return
+    result = callback(fraction, message)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+# ---------------------------------------------------------------------------
+# Start
+# ---------------------------------------------------------------------------
+
+
+async def start_generation(
+    *,
+    prompt: str,
+    seconds: int,
+    aspect_ratio: VeoAspectRatio,
+    negative_prompt: str | None = None,
+    model: str | None = None,
+    resolution: str | None = None,
+    first_frame: InlineAsset | None = None,
+    last_frame: InlineAsset | None = None,
+    #: NOTE: veo-3.1-generate-preview rejects inline bytes here — "`inlineData`
+    #: isn't supported by this model" (400). The field is kept because it is a
+    #: real API field and works with a `gcsUri`, but callers passing inline
+    #: assets will hit the retry-without path below on every clip.
+    reference_images: list[InlineAsset] | None = None,
+    video: InlineAsset | None = None,
+) -> tuple[str, str]:
+    """Submit a generation. Returns ``(operation_name, model)``."""
+    key = _require_key()
+    target_model = model or settings.veo_model
+    duration = normalise_seconds(seconds)
+
+    instance: dict[str, Any] = {"prompt": prompt}
+    if first_frame:
+        instance["image"] = {"inlineData": first_frame.to_payload()}
+    if last_frame:
+        instance["lastFrame"] = {"inlineData": last_frame.to_payload()}
+    if video:
+        instance["video"] = {"inlineData": video.to_payload()}
+    if reference_images:
+        instance["referenceImages"] = [
+            {"image": {"inlineData": image.to_payload()}, "referenceType": "asset"}
+            for image in reference_images
         ]
-        return project
 
-    await update_project(project_id, mutate)
+    # Veo only supports 1080p for 8-second clips; shorter durations require 720p.
+    effective_resolution = resolution or settings.veo_resolution
+    if duration < 8 and effective_resolution == "1080p":
+        effective_resolution = "720p"
 
+    parameters: dict[str, Any] = {
+        "aspectRatio": aspect_ratio,
+        "resolution": effective_resolution,
+        "durationSeconds": duration,
+        "personGeneration": settings.veo_person_generation,
+    }
+    if negative_prompt and negative_prompt.strip():
+        parameters["negativePrompt"] = negative_prompt.strip()
 
-async def generate_scene_clip(
-    project: Project,
-    scene_id: str,
-    *,
-    force: bool = False,
-    on_progress=None,
-    seed_frame: InlineAsset | None = None,
-) -> Clip:
-    """Generate one scene's clip.
-
-    ``seed_frame`` is the previous clip's final frame, supplied by the chained
-    path in ``generate_all_clips``. It takes precedence over a generated
-    keyframe: a real frame of the film we are already making is a stronger
-    continuity anchor than a fresh still of what that frame should have been.
-    """
-    story, scene = _find_scene(project, scene_id)
-    current = next((clip for clip in project.clips if clip.scene_id == scene_id), None)
-
-    if current and current.status == "generating" and not force:
-        raise Conflict(f"Scene {scene.order} is already generating.")
-    if current and current.status == "ready" and not force:
-        return current
-
-    aspect = veo_aspect_for(project.brief.ratio)
-    destination = Path(clips_dir(project.id)) / f"scene-{scene.order:02d}.mp4"
-    poster = destination.with_suffix(".jpg")
-
-    await _patch_clip(
-        project.id,
-        scene_id,
-        status="generating",
-        progress=0.0,
-        error=None,
-        started_at=now_iso(),
-        attempts=(current.attempts if current else 0) + 1,
-    )
-
-    async def report(fraction: float, message: str) -> None:
-        if on_progress is not None:
-            result = on_progress(fraction, message)
-            if asyncio.iscoroutine(result):
-                await result
-        await _patch_clip(project.id, scene_id, progress=fraction)
-
-    try:
-        # Lock continuity with a first frame: the previous clip's tail if we are
-        # chaining, otherwise an optional generated still.
-        first_frame = seed_frame
-        if first_frame is None and settings.veo_use_keyframes:
-            await report(0.02, "Rendering the opening frame…")
-            first_frame = await generate_keyframe(scene, story, aspect)
-
-        # Veo's own `referenceImages` field rejects inline bytes on this model
-        # ("`inlineData` isn't supported by this model", 400), so the keyframe is
-        # the ONLY route the real livery has into the picture. With keyframes off
-        # the aircraft is whatever Veo invents — which is the failure this whole
-        # reference set exists to prevent, so it is worth saying per scene.
-        if first_frame is None and livery_assets():
-            log.warning(
-                "Scene %d has no keyframe, so the IndiGo livery references were not applied. "
-                "The aircraft will be whatever Veo invents. Set VEO_USE_KEYFRAMES=true and "
-                "GEMINI_IMAGE_API_KEY to condition the frame on the real aircraft.",
-                scene.order,
+    async def _submit() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            return await client.post(
+                _api_url(f"models/{target_model}:predictLongRunning"),
+                headers={"x-goog-api-key": key, "content-type": "application/json"},
+                json={"instances": [instance], "parameters": parameters},
             )
 
-        generated = await veo.generate_clip(
-            destination,
-            prompt=scene.prompt,
-            seconds=scene.seconds,
-            aspect_ratio=aspect,
-            negative_prompt=scene.negative_prompt,
-            model=project.model or None,
-            first_frame=first_frame,
-            on_progress=report,
+    response = await _submit()
+
+    # `referenceImages` is a newer Veo capability and not every model or API
+    # version accepts it. Dropping the brand reference costs one less accurate
+    # frame; failing the request costs the whole film. Retry once without.
+    if response.status_code >= 400 and "referenceImages" in instance:
+        log.warning(
+            "Veo rejected the request (%s) with %d reference image(s) attached; retrying "
+            "without them. The aircraft may not read as IndiGo in this clip. %s",
+            response.status_code,
+            len(instance["referenceImages"]),
+            response.text[:300],
+        )
+        instance.pop("referenceImages")
+        response = await _submit()
+
+    # Same reasoning for the first frame, which is the route the brand livery
+    # actually travels. If this model rejects inline image bytes the way it
+    # rejects them under `referenceImages`, every clip would fail rather than
+    # merely lose its conditioning. Degrade to text-to-video and say so loudly —
+    # an unbranded film is recoverable, a failed one wastes the whole run.
+    if response.status_code >= 400 and "image" in instance:
+        log.error(
+            "Veo rejected the request (%s) with a first frame attached; retrying as "
+            "text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so "
+            "this clip will show whatever Veo invents. %s",
+            response.status_code,
+            response.text[:300],
+        )
+        instance.pop("image")
+        instance.pop("lastFrame", None)
+        response = await _submit()
+
+    if response.status_code >= 400:
+        log.error("Veo %s error body: %s", response.status_code, response.text[:1200])
+        raise UpstreamError(
+            f"Veo rejected the generation request ({response.status_code}).",
+            details=response.text[:800],
         )
 
-        info = await probe(generated.file)
+    operation = response.json()
+    name = operation.get("name")
+    if not name:
+        raise UpstreamError("Veo accepted the request but returned no operation name.", details=operation)
 
-        try:
-            await extract_poster(generated.file, poster, min(0.5, max(0.0, info.seconds / 2)))
-            poster_file, poster_url = await asyncio.to_thread(
-                persist_media, poster, project.id, "posters"
-            )
-        except Exception as error:  # noqa: BLE001 — a missing poster is cosmetic
-            log.warning("Poster extraction failed for scene %d: %s", scene.order, error)
-            poster_file = None
-            poster_url = None
-
-        if info.seconds < scene.seconds - 0.5:
-            log.warning(
-                "Scene %d came back at %.2fs for a %ds request; the renderer will hold the last "
-                "frame to fill the slot.",
-                scene.order, info.seconds, scene.seconds,
-            )
-
-        durable_file, durable_url = await asyncio.to_thread(
-            persist_media, generated.file, project.id, "clips"
-        )
-        await _patch_clip(
-            project.id,
-            scene_id,
-            status="ready",
-            progress=1.0,
-            actual_seconds=info.seconds,
-            file=durable_file,
-            url=durable_url,
-            poster_file=poster_file,
-            poster_url=poster_url,
-            operation=generated.operation,
-            error=None,
-            completed_at=now_iso(),
-        )
-
-        log.info("Scene %d ready (%.2fs).", scene.order, info.seconds)
-        refreshed = await require_project(project.id)
-        return next(clip for clip in refreshed.clips if clip.scene_id == scene_id)
-
-    except asyncio.CancelledError:
-        await _patch_clip(project.id, scene_id, status="idle", progress=0.0, error=None)
-        raise
-    except Exception as error:
-        await _patch_clip(
-            project.id,
-            scene_id,
-            status="failed",
-            progress=0.0,
-            error=str(error),
-            completed_at=now_iso(),
-        )
-        raise
+    log.info("Started %s generation (%ds, %s): %s", target_model, duration, aspect_ratio, name)
+    return name, target_model
 
 
-async def generate_all_clips(
-    project: Project, context: JobContext, *, force: bool = False
-) -> dict[str, int]:
-    """Generate every scene that is not already done, ``VEO_CONCURRENCY`` at a time.
+# ---------------------------------------------------------------------------
+# Poll
+# ---------------------------------------------------------------------------
 
-    One clip failing does not stop the others — the UI shows which one broke and
-    offers a retry, which is much better than losing eleven good generations.
-    """
-    story = selected_story(project)
 
-    by_scene = {clip.scene_id: clip for clip in project.clips}
-    pending = [
-        scene
-        for scene in story.scenes
-        if force or (by_scene.get(scene.id) is None or by_scene[scene.id].status != "ready")
-    ]
+async def poll_operation(name: str, on_progress: ProgressFn | None = None) -> dict[str, Any]:
+    key = _require_key()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.veo_poll_timeout_seconds
 
-    if not pending:
-        return {"ready": len(story.scenes), "failed": 0}
-
-    log.info(
-        "Generating %d clip(s) for project %s, %d at a time.",
-        len(pending), project.id, settings.veo_concurrency,
-    )
-
-    per_scene: dict[str, float] = {}
-
-    def publish() -> None:
-        done = sum(per_scene.values())
-        context.progress(
-            done / len(pending), f"{int(done)} of {len(pending)} clips generated"
-        )
-
-    async def run(scene: Scene, seed_frame: InlineAsset | None = None) -> Clip:
-        attempt = 0
+    async with httpx.AsyncClient(timeout=60.0) as client:
         while True:
-            attempt += 1
-            try:
-
-                async def track(fraction: float, _message: str) -> None:
-                    per_scene[scene.id] = fraction
-                    publish()
-
-                return await generate_scene_clip(
-                    project, scene.id, force=True, on_progress=track, seed_frame=seed_frame
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                if attempt >= settings.veo_max_attempts:
-                    raise
-                log.warning(
-                    "Scene %d failed on attempt %d; retrying. %s", scene.order, attempt, error
+            if loop.time() > deadline:
+                raise UpstreamError(
+                    f"Veo did not finish within {int(settings.veo_poll_timeout_seconds)}s. "
+                    f"Operation {name} is still running — raise VEO_POLL_TIMEOUT_SECONDS if this "
+                    "is normal for your quota."
                 )
 
-    if settings.veo_chain_keyframes:
-        return await _generate_chained(project, pending, run_scene=run, publish=publish)
+            await asyncio.sleep(settings.veo_poll_interval_seconds)
 
-    results = await map_with_concurrency(pending, settings.veo_concurrency, run)
-    failed = sum(1 for result in results if isinstance(result, BaseException))
+            response = await client.get(_api_url(name), headers={"x-goog-api-key": key})
 
-    return {"ready": len(pending) - failed, "failed": failed}
+            if response.status_code >= 400:
+                # A transient 5xx while polling should not kill a generation
+                # that is probably fine; only 4xx is fatal.
+                if response.status_code >= 500:
+                    log.warning("Polling %s returned %s; retrying.", name, response.status_code)
+                    continue
+                raise UpstreamError(
+                    f"Veo polling failed ({response.status_code}).", details=response.text[:600]
+                )
+
+            operation = response.json()
+
+            if operation.get("error"):
+                error = operation["error"]
+                raise UpstreamError(
+                    f"Veo generation failed: {error.get('message', 'unknown error')}", details=error
+                )
+
+            metadata = operation.get("metadata") or {}
+            percent = metadata.get("progressPercent")
+            if isinstance(percent, (int, float)):
+                await _report(on_progress, min(0.95, percent / 100), f"Rendering… {round(percent)}%")
+            else:
+                state = metadata.get("state")
+                await _report(
+                    on_progress, 0.5, f"Veo {state.lower()}…" if state else "Rendering…"
+                )
+
+            if operation.get("done"):
+                return operation
 
 
-async def _tail_frame(clip: Clip, work: Path) -> InlineAsset | None:
-    """The last frame of a finished clip, as a seed for the next one.
+def _extract_video_uri(operation: dict[str, Any]) -> str:
+    result = (operation.get("response") or {}).get("generateVideoResponse") or {}
+    samples = result.get("generatedSamples") or []
+    uri = (samples[0].get("video") or {}).get("uri") if samples else None
 
-    Sampled a beat before the true end: the final frame of a generated clip is
-    the one most likely to carry compression mush or the start of a fade, and
-    seeding the next shot with a smeared frame propagates the smear.
-    """
-    if not clip.file:
-        return None
-    try:
-        source = resolve_in_storage(clip.file)
-        info = await probe(source)
-        at = max(0.0, (info.seconds or 0.0) - 0.15)
-        frame = work / f"tail-{clip.scene_id}.jpg"
-        await extract_poster(source, frame, at)
-        return asset_from_image(frame)
-    except Exception as error:  # noqa: BLE001 — chaining is an optimisation
-        log.warning("Could not take a tail frame from %s: %s", clip.scene_id, error)
-        return None
+    if not uri:
+        filtered = result.get("raiMediaFilteredCount") or 0
+        if filtered:
+            reasons = "; ".join(result.get("raiMediaFilteredReasons") or []) or "no reason given"
+            raise UpstreamError(
+                f"Veo filtered the generation before it produced a clip ({reasons}). Rewrite the "
+                "scene prompt — usually it names a real person, a brand, or content the safety "
+                "filter blocks.",
+                details={"filtered": filtered, "reasons": reasons},
+            )
+        raise UpstreamError("Veo finished but returned no video.", details=operation.get("response"))
+
+    return uri
 
 
-async def _generate_chained(
-    project: Project,
-    pending: list[Scene],
+# ---------------------------------------------------------------------------
+# Download
+# ---------------------------------------------------------------------------
+
+
+async def download_video(uri: str, destination: Path) -> int:
+    key = _require_key()
+    ensure_dir(destination.parent)
+
+    # The URI is on a Google host and still requires the API key.
+    async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
+        response = await client.get(uri, headers={"x-goog-api-key": key})
+
+    if response.status_code >= 400:
+        raise UpstreamError(
+            f"Downloading the generated clip failed ({response.status_code}).",
+            details=response.text[:400],
+        )
+
+    payload = response.content
+    if not payload:
+        raise UpstreamError("The generated clip downloaded as an empty file.")
+
+    destination.write_bytes(payload)
+    return len(payload)
+
+
+# ---------------------------------------------------------------------------
+# The whole round trip
+# ---------------------------------------------------------------------------
+
+
+async def generate_clip(
+    destination: Path,
     *,
-    run_scene,
-    publish,
-) -> dict[str, int]:
-    """Generate clips in story order, each seeded with the previous tail frame.
+    prompt: str,
+    seconds: int,
+    aspect_ratio: VeoAspectRatio,
+    negative_prompt: str | None = None,
+    model: str | None = None,
+    first_frame: InlineAsset | None = None,
+    reference_images: list[InlineAsset] | None = None,
+    on_progress: ProgressFn | None = None,
+) -> GeneratedClip:
+    await _report(on_progress, 0.05, "Submitting to Veo…")
 
-    Serial by necessity — clip N+1 cannot start until N has produced a frame.
-    That is the cost of the feature, and it is why it is off by default.
+    operation, used_model = await start_generation(
+        prompt=prompt,
+        seconds=seconds,
+        aspect_ratio=aspect_ratio,
+        negative_prompt=negative_prompt,
+        model=model,
+        first_frame=first_frame,
+        reference_images=reference_images,
+    )
 
-    A failure breaks the chain but not the run: the next scene simply starts
-    from its own keyframe, which is exactly the behaviour without chaining.
+    async def relay(fraction: float, message: str) -> None:
+        await _report(on_progress, 0.05 + fraction * 0.8, message)
+
+    finished = await poll_operation(operation, relay)
+
+    await _report(on_progress, 0.9, "Downloading clip…")
+    size = await download_video(_extract_video_uri(finished), destination)
+
+    await _report(on_progress, 1.0, "Clip ready.")
+    log.info("Downloaded %.1fMB to %s", size / 1_048_576, destination.name)
+
+    return GeneratedClip(file=destination, bytes=size, operation=operation, model=used_model)
+
+
+# ---------------------------------------------------------------------------
+# Extend
+# ---------------------------------------------------------------------------
+
+
+async def extend_clip(
+    source_mp4: Path,
+    prompt: str,
+    destination: Path,
+    *,
+    aspect_ratio: VeoAspectRatio = "16:9",
+    model: str | None = None,
+) -> GeneratedClip:
+    """Continue a Veo-produced clip by roughly ``VEO_EXTEND_SECONDS``.
+
+    Not used by the main pipeline: extension carries the previous shot's motion
+    forward, which is what you want for one continuous take and precisely what
+    you do not want for a cut sequence with distinct framings per beat. It also
+    serialises — twelve extensions is twelve round trips end to end, where
+    twelve independent segments run three at a time.
+
+    Kept because it is the right tool for a future "one continuous take" mode,
+    and because it is the only way past 8 seconds without a cut.
     """
-    ordered = sorted(pending, key=lambda scene: scene.order)
-    work = Path(work_dir(project.id)) / "chain"
-    ensure_dir(work)
+    encoded = base64.b64encode(source_mp4.read_bytes()).decode("ascii")
 
-    log.info("Chaining %d clip(s) for project %s in story order.", len(ordered), project.id)
+    operation, used_model = await start_generation(
+        prompt=prompt,
+        seconds=settings.veo_max_clip_seconds,
+        aspect_ratio=aspect_ratio,
+        model=model,
+        video=InlineAsset(mime_type="video/mp4", data=encoded),
+    )
 
-    ready = 0
-    failed = 0
-    seed: InlineAsset | None = None
-
-    for scene in ordered:
-        try:
-            clip = await run_scene(scene, seed_frame=seed)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:  # noqa: BLE001 — one bad clip must not stop the film
-            log.warning("Scene %d failed; the chain restarts from scene %d. %s",
-                        scene.order, scene.order + 1, error)
-            failed += 1
-            seed = None
-            continue
-
-        ready += 1
-        seed = await _tail_frame(clip, work)
-        publish()
-
-    return {"ready": ready, "failed": failed}
+    finished = await poll_operation(operation)
+    size = await download_video(_extract_video_uri(finished), destination)
+    return GeneratedClip(file=destination, bytes=size, operation=operation, model=used_model)
