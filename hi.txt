@@ -1,361 +1,689 @@
-"""Decompose a raw brief before anything else reads it.
-
-The pipeline used to treat the brief as one opaque string and hand it to the
-scene writer whole. That is the root of several unrelated-looking failures:
-
-  * "On-Screen Text: A new horizon awaits." reached Veo as an instruction to
-    render type, and came back as "A new horizon awasts."
-  * "4K HDR" was silently ignored, because nothing in the pipeline is allowed
-    to say "no".
-  * Music direction competed for the scene writer's attention with camera
-    direction, and neither the composer nor Veo ever saw it.
-
-Splitting the brief is what lets each of those go to the right place — or be
-refused out loud. Only ``intent`` is ever allowed into a prompt.
-"""
-
 from __future__ import annotations
 
-import re
+import asyncio
+import json
+from typing import Any, Callable, Literal
 
-from ..brand import brand_system_block
-from ..domain.models import BriefAnalysis, EndCard, SuperSpec
-from ..logging_setup import get_logger
-from .llm import ChatMessage, chat_json
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-log = get_logger("brief")
-
-#: Headings a human writes above the copy they want burnt in. Matching these is
-#: the deterministic fallback for when no model is configured — crude, but it
-#: catches the common shape and is better than passing copy through to Veo.
-_COPY_HEADING = re.compile(
-    r"^\s*(?:on[- ]screen\s+text|on[- ]screen\s+copy|supers?|captions?|titles?|"
-    r"text\s+overlay|end\s?card|final\s+frame|copy)\s*[:\-]?\s*$",
-    re.IGNORECASE | re.MULTILINE,
+from ..config import settings
+from ..domain.duration import default_pacing, plan_duration
+from ..domain.models import (
+    AspectRatio,
+    BriefAnalysis,
+    EndCard,
+    Pacing,
+    Project,
+    ProjectBrief,
+    RenderResult,
+    StylePreset,
+    TransitionStyle,
+)
+from ..errors import BadRequest, NotFound
+from ..ids import short_id
+from ..owner import current_owner_id, require_video_owner
+from ..services.audio import generate_track, save_uploaded_track, suggest_tracks
+from ..services.brief import analyse_brief
+from ..services.clips import generate_all_clips, generate_scene_clip, selected_story, sync_clips
+from ..services.jobs import JobContext, cancel_job, start_job
+from ..services.render import render_project
+from ..services.store import (
+    create_project,
+    delete_project,
+    get_job,
+    list_jobs,
+    list_projects,
+    require_project,
+    subscribe,
+    unsubscribe,
+    update_project,
+)
+from ..services.storyboard import (
+    generate_scenes,
+    generate_treatments,
+    regenerate_treatment,
+    rewrite_scene,
 )
 
-#: A brief specifies an end card with a *heading* — a line that opens a section,
-#: the same shape as "On-Screen Text". Anchoring to that rather than to the
-#: words anywhere in the text is what separates a brief asking for a closing
-#: frame from a brief talking about one.
-#:
-#: Keyword matching fails here, and fails on the one brief that matters:
-#: `generic_test_2.txt` says "no end card" *and* "if the brief parser invents
-#: supers or an end card here". Negation handling catches the first and not the
-#: second, so the loudest warning in this module would fire on the brief written
-#: to prove the parser is not pattern-matching. Structure has no such problem.
-#:
-#: Used only to catch the split disagreeing with an obvious signal — never to
-#: build an end card, because inventing one the brief did not ask for is the
-#: failure in the other direction.
-_END_CARD_HEADING = re.compile(
-    r"^[ \t]*(?:end\s?card|final\s+frame|closing\s+frame|logo\s+(?:reveal|lockup))"
-    r"[ \t]*(?::.*)?$",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
-#: The heading form above is how a *structured* brief specifies an end card. A
-#: prose brief asks in a sentence instead — "End with a strong IndiGo-branded
-#: call-to-action", "close on the logo". The heading pattern is blind to those,
-#: which reopens the silent-no-mark failure through a different door: the split
-#: returns enabled=false, nothing warns, and the film ships without the mark.
-#:
-#: Deliberately narrow — a closing verb AND a brand/CTA object inside one clause.
-#: "Ends on the scarf trailing forward" has the verb and no object; "the logo on
-#: her bag" has the object and no closing verb. Neither fires.
-_END_CARD_PROSE = re.compile(
-    r"\b(?:end|ends|ending|close|closes|closing|finish|finishes|final|last)\b"
-    r"[^.\n]{0,80}?"
-    r"\b(?:call[- ]to[- ]action|cta|logo|lockup|wordmark|end\s?card|final\s+frame|"
-    r"brand(?:ed|ing)?\s+(?:frame|card|sign[- ]?off|moment))\b",
-    re.IGNORECASE,
-)
-
-#: A brief that rules an end card out names the same words in order to forbid
-#: them. Suppressing the warning is the safe direction: this signal only ever
-#: makes a warning louder, and firing it on the brief that said "no end card" is
-#: how a check trains people to ignore it.
-_NO_END_CARD = re.compile(
-    r"\b(?:no|without|avoid|skip|omit|never|exclude)\b[^.\n]{0,40}?"
-    r"\b(?:end\s?card|logo|lockup|wordmark|call[- ]to[- ]action|cta)\b",
-    re.IGNORECASE,
+router = APIRouter(
+    prefix="/api/v1/video",
+    tags=["video"],
+    dependencies=[Depends(require_video_owner)],
 )
 
 
-def _asks_for_end_card(raw: str) -> bool:
-    """True when the brief asks for a closing brand frame, as heading or prose."""
-    if _NO_END_CARD.search(raw):
-        return False
-    return bool(_END_CARD_HEADING.search(raw) or _END_CARD_PROSE.search(raw))
+# ---------------------------------------------------------------------------
+# Request bodies
+# ---------------------------------------------------------------------------
 
 
-#: Asks that read as achievable but are not, on this pipeline. Kept short and
-#: specific: a false positive here tells the user "no" about something we could
-#: in fact do, which is worse than staying quiet.
-_UNSUPPORTED = (
-    (re.compile(r"\b(?:4k|uhd|2160p|8k)\b", re.IGNORECASE),
-     "4K/8K delivery — Veo renders at 1080p maximum. The film will be 1080p."),
-    (re.compile(r"\bhdr\b|\bdolby\s+vision\b", re.IGNORECASE),
-     "HDR — Veo output is SDR. The grade will be delivered in SDR."),
-    (re.compile(r"\b(?:60|120)\s?fps\b", re.IGNORECASE),
-     "High frame rate — clips are conformed to the project frame rate."),
-)
+class BriefBody(BaseModel):
+    brief: str = Field(min_length=8)
+    seconds: int = Field(ge=4)
+    style: StylePreset = "cinematic"
+    ratio: AspectRatio = "16:9"
+    pacing: Pacing | None = None
+    references: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    language: str = "English"
+    transition: TransitionStyle = "hardcut"
+    quality: Literal["standard", "draft"] = "standard"
 
-#: An aspect the brief asks for in words. The split *removes* aspect direction
-#: from intent, which is right — it is not something a scene writer acts on —
-#: but nothing was applying it either, so a brief asking for a 9:16 Reel
-#: rendered 16:9 and only the finished film said so.
-_ASPECT_ASK = re.compile(
-    r"\b(9\s?[:x]\s?16|16\s?[:x]\s?9|1\s?[:x]\s?1|4\s?[:x]\s?5)\b|"
-    r"\b(vertical|portrait|landscape|square)\b(?:\s+(?:video|format|film|reel|frame))?|"
-    r"\b(?:instagram\s+)?(reels?|stor(?:y|ies)|shorts?|tiktok)\b",
-    re.IGNORECASE,
-)
-
-#: How the words map onto a project ratio, for the mismatch warning only. The
-#: ratio stays the project's own field — inferring it from prose and silently
-#: overriding what the user picked is the failure in the other direction.
-_ASPECT_WORDS = {
-    "9:16": "9:16", "9x16": "9:16", "vertical": "9:16", "portrait": "9:16",
-    "reel": "9:16", "reels": "9:16", "story": "9:16", "stories": "9:16",
-    "short": "9:16", "shorts": "9:16", "tiktok": "9:16",
-    "16:9": "16:9", "16x9": "16:9", "landscape": "16:9",
-    "1:1": "1:1", "1x1": "1:1", "square": "1:1",
-    "4:5": "4:5", "4x5": "4:5",
-}
-
-
-def _asked_aspect(raw: str) -> str | None:
-    """The delivery ratio the brief asks for in words, if it names one.
-
-    Reads the capture groups, not the whole match: the alternations carry
-    optional trailing nouns ("square *format*", "Instagram *Reel*") so group(0)
-    is not the token to look up.
-    """
-    for match in _ASPECT_ASK.finditer(raw):
-        token = next((group for group in match.groups() if group), None)
-        if not token:
-            continue
-        key = re.sub(r"\s", "", token).lower()
-        if key in _ASPECT_WORDS:
-            return _ASPECT_WORDS[key]
-    return None
-
-
-_SYSTEM = """\
-You split an advertising brief into parts that go to different systems. You do \
-not write, improve, critique or expand the brief. You sort it.
-
-Return JSON with exactly these keys:
-
-  intent      string. The creative brief: story, subject, mood, setting, casting, \
-camera and grade direction. Everything a director needs and nothing else. \
-Remove on-screen copy, duration/resolution/aspect specification, music \
-direction, and prohibition lists — those are captured separately below. Keep \
-the user's own wording wherever you can; you are deleting, not rewriting.
-
-  supers      array. Every piece of text the VIEWER READS ON SCREEN. Each item: \
-{"text": string, "start": number, "end": number, "position": one of \
-"upper-left"|"upper-centre"|"lower-left"|"lower-centre"|"centre"}. If the brief \
-gives timings, use them. If it gives a range like "0-10 sec", use it. If it \
-gives no timing, distribute the lines evenly across the runtime. Copy the text \
-EXACTLY as written, including capitalisation. Do not invent copy that is not \
-in the brief. Empty array if the brief asks for no on-screen text.
-POSITION: unless the brief actually specifies placement, use "upper-left". \
-Narrative supers sit in a corner so they do not cover the face or the action; \
-dead-centre type over a subject is what an amateur edit looks like. Reserve \
-"centre" for the end card, which is handled separately below.
-
-  endCard     object. The closing brand frame, if the brief describes one: \
-{"enabled": bool, "headline": string|null, "subline": string|null, \
-"mark": "wordmark"|"icon"|"none", "seconds": number}. A "final frame" or "logo \
-reveal" instruction belongs here, not in supers. enabled=false if absent.
-
-  avoid       array of strings. Things the brief says must NOT appear. Split a \
-comma-separated negative prompt into individual items.
-
-  music       string or null. Music and sound-design direction, verbatim.
-
-Rules:
-- Text a CHARACTER reads (a sign, a boarding pass, a phone screen) is NOT a \
-super. It stays in intent. Supers are only what is composited over the picture.
-- Never put copy in both intent and supers.
-- If the brief contains no on-screen text at all, supers is [] and endCard.enabled \
-is false. Do not helpfully invent an end card.
-"""
-
-
-def _fallback(raw: str, ratio: str | None = None) -> BriefAnalysis:
-    """Split the brief without a model.
-
-    Cuts at the first copy heading and treats everything above it as intent.
-    Crude, and it does not recover timings — but it stops copy reaching Veo,
-    which is the failure that matters.
-    """
-    match = _COPY_HEADING.search(raw)
-    intent = raw[: match.start()].strip() if match else raw.strip()
-    if match:
-        log.info("No model configured; split the brief at %r.", match.group(0).strip())
-    # This path recovers no timings, so it yields no supers and no end card. It
-    # keeps copy away from Veo, which is the failure that matters — but the film
-    # then renders with no burnt-in copy and no brand mark, and that is worth
-    # saying rather than discovering in the deliverable.
-    log.warning(
-        "Falling back to a heading split: this film will have NO supers and NO "
-        "end card. Check that Azure is configured and reachable."
-    )
-    # The cut only protects a brief that *has* a heading. A prose brief has none,
-    # so the whole thing — quoted campaign copy included — becomes intent and
-    # reaches the scene writer. That copy then gets generated into the picture
-    # AND composited over it, if the split is later rerun successfully.
-    if not match:
-        log.warning(
-            "No copy heading found, so the entire brief became intent. Any quoted "
-            "on-screen copy in it will reach the scene writer. Give the brief an "
-            "'On-screen text:' heading, or fix Azure so the split can run."
+    def to_brief(self) -> ProjectBrief:
+        return ProjectBrief(
+            brief=self.brief.strip(),
+            seconds=self.seconds,
+            style=self.style,
+            ratio=self.ratio,
+            pacing=self.pacing or default_pacing(self.style),
+            references=self.references,
+            avoid=self.avoid,
+            language=self.language,
         )
-    return BriefAnalysis(intent=intent or raw.strip(), unsupported=_unsupported_in(raw, ratio))
 
 
-def _unsupported_in(raw: str, ratio: str | None = None) -> list[str]:
-    notes = [note for pattern, note in _UNSUPPORTED if pattern.search(raw)]
-    asked = _asked_aspect(raw)
-    if asked and ratio and asked != ratio:
-        notes.append(
-            f"The brief asks for {asked} but this project is set to {ratio}. Aspect comes "
-            f"from the project, not the brief — set it to {asked} before generating clips, "
-            f"or the film will be delivered {ratio}."
-        )
-    return notes
+class BriefPatch(BaseModel):
+    brief: str | None = None
+    seconds: int | None = Field(default=None, ge=4)
+    style: StylePreset | None = None
+    ratio: AspectRatio | None = None
+    pacing: Pacing | None = None
+    references: list[str] | None = None
+    avoid: list[str] | None = None
+    language: str | None = None
+    transition: TransitionStyle | None = None
 
 
-_POSITIONS = frozenset(
-    {"upper-left", "upper-centre", "lower-left", "lower-centre", "centre"}
-)
+class SelectStoryBody(BaseModel):
+    storyId: str
 
 
-def _coerce_supers(items: object, seconds: int) -> list[SuperSpec]:
-    """Build ``SuperSpec``s from model output, dropping anything malformed.
-
-    A super with a broken time window is worse than a missing one: it either
-    never appears or sits on screen for the whole film.
-    """
-    if not isinstance(items, list):
-        return []
-
-    supers: list[SuperSpec] = []
-    for entry in items:
-        if not isinstance(entry, dict):
-            continue
-        text = str(entry.get("text") or "").strip()
-        if not text:
-            continue
-        try:
-            start = max(0.0, float(entry.get("start", 0)))
-            end = min(float(seconds), float(entry.get("end", 0)))
-        except (TypeError, ValueError):
-            continue
-        if end <= start:
-            continue
-        position = entry.get("position")
-        supers.append(
-            SuperSpec(
-                text=text,
-                start=start,
-                end=end,
-                position=position if position in _POSITIONS else "upper-left",  # type: ignore[arg-type]
-            )
-        )
-    return supers
+class ScenePatch(BaseModel):
+    prompt: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    negativePrompt: str | None = None
+    transitionOut: TransitionStyle | None = None
 
 
-#: The model is asked for `endCard`, but a JSON-mode model asked for one
-#: camelCase key among four lowercase ones returns `end_card` often enough to
-#: matter. Reading only the documented spelling turns that into a silently
-#: disabled end card — no lockup, no closing copy, no error. The key is the
-#: on/off switch for the entire brand mark, so it accepts every spelling.
-_END_CARD_KEYS = ("endCard", "end_card", "endcard", "end card")
+class RewriteBody(BaseModel):
+    instruction: str = ""
 
 
-def _end_card_payload(payload: dict) -> object:
-    for key in _END_CARD_KEYS:
-        if key in payload:
-            return payload[key]
-    return None
+class TrackPatch(BaseModel):
+    selected: bool | None = None
+    gain: float | None = Field(default=None, ge=0, le=2)
+    prompt: str | None = None
+    label: str | None = None
 
 
-def _coerce_end_card(value: object) -> EndCard:
-    if not isinstance(value, dict) or not value.get("enabled"):
-        return EndCard(enabled=False)
-    mark = value.get("mark")
-    return EndCard(
-        enabled=True,
-        headline=(str(value["headline"]).strip() if value.get("headline") else None),
-        subline=(str(value["subline"]).strip() if value.get("subline") else None),
-        mark=mark if mark in {"wordmark", "icon", "none"} else "wordmark",
-        seconds=float(value.get("seconds") or 4.0),
-    )
+# ---------------------------------------------------------------------------
+# Planning — no key required, so the UI can show the real clip count up front
+# ---------------------------------------------------------------------------
 
 
-async def analyse_brief(raw: str, *, seconds: int, ratio: str | None = None) -> BriefAnalysis:
-    """Split a raw brief into intent, copy, constraints and refusals.
+@router.get("/plan")
+async def get_plan(
+    seconds: float = Query(default=30),
+    style: str = Query(default="cinematic"),
+    pacing: Pacing | None = Query(default=None),
+) -> dict[str, Any]:
+    resolved = pacing or default_pacing(style)
+    plan = plan_duration(seconds, resolved)
 
-    Falls back to a deterministic split when no model is configured, so the
-    pipeline still boots and still keeps copy away from Veo.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return BriefAnalysis(intent="")
-
-    messages: list[ChatMessage] = [
-        {"role": "system", "content": _SYSTEM + brand_system_block(safety_only=True)},
-        {
-            "role": "user",
-            "content": f"Runtime: {seconds} seconds.\n\n--- BRIEF ---\n{raw}\n--- END ---",
+    return {
+        "plan": plan.model_dump(by_alias=True, mode="json"),
+        "limits": {
+            "maxClipSeconds": settings.veo_max_clip_seconds,
+            "allowedClipSeconds": settings.allowed_clip_seconds,
+            "maxVideoSeconds": settings.max_video_seconds,
+            "maxSegments": settings.max_segments,
         },
-    ]
+    }
 
-    try:
-        payload = await chat_json(messages)
-    except Exception as error:  # noqa: BLE001 - any upstream failure degrades the same way
-        log.warning("Brief analysis failed, falling back to a heading split. %s", error)
-        return _fallback(raw, ratio)
 
-    if not isinstance(payload, dict):
-        return _fallback(raw, ratio)
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
 
-    intent = str(payload.get("intent") or "").strip()
-    if not intent:
-        log.warning("Brief analysis returned no intent; keeping the raw brief.")
-        intent = raw
 
-    avoid = [str(item).strip() for item in payload.get("avoid") or [] if str(item).strip()]
-    music = payload.get("music")
+@router.get("/projects")
+async def get_projects() -> dict[str, Any]:
+    projects = await list_projects()
+    return {
+        "projects": [
+            {
+                "id": project.id,
+                "createdAt": project.created_at,
+                "brief": project.brief.brief[:140],
+                "seconds": project.plan.target_seconds,
+                "segments": len(project.plan.segments),
+                "render": project.render.status,
+            }
+            for project in projects
+        ]
+    }
 
-    analysis = BriefAnalysis(
-        intent=intent,
-        supers=_coerce_supers(payload.get("supers"), seconds),
-        end_card=_coerce_end_card(_end_card_payload(payload)),
-        avoid=avoid,
-        unsupported=_unsupported_in(raw, ratio),
-        music=str(music).strip() if music else None,
+
+def _apply_analysis(analysis: BriefAnalysis) -> Callable[[Project], Project]:
+    """Distribute a brief analysis across the project.
+
+    Each part lands where the system that needs it will look: intent on the
+    brief for the prompt layer, supers and end card on the project for the
+    compositor, music on the brief for the composer.
+    """
+
+    def mutate(current: Project) -> Project:
+        current.brief.intent = analysis.intent
+        current.brief.unsupported = analysis.unsupported
+        current.brief.music_direction = analysis.music
+        # dict.fromkeys de-duplicates while keeping the user's ordering first.
+        current.brief.avoid = list(dict.fromkeys([*current.brief.avoid, *analysis.avoid]))
+        current.supers = analysis.supers
+        current.end_card = analysis.end_card
+        return current
+
+    return mutate
+
+
+@router.post("/projects", status_code=201)
+async def post_project(body: BriefBody) -> dict[str, Any]:
+    brief = body.to_brief()
+    plan = plan_duration(brief.seconds, brief.pacing)
+
+    project = Project(
+        id=short_id("vid"),
+        ownerId=current_owner_id(),
+        brief=brief,
+        plan=plan,
+        transition=body.transition,
+        model=settings.veo_fast_model if body.quality == "draft" else settings.veo_model,
     )
+    await create_project(project)
 
-    log.info(
-        "Brief split: intent %d chars (from %d), %d super(s), end card %s, %d unsupported.",
-        len(analysis.intent), len(raw), len(analysis.supers),
-        "on" if analysis.end_card.enabled else "off", len(analysis.unsupported),
+    # Kick the treatments off immediately — the UI shows a spinner on the cards.
+    async def work(context: JobContext) -> dict[str, int]:
+        # Split the brief before anything reads it. The scene writer must never
+        # see on-screen copy, or it will ask Veo to spell.
+        context.progress(0.05, "Reading the brief…")
+        analysis = await analyse_brief(brief.brief, seconds=brief.seconds, ratio=brief.ratio)
+        analysed = await update_project(project.id, _apply_analysis(analysis))
+
+        context.progress(0.2, "Writing director treatments…")
+        stories = await generate_treatments(analysed.brief, plan)
+
+        def mutate(current: Project) -> Project:
+            current.stories = stories
+            current.selected_story_id = stories[0].id if stories else None
+            return current
+
+        await update_project(project.id, mutate)
+        return {"stories": len(stories)}
+
+    job = start_job(project.id, "storyboard", work, message="Reading the brief…")
+    return {"project": project.dump(), "jobId": job.id}
+
+
+@router.get("/projects/{project_id}")
+async def get_one_project(project_id: str) -> dict[str, Any]:
+    project = await require_project(project_id)
+    return {"project": project.dump(), "jobs": [job.dump() for job in list_jobs(project_id)]}
+
+
+@router.delete("/projects/{project_id}")
+async def remove_project(project_id: str) -> dict[str, bool]:
+    await require_project(project_id)
+    await delete_project(project_id)
+    return {"ok": True}
+
+
+@router.patch("/projects/{project_id}")
+async def patch_project(project_id: str, body: BriefPatch) -> dict[str, Any]:
+    """Changing the brief re-plans the segments and invalidates the storyboard."""
+    existing = await require_project(project_id)
+    changes = body.model_dump(exclude_none=True)
+
+    merged = existing.brief.model_copy(
+        update={key: value for key, value in changes.items() if key != "transition"}
     )
+    if body.style and not body.pacing:
+        merged.pacing = default_pacing(body.style)
 
-    # A disabled end card is indistinguishable from a brief that asked for none,
-    # and it silently removes the brand mark from the film — the render just
-    # skips compositing and nothing anywhere says so. When the brief plainly
-    # asks for one and the split disagrees, say it out loud.
-    if not analysis.end_card.enabled and _asks_for_end_card(raw):
-        log.warning(
-            "The brief asks for an end card but the split returned enabled=false — "
-            "the film will render with NO brand mark. Model returned keys: %s.",
-            ", ".join(sorted(payload)) or "(none)",
+    duration_changed = (
+        merged.seconds != existing.brief.seconds or merged.pacing != existing.brief.pacing
+    )
+    plan = plan_duration(merged.seconds, merged.pacing) if duration_changed else existing.plan
+
+    # New brief text means the old split no longer describes it. A stale
+    # `intent` is worse than none: the prompt layer would keep quoting the
+    # previous brief while the supers came from the new one.
+    text_changed = merged.brief != existing.brief.brief
+    if text_changed:
+        merged.intent = ""
+        merged.unsupported = []
+        merged.music_direction = None
+
+    def mutate(current: Project) -> Project:
+        current.brief = merged
+        current.plan = plan
+        if body.transition:
+            current.transition = body.transition
+        if text_changed:
+            current.supers = []
+            current.end_card = EndCard(enabled=False)
+        if duration_changed or text_changed:
+            # A new segment count or a new brief makes the scene list meaningless.
+            for story in current.stories:
+                story.scenes = []
+            current.clips = []
+        return current
+
+    project = await update_project(project_id, mutate)
+
+    if text_changed:
+        analysis = await analyse_brief(merged.brief, seconds=merged.seconds, ratio=merged.ratio)
+        project = await update_project(project_id, _apply_analysis(analysis))
+
+    return {"project": project.dump()}
+
+
+# ---------------------------------------------------------------------------
+# Storyboard
+# ---------------------------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/stories", status_code=202)
+async def post_stories(project_id: str) -> dict[str, str]:
+    project = await require_project(project_id)
+
+    async def work(context: JobContext) -> dict[str, int]:
+        context.progress(0.1, "Writing director treatments…")
+        stories = await generate_treatments(project.brief, project.plan)
+
+        def mutate(current: Project) -> Project:
+            current.stories = stories
+            current.selected_story_id = stories[0].id if stories else None
+            current.clips = []
+            return current
+
+        await update_project(project_id, mutate)
+        return {"stories": len(stories)}
+
+    return {"jobId": start_job(project_id, "storyboard", work).id}
+
+
+@router.post("/projects/{project_id}/stories/{story_id}/regenerate", status_code=202)
+async def post_regenerate_story(project_id: str, story_id: str) -> dict[str, str]:
+    project = await require_project(project_id)
+    if not any(story.id == story_id for story in project.stories):
+        raise NotFound(f"Story {story_id} not found.")
+
+    async def work(context: JobContext) -> dict[str, str]:
+        context.progress(0.2, "Finding a different direction…")
+        replacement = await regenerate_treatment(
+            project.brief, project.plan, project.stories, story_id
         )
-    return analysis
+
+        def mutate(current: Project) -> Project:
+            current.stories = [
+                replacement if story.id == story_id else story for story in current.stories
+            ]
+            if current.selected_story_id == story_id:
+                current.clips = []
+            return current
+
+        await update_project(project_id, mutate)
+        return {"storyId": story_id}
+
+    return {"jobId": start_job(project_id, "storyboard", work, target_id=story_id).id}
+
+
+@router.post("/projects/{project_id}/stories/{story_id}/scenes", status_code=202)
+async def post_scenes(project_id: str, story_id: str) -> dict[str, str]:
+    """Write the scene-by-scene prompts for one story."""
+    project = await require_project(project_id)
+    story = next((candidate for candidate in project.stories if candidate.id == story_id), None)
+    if story is None:
+        raise NotFound(f"Story {story_id} not found.")
+
+    async def work(context: JobContext) -> dict[str, Any]:
+        written, repair_passes = await generate_scenes(
+            project.brief,
+            project.plan,
+            story,
+            lambda fraction, message: context.progress(fraction, message),
+        )
+
+        def mutate(current: Project) -> Project:
+            current.stories = [
+                written if candidate.id == story_id else candidate for candidate in current.stories
+            ]
+            current.clips = sync_clips(current)
+            return current
+
+        await update_project(project_id, mutate)
+        return {
+            "storyId": story_id,
+            "scenes": len(written.scenes),
+            "audit": written.audit.model_dump(by_alias=True, mode="json"),
+            "repairPasses": repair_passes,
+        }
+
+    job = start_job(
+        project_id,
+        "storyboard",
+        work,
+        target_id=story_id,
+        message=f"Writing {len(project.plan.segments)} scene prompts…",
+    )
+    return {"jobId": job.id}
+
+
+@router.post("/projects/{project_id}/select-story")
+async def post_select_story(project_id: str, body: SelectStoryBody) -> dict[str, Any]:
+    project = await require_project(project_id)
+    if not any(story.id == body.storyId for story in project.stories):
+        raise NotFound(f"Story {body.storyId} not found.")
+
+    def mutate(current: Project) -> Project:
+        current.selected_story_id = body.storyId
+        current.clips = sync_clips(current)
+        return current
+
+    updated = await update_project(project_id, mutate)
+    return {"project": updated.dump()}
+
+
+@router.patch("/projects/{project_id}/scenes/{scene_id}")
+async def patch_scene(project_id: str, scene_id: str, body: ScenePatch) -> dict[str, Any]:
+    """Direct edit of a scene prompt from the storyboard drawer."""
+    changes = body.model_dump(exclude_none=True)
+    field_map = {
+        "prompt": "prompt",
+        "title": "title",
+        "summary": "summary",
+        "negativePrompt": "negative_prompt",
+        "transitionOut": "transition_out",
+    }
+    update = {field_map[key]: value for key, value in changes.items()}
+
+    def mutate(current: Project) -> Project:
+        for story in current.stories:
+            story.scenes = [
+                scene.model_copy(update=update) if scene.id == scene_id else scene
+                for scene in story.scenes
+            ]
+        if "prompt" in update:
+            # An edited prompt means the existing clip no longer matches the scene.
+            current.clips = [
+                clip.model_copy(update={"status": "idle", "progress": 0.0, "error": None})
+                if clip.scene_id == scene_id
+                else clip
+                for clip in current.clips
+            ]
+        return current
+
+    project = await update_project(project_id, mutate)
+    return {"project": project.dump()}
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/rewrite", status_code=202)
+async def post_rewrite_scene(project_id: str, scene_id: str, body: RewriteBody) -> dict[str, str]:
+    project = await require_project(project_id)
+    story = selected_story(project)
+    scene = next((candidate for candidate in story.scenes if candidate.id == scene_id), None)
+    if scene is None:
+        raise NotFound(f"Scene {scene_id} not found in the selected story.")
+
+    async def work(context: JobContext) -> dict[str, str]:
+        context.progress(0.3, "Rewriting the scene…")
+        rewritten = await rewrite_scene(project.brief, story, scene, body.instruction)
+
+        def mutate(current: Project) -> Project:
+            for candidate in current.stories:
+                if candidate.id != story.id:
+                    continue
+                candidate.scenes = [
+                    rewritten if existing.id == scene_id else existing
+                    for existing in candidate.scenes
+                ]
+            current.clips = [
+                clip.model_copy(update={"status": "idle", "progress": 0.0, "error": None})
+                if clip.scene_id == scene_id
+                else clip
+                for clip in current.clips
+            ]
+            return current
+
+        await update_project(project_id, mutate)
+        return {"sceneId": scene_id}
+
+    return {"jobId": start_job(project_id, "storyboard", work, target_id=scene_id).id}
+
+
+# ---------------------------------------------------------------------------
+# Clips
+# ---------------------------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/clips/generate-all", status_code=202)
+async def post_generate_all(project_id: str, force: bool = Query(default=False)) -> dict[str, str]:
+    project = await require_project(project_id)
+    selected_story(project)  # fail fast with a clear message
+
+    async def work(context: JobContext) -> dict[str, int]:
+        fresh = await require_project(project_id)
+        return await generate_all_clips(fresh, context, force=force)
+
+    job = start_job(
+        project_id,
+        "clips",
+        work,
+        message=f"Generating {len(project.plan.segments)} clips…",
+    )
+    return {"jobId": job.id}
+
+
+@router.post("/projects/{project_id}/clips/{scene_id}/generate", status_code=202)
+async def post_generate_clip(project_id: str, scene_id: str) -> dict[str, str]:
+    await require_project(project_id)
+
+    async def work(context: JobContext) -> dict[str, Any]:
+        fresh = await require_project(project_id)
+        clip = await generate_scene_clip(
+            fresh,
+            scene_id,
+            force=True,
+            on_progress=lambda fraction, message: context.progress(fraction, message),
+        )
+        return clip.model_dump(by_alias=True, mode="json")
+
+    return {"jobId": start_job(project_id, "clip", work, target_id=scene_id).id}
+
+
+# ---------------------------------------------------------------------------
+# Audio
+# ---------------------------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/audio/suggest", status_code=202)
+async def post_audio_suggest(project_id: str) -> dict[str, str]:
+    project = await require_project(project_id)
+    story = selected_story(project)
+
+    async def work(context: JobContext) -> dict[str, int]:
+        context.progress(0.3, "Writing music direction…")
+        tracks = await suggest_tracks(project.brief, story, project.plan.target_seconds)
+
+        def mutate(current: Project) -> Project:
+            # Uploaded tracks survive a re-suggest; generated ideas are replaced.
+            current.audio = [
+                track for track in current.audio if track.source == "uploaded"
+            ] + tracks
+            return current
+
+        await update_project(project_id, mutate)
+        return {"tracks": len(tracks)}
+
+    return {"jobId": start_job(project_id, "audio", work).id}
+
+
+@router.post("/projects/{project_id}/audio/{track_id}/generate", status_code=202)
+async def post_audio_generate(project_id: str, track_id: str) -> dict[str, str]:
+    await require_project(project_id)
+
+    async def work(context: JobContext) -> dict[str, Any]:
+        context.progress(0.2, "Generating audio…")
+        fresh = await require_project(project_id)
+        track = await generate_track(fresh, track_id)
+        return track.model_dump(by_alias=True, mode="json")
+
+    return {"jobId": start_job(project_id, "audio", work, target_id=track_id).id}
+
+
+@router.patch("/projects/{project_id}/audio/{track_id}")
+async def patch_audio(project_id: str, track_id: str, body: TrackPatch) -> dict[str, Any]:
+    changes = body.model_dump(exclude_none=True)
+
+    def mutate(current: Project) -> Project:
+        target = next((track for track in current.audio if track.id == track_id), None)
+        if target is None:
+            return current
+
+        updated = []
+        for track in current.audio:
+            if track.id == track_id:
+                patch = dict(changes)
+                # Editing the prompt invalidates the rendered audio.
+                if (
+                    "prompt" in patch
+                    and patch["prompt"] != track.prompt
+                    and track.source == "generated"
+                ):
+                    patch |= {"status": "idle", "file": None, "url": None}
+                updated.append(track.model_copy(update=patch))
+            elif changes.get("selected") is True and track.kind == target.kind:
+                # Selecting a track deselects the others of the same kind.
+                updated.append(track.model_copy(update={"selected": False}))
+            else:
+                updated.append(track)
+
+        current.audio = updated
+        return current
+
+    project = await update_project(project_id, mutate)
+    return {"project": project.dump()}
+
+
+@router.post("/projects/{project_id}/audio/upload", status_code=201)
+async def post_audio_upload(
+    project_id: str,
+    file: UploadFile = File(...),
+    kind: str = Form(default="music"),
+) -> dict[str, Any]:
+    project = await require_project(project_id)
+    payload = await file.read()
+
+    if len(payload) > 40 * 1024 * 1024:
+        raise BadRequest("Audio uploads are capped at 40MB.")
+    if not payload:
+        raise BadRequest("The uploaded file is empty.")
+
+    track = await save_uploaded_track(
+        project,
+        file.filename or "track.mp3",
+        payload,
+        "voiceover" if kind == "voiceover" else "music",
+    )
+    return {"track": track.model_dump(by_alias=True, mode="json")}
+
+
+# ---------------------------------------------------------------------------
+# Render
+# ---------------------------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/render", status_code=202)
+async def post_render(project_id: str) -> dict[str, str]:
+    project = await require_project(project_id)
+    selected_story(project)
+
+    async def work(context: JobContext) -> dict[str, Any]:
+        fresh = await require_project(project_id)
+        return await render_project(fresh, context)
+
+    job = start_job(project_id, "render", work, message="Accumulating clips…")
+
+    def mutate(current: Project) -> Project:
+        current.render = RenderResult(status="queued", progress=0.0)
+        return current
+
+    await update_project(project_id, mutate)
+    return {"jobId": job.id}
+
+
+# ---------------------------------------------------------------------------
+# Jobs and live progress
+# ---------------------------------------------------------------------------
+
+
+@router.get("/jobs/{job_id}")
+async def get_one_job(job_id: str) -> dict[str, Any]:
+    job = get_job(job_id)
+    if job is None:
+        raise NotFound(f"Job {job_id} not found.")
+    return {"job": job.dump()}
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def post_cancel_job(job_id: str) -> dict[str, bool]:
+    return {"cancelled": cancel_job(job_id)}
+
+
+@router.get("/projects/{project_id}/events")
+async def stream_events(project_id: str, request: Request) -> StreamingResponse:
+    """Live project state over SSE.
+
+    Every event carries full state, so a dropped connection recovers simply by
+    reconnecting — there is no incremental log to replay.
+    """
+    project = await require_project(project_id)
+    queue = subscribe(project_id)
+
+    async def generator():
+        try:
+            yield _sse("project", {"project": project.dump()})
+            for job in list_jobs(project_id):
+                yield _sse("job", {"job": job.dump()})
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=20.0)
+                except asyncio.TimeoutError:
+                    # Heartbeat, so proxies keep the connection open through the
+                    # quiet stretches of a long render.
+                    yield ": ping\n\n"
+                    continue
+
+                kind = event.pop("type")
+                yield _sse(kind, event)
+        finally:
+            unsubscribe(project_id, queue)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
