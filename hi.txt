@@ -1,61 +1,540 @@
-from __future__ import annotations
+/**
+ * Client for the AI Video backend (`server/`).
+ *
+ * Types mirror `server/app/domain/models.py` — keep the two in sync. The
+ * backend serialises camelCase, so these are a direct reflection of what comes
+ * over the wire.
+ */
 
-import mimetypes
+import { apiFetch } from "../../services/apiClient";
 
-from fastapi import APIRouter, Query, Request
-from fastapi.responses import FileResponse, Response
-from fastapi import HTTPException
+const API_PREFIX = "/api/v1/video";
 
-from ..errors import NotFound
-from ..media_token import verify as verify_media_token
-from ..services.store import require_project
-from ..storage import resolve_in_storage
+function apiPath(path: string): string {
+  if (path === "/api/health") return `${API_PREFIX}/health`;
+  if (path.startsWith("/api/video")) return `${API_PREFIX}${path.slice("/api/video".length)}`;
+  throw new Error(`Unsupported AI Video API path: ${path}`);
+}
 
-router = APIRouter(prefix="/api/v1/video", tags=["video"])
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
+export type AspectRatio = "16:9" | "9:16" | "1:1" | "4:5";
+export type StylePreset = "cinematic" | "product" | "docu" | "animated" | "ugc";
+export type Pacing = "slow" | "standard" | "fast";
+export type TransitionStyle = "hardcut" | "crossfade";
 
-@router.get("/media/{path:path}")
-async def serve_media(
-    path: str,
-    request: Request,
-    token: str | None = Query(default=None),
-) -> Response:
-    """Serve generated clips, audio and finals out of the storage directory.
+export type Beat =
+  "hook" | "context" | "pressure" | "crack" | "acceleration" | "impact" | "aftermath";
 
-    Accepts either:
-    - A short-lived signed ?token= query param issued by GET /render/token, OR
-    - A valid Azure AD Bearer token in the Authorization header.
+export type ShotFunction =
+  | "establish"
+  | "power"
+  | "pressure"
+  | "detail"
+  | "reaction"
+  | "shift"
+  | "impact"
+  | "aftermath"
+  | "exit";
 
-    FileResponse handles Range requests so the browser can scrub without
-    downloading the whole file first.
-    """
-    parts = path.replace("\\", "/").split("/")
-    if len(parts) < 3 or parts[0] != "projects":
-        raise NotFound(f"Media not found: {path}")
+export type PlannedSegment = {
+  index: number;
+  seconds: number;
+  startsAt: number;
+  beat: Beat;
+  shotFunction: ShotFunction;
+};
 
-    project_id = parts[1]
+export type DurationPlan = {
+  targetSeconds: number;
+  plannedSeconds: number;
+  trimSeconds: number;
+  exact: boolean;
+  strategy: "stitch";
+  segments: PlannedSegment[];
+  notes: string[];
+};
 
-    if token:
-        if not verify_media_token(token, project_id):
-            raise HTTPException(status_code=401, detail="Media token is invalid or expired")
-    else:
-        # Fall back to Bearer token validation.
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        raw_token = auth_header[len("Bearer "):]
-        from auth.azure_auth import validate_token
-        validate_token(raw_token)  # raises 401/403 on failure
+export type ShotCard = {
+  frame: string;
+  composition: string;
+  camera: string;
+  movementReason: string;
+  action: string;
+  eyeTrace: string;
+  environmentalPressure: string;
+  microAction: string;
+  soundAnchor: string;
+  lighting: string;
+  palette: string;
+  cutType: string;
+};
 
-    await require_project(project_id)
-    target = resolve_in_storage(path)
+export type Scene = {
+  id: string;
+  order: number;
+  title: string;
+  beat: Beat;
+  shotFunction: ShotFunction;
+  seconds: number;
+  startsAt: number;
+  summary: string;
+  prompt: string;
+  shotCard: ShotCard;
+  negativePrompt: string;
+  transitionOut: TransitionStyle;
+  continuityNote: string;
+};
 
-    if not target.is_file():
-        raise NotFound(f"Media not found: {path}")
+export type AuditIssue = {
+  sceneId: string | null;
+  sceneOrder: number | null;
+  rule: string;
+  severity: "error" | "warning";
+  message: string;
+};
 
-    media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    return FileResponse(
-        target,
-        media_type=media_type,
-        headers={"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"},
-    )
+export type AuditReport = {
+  passed: boolean;
+  score: number;
+  issues: AuditIssue[];
+  checkedAt: string;
+};
+
+export type StoryOption = {
+  id: string;
+  title: string;
+  summary: string;
+  treatment: string;
+  angle: string;
+  anchors: {
+    emotion: string;
+    motif: string;
+    object: string;
+    break: string;
+    finalImage: string;
+  };
+  continuity: {
+    characters: string[];
+    wardrobe: string[];
+    location: string;
+    palette: string;
+    lightingConstant: string;
+    cameraLanguage: string;
+    props: string[];
+    rules: string[];
+  };
+  scenes: Scene[];
+  audit: AuditReport;
+};
+
+export type ClipStatus = "idle" | "queued" | "generating" | "ready" | "failed";
+
+export type Clip = {
+  sceneId: string;
+  order: number;
+  status: ClipStatus;
+  progress: number;
+  seconds: number;
+  actualSeconds: number | null;
+  file: string | null;
+  url: string | null;
+  posterUrl: string | null;
+  operation: string | null;
+  attempts: number;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+
+export type AudioTrack = {
+  id: string;
+  kind: "music" | "voiceover" | "sfx";
+  label: string;
+  prompt: string;
+  selected: boolean;
+  status: "idle" | "generating" | "ready" | "failed";
+  gain: number;
+  seconds: number | null;
+  file: string | null;
+  url: string | null;
+  source: "generated" | "uploaded" | null;
+  error: string | null;
+};
+
+export type RenderResult = {
+  status: "idle" | "queued" | "rendering" | "ready" | "failed";
+  progress: number;
+  stage: string | null;
+  file: string | null;
+  url: string | null;
+  seconds: number | null;
+  bytes: number | null;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+
+export type ProjectBrief = {
+  brief: string;
+  seconds: number;
+  style: StylePreset;
+  ratio: AspectRatio;
+  pacing: Pacing;
+  references: string[];
+  avoid: string[];
+  language: string;
+};
+
+export type Project = {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  brief: ProjectBrief;
+  plan: DurationPlan;
+  stories: StoryOption[];
+  selectedStoryId: string | null;
+  clips: Clip[];
+  audio: AudioTrack[];
+  render: RenderResult;
+  transition: TransitionStyle;
+  model: string;
+};
+
+export type Job = {
+  id: string;
+  projectId: string;
+  kind: "storyboard" | "clip" | "clips" | "audio" | "render";
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  progress: number;
+  message: string;
+  targetId: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  result: unknown;
+};
+
+export type Capability = { id: string; ready: boolean; detail: string };
+
+export type Health = {
+  ok: boolean;
+  capabilities: Capability[];
+  ffmpeg: { available: boolean; ffmpeg: string; ffprobe: string };
+  skill: { loaded: boolean; attribution: string; source: string; license: string };
+  veo: {
+    model: string;
+    maxClipSeconds: number;
+    allowedClipSeconds: number[];
+    resolution: string;
+    concurrency: number;
+    keyframes: boolean;
+  };
+  limits: { maxVideoSeconds: number; maxSegments: number };
+};
+
+// ---------------------------------------------------------------------------
+// Transport
+// ---------------------------------------------------------------------------
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly details: unknown;
+
+  constructor(message: string, status: number, code: string, details?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await apiFetch(apiPath(path), {
+    ...init,
+    headers: {
+      ...(init?.body instanceof FormData ? {} : { "content-type": "application/json" }),
+      ...init?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`;
+    let code = "error";
+    let details: unknown;
+    try {
+      const payload = await response.json();
+      message = payload.message ?? message;
+      code = payload.error ?? code;
+      details = payload.details;
+    } catch {
+      // A non-JSON error body (a proxy 502, say) keeps the generic message.
+    }
+    throw new ApiError(message, response.status, code, details);
+  }
+
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
+}
+
+// ---------------------------------------------------------------------------
+// Endpoints
+// ---------------------------------------------------------------------------
+
+export const videoApi = {
+  health: () => request<Health>("/api/health"),
+
+  /**
+   * How a duration breaks into Veo-sized clips. Needs no API key, so the brief
+   * screen can show the real clip count while the user is still typing.
+   */
+  plan: (seconds: number, style: string, pacing?: Pacing) =>
+    request<{
+      plan: DurationPlan;
+      limits: {
+        maxClipSeconds: number;
+        allowedClipSeconds: number[];
+        maxVideoSeconds: number;
+        maxSegments: number;
+      };
+    }>(
+      `/api/video/plan?seconds=${seconds}&style=${encodeURIComponent(style)}` +
+        (pacing ? `&pacing=${pacing}` : ""),
+    ),
+
+  createProject: (body: {
+    brief: string;
+    seconds: number;
+    style: StylePreset;
+    ratio: AspectRatio;
+    pacing?: Pacing;
+    references?: string[];
+    avoid?: string[];
+    language?: string;
+    transition?: TransitionStyle;
+    quality?: "standard" | "draft";
+  }) =>
+    request<{ project: Project; jobId: string }>("/api/video/projects", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  getProject: (id: string) =>
+    request<{ project: Project; jobs: Job[] }>(`/api/video/projects/${id}`),
+
+  deleteProject: (id: string) =>
+    request<{ ok: boolean }>(`/api/video/projects/${id}`, { method: "DELETE" }),
+
+  regenerateStory: (projectId: string, storyId: string) =>
+    request<{ jobId: string }>(`/api/video/projects/${projectId}/stories/${storyId}/regenerate`, {
+      method: "POST",
+    }),
+
+  generateScenes: (projectId: string, storyId: string) =>
+    request<{ jobId: string }>(`/api/video/projects/${projectId}/stories/${storyId}/scenes`, {
+      method: "POST",
+    }),
+
+  selectStory: (projectId: string, storyId: string) =>
+    request<{ project: Project }>(`/api/video/projects/${projectId}/select-story`, {
+      method: "POST",
+      body: JSON.stringify({ storyId }),
+    }),
+
+  updateScene: (
+    projectId: string,
+    sceneId: string,
+    patch: Partial<
+      Pick<Scene, "prompt" | "title" | "summary" | "negativePrompt" | "transitionOut">
+    >,
+  ) =>
+    request<{ project: Project }>(`/api/video/projects/${projectId}/scenes/${sceneId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+
+  rewriteScene: (projectId: string, sceneId: string, instruction: string) =>
+    request<{ jobId: string }>(`/api/video/projects/${projectId}/scenes/${sceneId}/rewrite`, {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    }),
+
+  generateClip: (projectId: string, sceneId: string) =>
+    request<{ jobId: string }>(`/api/video/projects/${projectId}/clips/${sceneId}/generate`, {
+      method: "POST",
+    }),
+
+  generateAllClips: (projectId: string, force = false) =>
+    request<{ jobId: string }>(
+      `/api/video/projects/${projectId}/clips/generate-all${force ? "?force=true" : ""}`,
+      { method: "POST" },
+    ),
+
+  suggestAudio: (projectId: string) =>
+    request<{ jobId: string }>(`/api/video/projects/${projectId}/audio/suggest`, {
+      method: "POST",
+    }),
+
+  generateAudio: (projectId: string, trackId: string) =>
+    request<{ jobId: string }>(`/api/video/projects/${projectId}/audio/${trackId}/generate`, {
+      method: "POST",
+    }),
+
+  updateAudio: (
+    projectId: string,
+    trackId: string,
+    patch: { selected?: boolean; gain?: number; prompt?: string; label?: string },
+  ) =>
+    request<{ project: Project }>(`/api/video/projects/${projectId}/audio/${trackId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+
+  uploadAudio: (projectId: string, file: File, kind: "music" | "voiceover" = "music") => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("kind", kind);
+    return request<{ track: AudioTrack }>(`/api/video/projects/${projectId}/audio/upload`, {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  render: (projectId: string) =>
+    request<{ jobId: string }>(`/api/video/projects/${projectId}/render`, { method: "POST" }),
+
+  getRenderToken: (projectId: string) =>
+    request<{ token: string }>(`/api/video/projects/${projectId}/render/token`),
+
+  getJob: (jobId: string) => request<{ job: Job }>(`/api/video/jobs/${jobId}`),
+
+  cancelJob: (jobId: string) =>
+    request<{ cancelled: boolean }>(`/api/video/jobs/${jobId}/cancel`, { method: "POST" }),
+};
+
+// ---------------------------------------------------------------------------
+// Live updates
+// ---------------------------------------------------------------------------
+
+export type ProjectStream = {
+  close: () => void;
+};
+
+/**
+ * Subscribes to a project's SSE feed.
+ *
+ * Uses fetch streaming instead of EventSource so apiFetch can attach the Azure
+ * AD bearer token and retain the application's global 401 handling.
+ */
+export function streamProject(
+  projectId: string,
+  handlers: {
+    onProject?: (project: Project) => void;
+    onJob?: (job: Job) => void;
+    onError?: (error: unknown) => void;
+  },
+): ProjectStream {
+  const controller = new AbortController();
+  let closed = false;
+
+  const dispatch = (frame: string) => {
+    let eventName = "message";
+    const data: string[] = [];
+    for (const line of frame.split("\n")) {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) return;
+    try {
+      const payload = JSON.parse(data.join("\n")) as { project?: Project; job?: Job };
+      if (eventName === "project" && payload.project) handlers.onProject?.(payload.project);
+      if (eventName === "job" && payload.job) handlers.onJob?.(payload.job);
+    } catch {
+      // Ignore malformed frames; the next full project event resynchronizes state.
+    }
+  };
+
+  const connect = async () => {
+    let retryDelay = 500;
+    while (!closed) {
+      try {
+        const response = await apiFetch(`${API_PREFIX}/projects/${projectId}/events`, {
+          headers: { Accept: "text/event-stream" },
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new ApiError(`Stream failed (${response.status})`, response.status, "stream_error");
+        if (!response.body) throw new Error("Streaming is not supported by this browser.");
+
+        retryDelay = 500;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!closed) {
+          const { value, done } = await reader.read();
+          buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
+          let boundary = buffer.indexOf("\n\n");
+          while (boundary >= 0) {
+            dispatch(buffer.slice(0, boundary));
+            buffer = buffer.slice(boundary + 2);
+            boundary = buffer.indexOf("\n\n");
+          }
+          if (done) break;
+        }
+      } catch (error) {
+        if (closed || (error instanceof DOMException && error.name === "AbortError")) break;
+        handlers.onError?.(error);
+      }
+
+      if (!closed) {
+        await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+        retryDelay = Math.min(retryDelay * 2, 5_000);
+      }
+    }
+  };
+
+  void connect();
+  return {
+    close: () => {
+      closed = true;
+      controller.abort();
+    },
+  };
+}
+
+/** Loads protected media as a blob for use by native video/audio elements. */
+export async function fetchVideoMedia(url: string): Promise<Blob> {
+  const response = await apiFetch(url);
+  if (!response.ok) {
+    throw new ApiError(`Media request failed (${response.status})`, response.status, "media_error");
+  }
+  return response.blob();
+}
+
+// ---------------------------------------------------------------------------
+// Display helpers
+// ---------------------------------------------------------------------------
+
+export const BEAT_LABELS: Record<Beat, string> = {
+  hook: "Hook",
+  context: "Context",
+  pressure: "Pressure",
+  crack: "Crack",
+  acceleration: "Acceleration",
+  impact: "Impact",
+  aftermath: "Aftermath",
+};
+
+export function formatSeconds(total: number): string {
+  const seconds = Math.max(0, Math.round(total));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1_048_576).toFixed(1)} MB`;
+}
