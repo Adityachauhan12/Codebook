@@ -1,689 +1,2006 @@
-from __future__ import annotations
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import {
+  Sparkles,
+  Film,
+  Wand2,
+  Loader2,
+  RefreshCw,
+  Check,
+  Music,
+  Upload,
+  Download,
+  ArrowLeft,
+  ArrowRight,
+  Clock,
+  Pencil,
+  Trash2,
+  Layers,
+  Info,
+  AlertTriangle,
+  ShieldCheck,
+  Scissors,
+} from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "../../components/ui/sheet";
+import {
+  ApiError,
+  BEAT_LABELS,
+  formatBytes,
+  formatSeconds,
+  fetchVideoMedia,
+  streamProject,
+  videoApi,
+  type AspectRatio,
+  type AudioTrack,
+  type Capability,
+  type Clip,
+  type DurationPlan,
+  type Health,
+  type Job,
+  type Pacing,
+  type Project,
+  type Scene,
+  type StoryOption,
+  type StylePreset,
+} from "./video-api";
+import { SessionExpiredError } from "../../services/apiClient";
 
-import asyncio
-import json
-from typing import Any, Callable, Literal
+const STEPS = ["brief", "storyboard", "clips", "audio", "final"] as const;
+type Step = (typeof STEPS)[number];
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+function isStep(value: unknown): value is Step {
+  return typeof value === "string" && (STEPS as readonly string[]).includes(value);
+}
 
-from ..config import settings
-from ..domain.duration import default_pacing, plan_duration
-from ..domain.models import (
-    AspectRatio,
-    BriefAnalysis,
-    EndCard,
-    Pacing,
-    Project,
-    ProjectBrief,
-    RenderResult,
-    StylePreset,
-    TransitionStyle,
-)
-from ..errors import BadRequest, NotFound
-from ..ids import short_id
-from ..owner import current_owner_id, require_video_owner
-from ..services.audio import generate_track, save_uploaded_track, suggest_tracks
-from ..services.brief import analyse_brief
-from ..services.clips import generate_all_clips, generate_scene_clip, selected_story, sync_clips
-from ..services.jobs import JobContext, cancel_job, start_job
-from ..services.render import render_project
-from ..services.store import (
-    create_project,
-    delete_project,
-    get_job,
-    list_jobs,
-    list_projects,
-    require_project,
-    subscribe,
-    unsubscribe,
-    update_project,
-)
-from ..services.storyboard import (
-    generate_scenes,
-    generate_treatments,
-    regenerate_treatment,
-    rewrite_scene,
-)
+/* ---------------------------------------------------------------------------
+ * Wizard session
+ *
+ * The URL is the source of truth, but the sidebar links to a bare `/video` with
+ * no params — so the last session is also mirrored to localStorage and restored
+ * when you arrive without any. Nothing here is the actual work: every project is
+ * persisted server-side, so this only has to remember *which* project and step.
+ * ------------------------------------------------------------------------ */
 
-router = APIRouter(
-    prefix="/api/v1/video",
-    tags=["video"],
-    dependencies=[Depends(require_video_owner)],
-)
+const SESSION_KEY = "loom.video.session";
 
+type WizardSession = { projectId: string | null; step: Step };
 
-# ---------------------------------------------------------------------------
-# Request bodies
-# ---------------------------------------------------------------------------
+const EMPTY_SESSION: WizardSession = { projectId: null, step: "brief" };
 
+function readStoredSession(): WizardSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<WizardSession>;
+    if (!parsed.projectId) return null;
+    return { projectId: parsed.projectId, step: isStep(parsed.step) ? parsed.step : "brief" };
+  } catch {
+    return null; // Corrupt or unavailable storage is not worth breaking the page over.
+  }
+}
 
-class BriefBody(BaseModel):
-    brief: str = Field(min_length=8)
-    seconds: int = Field(ge=4)
-    style: StylePreset = "cinematic"
-    ratio: AspectRatio = "16:9"
-    pacing: Pacing | None = None
-    references: list[str] = Field(default_factory=list)
-    avoid: list[str] = Field(default_factory=list)
-    language: str = "English"
-    transition: TransitionStyle = "hardcut"
-    quality: Literal["standard", "draft"] = "standard"
+function writeStoredSession(session: WizardSession) {
+  try {
+    if (session.projectId) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    else localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* Private browsing. The URL still carries the session. */
+  }
+}
 
-    def to_brief(self) -> ProjectBrief:
-        return ProjectBrief(
-            brief=self.brief.strip(),
-            seconds=self.seconds,
-            style=self.style,
-            ratio=self.ratio,
-            pacing=self.pacing or default_pacing(self.style),
-            references=self.references,
-            avoid=self.avoid,
-            language=self.language,
-        )
+/**
+ * The brief is the one step with no project behind it yet, so it is the only
+ * one whose state cannot be restored from the server. Kept as a local draft so
+ * a half-written brief survives a trip to another page.
+ *
+ * Attachments are deliberately not persisted — they are `File` handles, which
+ * cannot be serialised, and re-picking a file is far less work than retyping.
+ */
+const DRAFT_KEY = "loom.video.brief-draft";
 
+type BriefDraft = {
+  brief: string;
+  seconds: number;
+  style: StylePreset;
+  ratio: AspectRatio;
+  pacing?: Pacing;
+  transition: "hardcut" | "crossfade";
+};
 
-class BriefPatch(BaseModel):
-    brief: str | None = None
-    seconds: int | None = Field(default=None, ge=4)
-    style: StylePreset | None = None
-    ratio: AspectRatio | None = None
-    pacing: Pacing | None = None
-    references: list[str] | None = None
-    avoid: list[str] | None = None
-    language: str | None = None
-    transition: TransitionStyle | None = None
+const EMPTY_DRAFT: BriefDraft = {
+  brief: "",
+  seconds: 30,
+  style: "cinematic",
+  ratio: "16:9",
+  pacing: undefined,
+  transition: "hardcut",
+};
 
+function readBriefDraft(): BriefDraft {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return EMPTY_DRAFT;
+    return { ...EMPTY_DRAFT, ...(JSON.parse(raw) as Partial<BriefDraft>) };
+  } catch {
+    return EMPTY_DRAFT;
+  }
+}
 
-class SelectStoryBody(BaseModel):
-    storyId: str
+function writeBriefDraft(draft: BriefDraft) {
+  try {
+    if (draft.brief.trim()) localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    else localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* Nothing to do — an unsaved draft is not worth surfacing an error for. */
+  }
+}
 
+function clearBriefDraft() {
+  try {
+    localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
-class ScenePatch(BaseModel):
-    prompt: str | None = None
-    title: str | None = None
-    summary: str | None = None
-    negativePrompt: str | None = None
-    transitionOut: TransitionStyle | None = None
+function useWizardSession() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchProject = searchParams.get("project") || undefined;
+  const rawStep = searchParams.get("step");
+  const searchStep = isStep(rawStep) ? rawStep : undefined;
 
+  const [session, setSession] = useState<WizardSession>(() => {
+    if (searchProject) return { projectId: searchProject, step: searchStep ?? "storyboard" };
+    return readStoredSession() ?? EMPTY_SESSION;
+  });
 
-class RewriteBody(BaseModel):
-    instruction: str = ""
+  useEffect(() => {
+    writeStoredSession(session);
+    if (searchProject !== (session.projectId ?? undefined) || searchStep !== session.step) {
+      // `replace` so stepping through the wizard doesn't bury the back button.
+      const next = new URLSearchParams();
+      if (session.projectId) next.set("project", session.projectId);
+      next.set("step", session.step);
+      setSearchParams(next, { replace: true });
+    }
+  }, [session, searchProject, searchStep, setSearchParams]);
 
+  return [session, setSession] as const;
+}
 
-class TrackPatch(BaseModel):
-    selected: bool | None = None
-    gain: float | None = Field(default=None, ge=0, le=2)
-    prompt: str | None = None
-    label: str | None = None
+type AttachmentItem = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
 
+const STYLE_PRESETS: { id: StylePreset; label: string; desc: string }[] = [
+  { id: "cinematic", label: "Cinematic", desc: "Filmic, warm grade" },
+  { id: "product", label: "Product", desc: "Clean studio look" },
+  { id: "docu", label: "Documentary", desc: "Handheld, real" },
+  { id: "animated", label: "Animated", desc: "2.5D motion" },
+  { id: "ugc", label: "UGC / social", desc: "Vertical, punchy" },
+];
 
-# ---------------------------------------------------------------------------
-# Planning — no key required, so the UI can show the real clip count up front
-# ---------------------------------------------------------------------------
+const RATIOS: { id: AspectRatio; label: string; note?: string }[] = [
+  { id: "16:9", label: "16:9 Landscape" },
+  { id: "9:16", label: "9:16 Vertical" },
+  { id: "1:1", label: "1:1 Square", note: "Cropped from 9:16" },
+  { id: "4:5", label: "4:5 Feed", note: "Cropped from 9:16" },
+];
 
+/* ---------------------------------------------------------------------------
+ * Project state + live updates
+ * ------------------------------------------------------------------------ */
 
-@router.get("/plan")
-async def get_plan(
-    seconds: float = Query(default=30),
-    style: str = Query(default="cinematic"),
-    pacing: Pacing | None = Query(default=None),
-) -> dict[str, Any]:
-    resolved = pacing or default_pacing(style)
-    plan = plan_duration(seconds, resolved)
+/**
+ * Holds the project and keeps it current over SSE.
+ *
+ * Every server event carries the whole project, so there is no merge logic
+ * here — generation runs for minutes on the backend and this just reflects
+ * whatever the latest snapshot says.
+ */
+function useProjectStream(projectId: string | null) {
+  const [project, setProject] = useState<Project | null>(null);
+  const [jobs, setJobs] = useState<Record<string, Job>>({});
+  const [connected, setConnected] = useState(false);
+  /** The id points at a project the server does not have — a restored session
+   *  whose storage was cleared, or a link to someone else's machine. Distinct
+   *  from "the server is down", which should keep the id and let a retry work. */
+  const [missing, setMissing] = useState(false);
 
-    return {
-        "plan": plan.model_dump(by_alias=True, mode="json"),
-        "limits": {
-            "maxClipSeconds": settings.veo_max_clip_seconds,
-            "allowedClipSeconds": settings.allowed_clip_seconds,
-            "maxVideoSeconds": settings.max_video_seconds,
-            "maxSegments": settings.max_segments,
-        },
+  useEffect(() => {
+    if (!projectId) {
+      setProject(null);
+      setJobs({});
+      setMissing(false);
+      return;
     }
 
+    let cancelled = false;
+    setMissing(false);
 
-# ---------------------------------------------------------------------------
-# Projects
-# ---------------------------------------------------------------------------
+    // Seed from a plain fetch so the UI has state even if SSE is slow to open.
+    videoApi
+      .getProject(projectId)
+      .then(({ project: initial, jobs: initialJobs }) => {
+        if (cancelled) return;
+        setProject(initial);
+        setJobs(Object.fromEntries(initialJobs.map((job) => [job.id, job])));
+      })
+      .catch((caught) => {
+        if (cancelled) return;
+        if (caught instanceof ApiError && caught.status === 404) setMissing(true);
+      });
 
+    const stream = streamProject(projectId, {
+      onProject: (next) => {
+        setConnected(true);
+        setProject(next);
+      },
+      onJob: (job) => setJobs((current) => ({ ...current, [job.id]: job })),
+      onError: () => setConnected(false),
+    });
 
-@router.get("/projects")
-async def get_projects() -> dict[str, Any]:
-    projects = await list_projects()
-    return {
-        "projects": [
-            {
-                "id": project.id,
-                "createdAt": project.created_at,
-                "brief": project.brief.brief[:140],
-                "seconds": project.plan.target_seconds,
-                "segments": len(project.plan.segments),
-                "render": project.render.status,
+    return () => {
+      cancelled = true;
+      stream.close();
+    };
+  }, [projectId]);
+
+  const activeJobs = useMemo(
+    () => Object.values(jobs).filter((job) => job.status === "running" || job.status === "queued"),
+    [jobs],
+  );
+
+  return { project, jobs, activeJobs, connected, missing };
+}
+
+function jobFor(jobs: Record<string, Job>, kind: Job["kind"], targetId?: string): Job | undefined {
+  return Object.values(jobs)
+    .filter(
+      (job) =>
+        job.kind === kind &&
+        (targetId === undefined || job.targetId === targetId) &&
+        (job.status === "running" || job.status === "queued"),
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+/**
+ * Native media elements cannot attach Azure AD headers. Same-origin backend
+ * media is therefore loaded through apiFetch and exposed as a short-lived blob
+ * URL. Cross-origin signed/provider URLs remain untouched.
+ */
+/**
+ * Loads protected media through the authenticated client and hands back an
+ * object URL.
+ *
+ * Returns the failure as well as the URL. Swallowing it meant a finished render
+ * whose media request 401'd looked exactly like a render still in progress —
+ * the panel fell through to its spinner and sat at 100% forever, with the real
+ * cause (an expired session) visible only in the server log.
+ */
+function useAuthenticatedMediaUrl(url: string | null | undefined) {
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!url) {
+      setResolvedUrl(null);
+      setError(null);
+      return;
+    }
+
+    const absolute = new URL(url, window.location.origin);
+    if (absolute.origin !== window.location.origin) {
+      setResolvedUrl(absolute.toString());
+      setError(null);
+      return;
+    }
+
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setError(null);
+    fetchVideoMedia(absolute.pathname + absolute.search)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setResolvedUrl(objectUrl);
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setResolvedUrl(null);
+        const status = (cause as { status?: number } | null)?.status;
+        setError(
+          status === 401 || cause instanceof SessionExpiredError
+            ? "Your session expired while this was rendering. The film is finished and saved — sign in again to play or download it."
+            : `Could not load the finished media${status ? ` (${status})` : ""}. The file is rendered and saved on the server.`,
+        );
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [url]);
+
+  return { url: resolvedUrl, error };
+}
+
+/* ---------------------------------------------------------------------------
+ * Page
+ * ------------------------------------------------------------------------ */
+
+export function VideoPage() {
+  const [{ projectId, step }, setSession] = useWizardSession();
+  const [health, setHealth] = useState<Health | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const { project, jobs, activeJobs, missing } = useProjectStream(projectId);
+
+  const setStep = useCallback(
+    (next: Step) => setSession((current) => ({ ...current, step: next })),
+    [setSession],
+  );
+  const openProject = useCallback(
+    (id: string, next: Step) => setSession({ projectId: id, step: next }),
+    [setSession],
+  );
+  const resetSession = useCallback(() => setSession(EMPTY_SESSION), [setSession]);
+
+  // A restored session can outlive its project — the server storage was cleared,
+  // or the link came from another machine. Drop it rather than leaving the user
+  // on a spinner that will never resolve.
+  useEffect(() => {
+    if (missing) resetSession();
+  }, [missing, resetSession]);
+
+  useEffect(() => {
+    videoApi
+      .health()
+      .then(setHealth)
+      .catch(() => setHealth(null));
+  }, []);
+
+  const selectedStory = useMemo(
+    () => project?.stories.find((story) => story.id === project.selectedStoryId) ?? null,
+    [project],
+  );
+
+  const run = useCallback(async <T,>(action: () => Promise<T>): Promise<T | null> => {
+    setError(null);
+    try {
+      return await action();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Something went wrong.");
+      return null;
+    }
+  }, []);
+
+  const clipsCount = selectedStory?.scenes.length ?? project?.plan.segments.length ?? 0;
+
+  return (
+      <div className="w-full max-w-[1400px] mx-auto px-4 sm:px-6 py-6">
+        <Header
+          step={step}
+          setStep={setStep}
+          clipsCount={clipsCount}
+          hasProject={Boolean(project)}
+        />
+
+        {error && (
+          <div className="mb-4 flex items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm">
+            <AlertTriangle className="size-4 shrink-0 text-destructive mt-0.5" />
+            <div className="flex-1">
+              <div className="font-medium text-destructive">That didn't work</div>
+              <div className="text-muted-foreground mt-0.5">{error}</div>
+            </div>
+            <button
+              onClick={() => setError(null)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {step === "brief" && (
+          <BriefStep
+            health={health}
+            onSubmit={async (payload) => {
+              const created = await run(() => videoApi.createProject(payload));
+              if (created) openProject(created.project.id, "storyboard");
+            }}
+          />
+        )}
+
+        {step === "storyboard" && project && (
+          <StoryboardStep
+            project={project}
+            jobs={jobs}
+            onSelectStory={(storyId) => run(() => videoApi.selectStory(project.id, storyId))}
+            onRegenerateStory={(storyId) =>
+              run(() => videoApi.regenerateStory(project.id, storyId))
             }
-            for project in projects
-        ]
-    }
+            onGenerateScenes={(storyId) => run(() => videoApi.generateScenes(project.id, storyId))}
+            onUpdateScene={(sceneId, prompt) =>
+              run(() => videoApi.updateScene(project.id, sceneId, { prompt }))
+            }
+            onRewriteScene={(sceneId, instruction) =>
+              run(() => videoApi.rewriteScene(project.id, sceneId, instruction))
+            }
+            onBack={() => setStep("brief")}
+            onNext={async () => {
+              await run(() => videoApi.generateAllClips(project.id));
+              setStep("clips");
+            }}
+          />
+        )}
 
+        {step === "clips" && project && (
+          <ClipsStep
+            project={project}
+            jobs={jobs}
+            onGenerate={(sceneId) => run(() => videoApi.generateClip(project.id, sceneId))}
+            onGenerateAll={() => run(() => videoApi.generateAllClips(project.id, true))}
+            onBack={() => setStep("storyboard")}
+            onNext={async () => {
+              if (project.audio.length === 0) await run(() => videoApi.suggestAudio(project.id));
+              setStep("audio");
+            }}
+          />
+        )}
 
-def _apply_analysis(analysis: BriefAnalysis) -> Callable[[Project], Project]:
-    """Distribute a brief analysis across the project.
+        {step === "audio" && project && (
+          <AudioStep
+            project={project}
+            jobs={jobs}
+            health={health}
+            onSuggest={() => run(() => videoApi.suggestAudio(project.id))}
+            onGenerate={(trackId) => run(() => videoApi.generateAudio(project.id, trackId))}
+            onSelect={(trackId) =>
+              run(() => videoApi.updateAudio(project.id, trackId, { selected: true }))
+            }
+            onUpdatePrompt={(trackId, prompt) =>
+              run(() => videoApi.updateAudio(project.id, trackId, { prompt }))
+            }
+            onUpload={(file, kind) => run(() => videoApi.uploadAudio(project.id, file, kind))}
+            onBack={() => setStep("clips")}
+            onNext={async () => {
+              await run(() => videoApi.render(project.id));
+              setStep("final");
+            }}
+          />
+        )}
 
-    Each part lands where the system that needs it will look: intent on the
-    brief for the prompt layer, supers and end card on the project for the
-    compositor, music on the brief for the composer.
-    """
+        {step === "final" && project && (
+          <FinalStep
+            project={project}
+            onRerender={() => run(() => videoApi.render(project.id))}
+            onBack={() => setStep("audio")}
+            onRestart={resetSession}
+          />
+        )}
 
-    def mutate(current: Project) -> Project:
-        current.brief.intent = analysis.intent
-        current.brief.unsupported = analysis.unsupported
-        current.brief.music_direction = analysis.music
-        # dict.fromkeys de-duplicates while keeping the user's ordering first.
-        current.brief.avoid = list(dict.fromkeys([*current.brief.avoid, *analysis.avoid]))
-        current.supers = analysis.supers
-        current.end_card = analysis.end_card
-        return current
+        {step !== "brief" && !project && (
+          <div className="rounded-2xl border border-border bg-surface p-10 text-center">
+            <Loader2 className="size-6 animate-spin text-primary mx-auto mb-3" />
+            <div className="text-sm text-muted-foreground">Loading your project…</div>
+          </div>
+        )}
 
-    return mutate
+        {activeJobs.length > 0 && <JobTicker jobs={activeJobs} />}
+      </div>
+  );
+}
 
+/* ---------------- Header / Stepper ---------------- */
 
-@router.post("/projects", status_code=201)
-async def post_project(body: BriefBody) -> dict[str, Any]:
-    brief = body.to_brief()
-    plan = plan_duration(brief.seconds, brief.pacing)
+function Header({
+  step,
+  setStep,
+  clipsCount,
+  hasProject,
+}: {
+  step: Step;
+  setStep: (s: Step) => void;
+  clipsCount: number;
+  hasProject: boolean;
+}) {
+  const steps: { id: Step; label: string; icon: typeof Film }[] = [
+    { id: "brief", label: "Brief", icon: Pencil },
+    { id: "storyboard", label: "Storyboard", icon: Layers },
+    { id: "clips", label: "Clips", icon: Film },
+    { id: "audio", label: "Audio", icon: Music },
+    { id: "final", label: "Final video", icon: Sparkles },
+  ];
+  const currentIndex = steps.findIndex((s) => s.id === step);
 
-    project = Project(
-        id=short_id("vid"),
-        ownerId=current_owner_id(),
-        brief=brief,
-        plan=plan,
-        transition=body.transition,
-        model=settings.veo_fast_model if body.quality == "draft" else settings.veo_model,
-    )
-    await create_project(project)
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+            <Film className="size-4" />
+            AI Video Studio
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight">Turn your idea into a full video</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Veo renders short clips, so we plan your film as scenes, generate each one, then
+            accumulate them into a single video.
+          </p>
+        </div>
+      </div>
 
-    # Kick the treatments off immediately — the UI shows a spinner on the cards.
-    async def work(context: JobContext) -> dict[str, int]:
-        # Split the brief before anything reads it. The scene writer must never
-        # see on-screen copy, or it will ask Veo to spell.
-        context.progress(0.05, "Reading the brief…")
-        analysis = await analyse_brief(brief.brief, seconds=brief.seconds, ratio=brief.ratio)
-        analysed = await update_project(project.id, _apply_analysis(analysis))
+      <div className="flex items-center gap-1 sm:gap-2 p-1.5 rounded-xl border border-border bg-surface overflow-x-auto">
+        {steps.map((s, i) => {
+          const Icon = s.icon;
+          const active = s.id === step;
+          const done = i < currentIndex;
+          const clickable = hasProject ? i <= currentIndex : i === 0;
+          return (
+            <button
+              key={s.id}
+              disabled={!clickable}
+              onClick={() => clickable && setStep(s.id)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm whitespace-nowrap transition-colors ${
+                active
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : done
+                    ? "text-foreground hover:bg-accent"
+                    : "text-muted-foreground"
+              } ${!clickable ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              <div
+                className={`size-5 grid place-items-center rounded-full text-[10px] font-semibold ${
+                  active
+                    ? "bg-primary-foreground/20"
+                    : done
+                      ? "bg-primary/10 text-primary"
+                      : "bg-accent"
+                }`}
+              >
+                {done ? <Check className="size-3" /> : i + 1}
+              </div>
+              <Icon className="size-4" />
+              <span className="hidden sm:inline">{s.label}</span>
+              {s.id === "clips" && clipsCount > 0 && (
+                <span className="hidden sm:inline text-[10px] opacity-70">({clipsCount})</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-        context.progress(0.2, "Writing director treatments…")
-        stories = await generate_treatments(analysed.brief, plan)
+/* ---------------- Live job ticker ---------------- */
 
-        def mutate(current: Project) -> Project:
-            current.stories = stories
-            current.selected_story_id = stories[0].id if stories else None
-            return current
+function JobTicker({ jobs }: { jobs: Job[] }) {
+  return (
+    <div className="fixed bottom-4 right-4 z-50 w-[320px] space-y-2">
+      {jobs.map((job) => (
+        <div
+          key={job.id}
+          className="rounded-xl border border-border bg-surface/95 backdrop-blur p-3 shadow-lg"
+        >
+          <div className="flex items-center gap-2 text-xs font-medium">
+            <Loader2 className="size-3.5 animate-spin text-primary" />
+            <span className="capitalize">{job.kind}</span>
+            <span className="ml-auto text-muted-foreground">{Math.round(job.progress * 100)}%</span>
+          </div>
+          <div className="mt-1.5 text-[11px] text-muted-foreground line-clamp-2">{job.message}</div>
+          <div className="mt-2 h-1 rounded-full bg-accent overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all"
+              style={{ width: `${Math.max(3, job.progress * 100)}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
-        await update_project(project.id, mutate)
-        return {"stories": len(stories)}
+/* ---------------- Capability banner ---------------- */
 
-    job = start_job(project.id, "storyboard", work, message="Reading the brief…")
-    return {"project": project.dump(), "jobId": job.id}
+function CapabilityNotice({ health }: { health: Health | null }) {
+  if (!health) {
+    return (
+      <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 text-sm">
+        <div className="flex items-center gap-2 font-medium">
+          <AlertTriangle className="size-4 text-amber-600" />
+          Backend not reachable
+        </div>
+        <p className="text-muted-foreground mt-1">
+          Start it with{" "}
+          <code className="text-xs">cd backend && uvicorn main:app --reload --port 8000</code>.
+        </p>
+      </div>
+    );
+  }
 
+  const blocked = health.capabilities.filter(
+    (capability: Capability) =>
+      !capability.ready && ["storyboard", "clips"].includes(capability.id),
+  );
+  if (blocked.length === 0 && health.ffmpeg.available) return null;
 
-@router.get("/projects/{project_id}")
-async def get_one_project(project_id: str) -> dict[str, Any]:
-    project = await require_project(project_id)
-    return {"project": project.dump(), "jobs": [job.dump() for job in list_jobs(project_id)]}
+  return (
+    <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 text-sm">
+      <div className="flex items-center gap-2 font-medium">
+        <AlertTriangle className="size-4 text-amber-600" />
+        Some steps are not configured yet
+      </div>
+      <ul className="mt-2 space-y-1 text-muted-foreground">
+        {blocked.map((capability) => (
+          <li key={capability.id}>• {capability.detail}</li>
+        ))}
+        {!health.ffmpeg.available && (
+          <li>
+            • ffmpeg was not found — clips can be generated but not accumulated into a final video.
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
 
+/* ---------------- Step 1: Brief ---------------- */
 
-@router.delete("/projects/{project_id}")
-async def remove_project(project_id: str) -> dict[str, bool]:
-    await require_project(project_id)
-    await delete_project(project_id)
-    return {"ok": True}
+function BriefStep({
+  health,
+  onSubmit,
+}: {
+  health: Health | null;
+  onSubmit: (payload: {
+    brief: string;
+    seconds: number;
+    style: StylePreset;
+    ratio: AspectRatio;
+    pacing?: Pacing;
+    references?: string[];
+    transition?: "hardcut" | "crossfade";
+  }) => Promise<void>;
+}) {
+  // Read once, on mount, so a half-written brief survives leaving the page.
+  const [restored] = useState(readBriefDraft);
+  const [brief, setBrief] = useState(restored.brief);
+  const [seconds, setSeconds] = useState(restored.seconds);
+  const [style, setStyle] = useState<StylePreset>(restored.style);
+  const [ratio, setRatio] = useState<AspectRatio>(restored.ratio);
+  const [pacing, setPacing] = useState<Pacing | undefined>(restored.pacing);
+  const [transition, setTransition] = useState<"hardcut" | "crossfade">(restored.transition);
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [plan, setPlan] = useState<DurationPlan | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    writeBriefDraft({ brief, seconds, style, ratio, pacing, transition });
+  }, [brief, seconds, style, ratio, pacing, transition]);
 
-@router.patch("/projects/{project_id}")
-async def patch_project(project_id: str, body: BriefPatch) -> dict[str, Any]:
-    """Changing the brief re-plans the segments and invalidates the storyboard."""
-    existing = await require_project(project_id)
-    changes = body.model_dump(exclude_none=True)
+  const maxSeconds = health?.limits.maxVideoSeconds ?? 180;
 
-    merged = existing.brief.model_copy(
-        update={key: value for key, value in changes.items() if key != "transition"}
-    )
-    if body.style and not body.pacing:
-        merged.pacing = default_pacing(body.style)
+  useEffect(() => {
+    return () => attachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+    // Only on unmount — revoking on every change would kill live previews.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    duration_changed = (
-        merged.seconds != existing.brief.seconds or merged.pacing != existing.brief.pacing
-    )
-    plan = plan_duration(merged.seconds, merged.pacing) if duration_changed else existing.plan
+  // The plan endpoint needs no API key, so the real clip count is available
+  // while the user is still choosing a duration.
+  useEffect(() => {
+    let cancelled = false;
+    videoApi
+      .plan(seconds, style, pacing)
+      .then(({ plan: next }) => !cancelled && setPlan(next))
+      .catch(() => !cancelled && setPlan(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [seconds, style, pacing]);
 
-    # New brief text means the old split no longer describes it. A stale
-    # `intent` is worse than none: the prompt layer would keep quoting the
-    # previous brief while the supers came from the new one.
-    text_changed = merged.brief != existing.brief.brief
-    if text_changed:
-        merged.intent = ""
-        merged.unsupported = []
-        merged.music_direction = None
+  const EXAMPLES = [
+    "A 60-second ad for our new Bali summer flight route with beach shots and happy families.",
+    "A 90-second brand film about our loyalty program, warm and cinematic.",
+    "A 30-second vertical Reel for our winter sale, energetic and colorful.",
+  ];
 
-    def mutate(current: Project) -> Project:
-        current.brief = merged
-        current.plan = plan
-        if body.transition:
-            current.transition = body.transition
-        if text_changed:
-            current.supers = []
-            current.end_card = EndCard(enabled=False)
-        if duration_changed or text_changed:
-            # A new segment count or a new brief makes the scene list meaningless.
-            for story in current.stories:
-                story.scenes = []
-            current.clips = []
-        return current
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 space-y-6">
+        <CapabilityNotice health={health} />
 
-    project = await update_project(project_id, mutate)
+        <div className="rounded-2xl border border-border bg-surface p-5">
+          <label className="text-sm font-medium mb-2 block">What video do you want to make?</label>
+          <textarea
+            value={brief}
+            onChange={(e) => setBrief(e.target.value)}
+            placeholder="Example: A cinematic 1-minute video promoting our new Bali summer route — sunrise beach, family boarding, aerial shots, warm music."
+            className="w-full min-h-[140px] rounded-xl border border-border bg-background p-4 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
+            {EXAMPLES.map((example) => (
+              <button
+                key={example}
+                onClick={() => setBrief(example)}
+                className="text-xs px-3 py-1.5 rounded-full border border-border bg-background hover:bg-accent text-muted-foreground"
+              >
+                {example.slice(0, 50)}…
+              </button>
+            ))}
+          </div>
 
-    if text_changed:
-        analysis = await analyse_brief(merged.brief, seconds=merged.seconds, ratio=merged.ratio)
-        project = await update_project(project_id, _apply_analysis(analysis))
+          <div className="mt-5 rounded-xl border border-dashed border-border bg-background p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium">Attachments</div>
+                <div className="text-xs text-muted-foreground">
+                  File names are passed to the writer as reference notes.
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium hover:bg-accent cursor-pointer">
+                <Upload className="size-4" />
+                Add files
+                <input
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    if (files.length === 0) return;
+                    setAttachments((current) => [
+                      ...current,
+                      ...files.map((file) => ({
+                        id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
+                        file,
+                        previewUrl: URL.createObjectURL(file),
+                      })),
+                    ]);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            </div>
 
-    return {"project": project.dump()}
+            {attachments.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-3">
+                {attachments.map((attachment) => {
+                  const isImage = attachment.file.type.startsWith("image/");
+                  const label = attachment.file.name.split(".").pop()?.toUpperCase() || "FILE";
 
+                  return (
+                    <div
+                      key={attachment.id}
+                      className="group relative h-[60px] w-[100px] shrink-0 overflow-hidden rounded-lg border border-border bg-surface"
+                    >
+                      {isImage ? (
+                        <img
+                          src={attachment.previewUrl}
+                          alt={attachment.file.name}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center p-2 text-center">
+                          <div className="text-[10px] font-semibold text-primary">
+                            {label.slice(0, 4)}
+                          </div>
+                        </div>
+                      )}
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5">
+                        <div className="text-[10px] text-white line-clamp-1">
+                          {attachment.file.name}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() =>
+                          setAttachments((current) => {
+                            const target = current.find((item) => item.id === attachment.id);
+                            if (target) URL.revokeObjectURL(target.previewUrl);
+                            return current.filter((item) => item.id !== attachment.id);
+                          })
+                        }
+                        className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                        aria-label={`Remove ${attachment.file.name}`}
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="mt-3 text-xs text-muted-foreground">No attachments added yet.</div>
+            )}
+          </div>
+        </div>
 
-# ---------------------------------------------------------------------------
-# Storyboard
-# ---------------------------------------------------------------------------
+        <div className="rounded-2xl border border-border bg-surface p-5">
+          <div className="flex items-center justify-between mb-3">
+            <label className="text-sm font-medium">How long should the video be?</label>
+            <div className="flex items-center gap-2 text-sm">
+              <input
+                type="number"
+                min={4}
+                max={maxSeconds}
+                step={5}
+                value={seconds}
+                onChange={(e) =>
+                  setSeconds(Math.max(4, Math.min(maxSeconds, Number(e.target.value) || 30)))
+                }
+                className="w-20 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-right"
+              />
+              <span className="text-muted-foreground">seconds</span>
+            </div>
+          </div>
+          <input
+            type="range"
+            min={10}
+            max={maxSeconds}
+            step={5}
+            value={seconds}
+            onChange={(e) => setSeconds(Number(e.target.value))}
+            className="w-full accent-primary"
+          />
 
+          <PlanSummary plan={plan} health={health} />
+        </div>
 
-@router.post("/projects/{project_id}/stories", status_code=202)
-async def post_stories(project_id: str) -> dict[str, str]:
-    project = await require_project(project_id)
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="rounded-2xl border border-border bg-surface p-5">
+            <label className="text-sm font-medium mb-3 block">Style</label>
+            <div className="grid grid-cols-2 gap-2">
+              {STYLE_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => {
+                    setStyle(preset.id);
+                    setPacing(undefined);
+                  }}
+                  className={`text-left rounded-xl border p-3 transition-colors ${
+                    style === preset.id
+                      ? "border-primary bg-primary/5"
+                      : "border-border bg-background hover:bg-accent"
+                  }`}
+                >
+                  <div className="text-sm font-medium">{preset.label}</div>
+                  <div className="text-xs text-muted-foreground">{preset.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
 
-    async def work(context: JobContext) -> dict[str, int]:
-        context.progress(0.1, "Writing director treatments…")
-        stories = await generate_treatments(project.brief, project.plan)
+          <div className="rounded-2xl border border-border bg-surface p-5">
+            <label className="text-sm font-medium mb-3 block">Aspect ratio</label>
+            <div className="grid grid-cols-2 gap-2">
+              {RATIOS.map((option) => (
+                <button
+                  key={option.id}
+                  onClick={() => setRatio(option.id)}
+                  className={`rounded-xl border p-3 text-sm text-left transition-colors ${
+                    ratio === option.id
+                      ? "border-primary bg-primary/5 font-medium"
+                      : "border-border bg-background hover:bg-accent"
+                  }`}
+                >
+                  <div>{option.label}</div>
+                  {option.note && (
+                    <div className="text-[11px] text-muted-foreground font-normal">
+                      {option.note}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
 
-        def mutate(current: Project) -> Project:
-            current.stories = stories
-            current.selected_story_id = stories[0].id if stories else None
-            current.clips = []
-            return current
+        <div className="rounded-2xl border border-border bg-surface p-5">
+          <label className="text-sm font-medium mb-3 block">Cut style</label>
+          <div className="grid grid-cols-2 gap-2 max-w-md">
+            {(
+              [
+                { id: "hardcut", label: "Hard cuts", desc: "Lands on your exact duration" },
+                { id: "crossfade", label: "Crossfade", desc: "Dissolves; slightly shorter" },
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.id}
+                onClick={() => setTransition(option.id)}
+                className={`text-left rounded-xl border p-3 transition-colors ${
+                  transition === option.id
+                    ? "border-primary bg-primary/5"
+                    : "border-border bg-background hover:bg-accent"
+                }`}
+              >
+                <div className="text-sm font-medium">{option.label}</div>
+                <div className="text-xs text-muted-foreground">{option.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
-        await update_project(project_id, mutate)
-        return {"stories": len(stories)}
+      <aside className="lg:sticky lg:top-20 self-start rounded-2xl border border-border bg-surface p-5">
+        <div className="text-sm font-medium mb-3">What happens next</div>
+        <ol className="space-y-3 text-sm">
+          {[
+            "We write four director treatments and you pick a direction.",
+            `The story is broken into ${plan?.segments.length ?? "several"} scenes sized to what Veo can render.`,
+            "Every scene prompt is audited against the dramaturgy rules before it ships.",
+            "Each clip is generated, then accumulated with audio into one video.",
+          ].map((text, index) => (
+            <li key={index} className="flex gap-3">
+              <div className="size-6 rounded-full bg-primary/10 text-primary text-xs grid place-items-center font-semibold shrink-0">
+                {index + 1}
+              </div>
+              <span className="text-muted-foreground">{text}</span>
+            </li>
+          ))}
+        </ol>
 
-    return {"jobId": start_job(project_id, "storyboard", work).id}
+        <button
+          onClick={async () => {
+            setSubmitting(true);
+            await onSubmit({
+              brief,
+              seconds,
+              style,
+              ratio,
+              pacing,
+              transition,
+              references: attachments.map((item) => item.file.name),
+            });
+            // The project now holds the brief; the draft has done its job.
+            clearBriefDraft();
+            setSubmitting(false);
+          }}
+          disabled={!brief.trim() || submitting}
+          className="mt-5 cursor-pointer w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary text-primary-foreground py-3 text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {submitting ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+          {submitting ? "Planning…" : "Plan my storyboard"}
+          {!submitting && <ArrowRight className="size-4" />}
+        </button>
+      </aside>
+    </div>
+  );
+}
 
+/**
+ * Shows how the requested duration decomposes into Veo generations.
+ *
+ * This is the thing users get wrong about AI video, so it is stated up front
+ * rather than discovered at render time.
+ */
+function PlanSummary({ plan, health }: { plan: DurationPlan | null; health: Health | null }) {
+  if (!plan) {
+    return (
+      <div className="mt-3 text-xs text-muted-foreground">Working out the clip breakdown…</div>
+    );
+  }
 
-@router.post("/projects/{project_id}/stories/{story_id}/regenerate", status_code=202)
-async def post_regenerate_story(project_id: str, story_id: str) -> dict[str, str]:
-    project = await require_project(project_id)
-    if not any(story.id == story_id for story in project.stories):
-        raise NotFound(f"Story {story_id} not found.")
+  const counts = plan.segments.reduce<Record<number, number>>((acc, segment) => {
+    acc[segment.seconds] = (acc[segment.seconds] ?? 0) + 1;
+    return acc;
+  }, {});
 
-    async def work(context: JobContext) -> dict[str, str]:
-        context.progress(0.2, "Finding a different direction…")
-        replacement = await regenerate_treatment(
-            project.brief, project.plan, project.stories, story_id
-        )
+  const breakdown = Object.entries(counts)
+    .sort((a, b) => Number(b[0]) - Number(a[0]))
+    .map(([secs, count]) => `${count} × ${secs}s`)
+    .join(" + ");
 
-        def mutate(current: Project) -> Project:
-            current.stories = [
-                replacement if story.id == story_id else story for story in current.stories
-            ]
-            if current.selected_story_id == story_id:
-                current.clips = []
-            return current
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-background p-3">
+      <div className="flex items-start gap-2 text-xs">
+        <Scissors className="size-3.5 mt-0.5 text-primary shrink-0" />
+        <div className="flex-1">
+          <div className="font-medium text-foreground">
+            {plan.segments.length} clips · {breakdown}
+          </div>
+          <div className="text-muted-foreground mt-1">
+            {health?.veo.model ?? "Veo"} renders at most {health?.veo.maxClipSeconds ?? 8}s per
+            generation, so your {plan.targetSeconds}s film is generated as {plan.segments.length}{" "}
+            separate clips and accumulated into one file.
+          </div>
+          {!plan.exact && (
+            <div className="text-muted-foreground mt-1">
+              The plan overshoots by {plan.trimSeconds}s and the tail is trimmed to land on exactly{" "}
+              {plan.targetSeconds}s.
+            </div>
+          )}
+        </div>
+      </div>
 
-        await update_project(project_id, mutate)
-        return {"storyId": story_id}
+      <div className="mt-3 flex gap-0.5 h-6">
+        {plan.segments.map((segment) => (
+          <div
+            key={segment.index}
+            title={`Scene ${segment.index + 1} · ${segment.seconds}s · ${BEAT_LABELS[segment.beat]}`}
+            className="rounded-sm bg-primary/25 hover:bg-primary/50 transition-colors grid place-items-center text-[9px] text-primary font-semibold"
+            style={{ flexGrow: segment.seconds }}
+          >
+            {segment.seconds}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
-    return {"jobId": start_job(project_id, "storyboard", work, target_id=story_id).id}
+/* ---------------- Step 2: Storyboard ---------------- */
 
+function StoryboardStep({
+  project,
+  jobs,
+  onSelectStory,
+  onRegenerateStory,
+  onGenerateScenes,
+  onUpdateScene,
+  onRewriteScene,
+  onBack,
+  onNext,
+}: {
+  project: Project;
+  jobs: Record<string, Job>;
+  onSelectStory: (storyId: string) => void;
+  onRegenerateStory: (storyId: string) => void;
+  onGenerateScenes: (storyId: string) => void;
+  onUpdateScene: (sceneId: string, prompt: string) => void;
+  onRewriteScene: (sceneId: string, instruction: string) => void;
+  onBack: () => void;
+  onNext: () => void;
+}) {
+  const [openStoryId, setOpenStoryId] = useState<string | null>(null);
+  const selected = project.stories.find((story) => story.id === project.selectedStoryId) ?? null;
+  const writing = jobFor(jobs, "storyboard");
+  const openStory = project.stories.find((story) => story.id === openStoryId) ?? null;
 
-@router.post("/projects/{project_id}/stories/{story_id}/scenes", status_code=202)
-async def post_scenes(project_id: str, story_id: str) -> dict[str, str]:
-    """Write the scene-by-scene prompts for one story."""
-    project = await require_project(project_id)
-    story = next((candidate for candidate in project.stories if candidate.id == story_id), None)
-    if story is None:
-        raise NotFound(f"Story {story_id} not found.")
+  if (project.stories.length === 0) {
+    return (
+      <div className="rounded-2xl border border-border bg-surface p-10 text-center">
+        <Loader2 className="size-6 animate-spin text-primary mx-auto mb-3" />
+        <div className="text-sm font-medium">Writing four director treatments…</div>
+        <div className="text-xs text-muted-foreground mt-1">
+          {writing?.message ?? "This usually takes under a minute."}
+        </div>
+      </div>
+    );
+  }
 
-    async def work(context: JobContext) -> dict[str, Any]:
-        written, repair_passes = await generate_scenes(
-            project.brief,
-            project.plan,
-            story,
-            lambda fraction, message: context.progress(fraction, message),
-        )
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Pick your story direction</h2>
+          <p className="text-sm text-muted-foreground">
+            Four different films from the same brief. Open one to review its scene prompts.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Clock className="size-4" />
+          {selected?.title ?? "None selected"} ·{" "}
+          {selected?.scenes.length || project.plan.segments.length} scenes ·{" "}
+          {project.plan.targetSeconds}s
+        </div>
+      </div>
 
-        def mutate(current: Project) -> Project:
-            current.stories = [
-                written if candidate.id == story_id else candidate for candidate in current.stories
-            ]
-            current.clips = sync_clips(current)
-            return current
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+        {project.stories.map((story) => {
+          const isSelected = story.id === project.selectedStoryId;
+          const busy = jobFor(jobs, "storyboard", story.id);
 
-        await update_project(project_id, mutate)
-        return {
-            "storyId": story_id,
-            "scenes": len(written.scenes),
-            "audit": written.audit.model_dump(by_alias=True, mode="json"),
-            "repairPasses": repair_passes,
+          return (
+            <div
+              key={story.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelectStory(story.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelectStory(story.id);
+                }
+              }}
+              className={`rounded-2xl border p-4 cursor-pointer transition-all ${
+                isSelected ? "border-primary bg-primary/5" : "border-border bg-surface"
+              }`}
+            >
+              <div className="flex items-start justify-between mb-3 gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">{story.title}</div>
+                  <div className="text-xs text-muted-foreground mt-1">{story.summary}</div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {isSelected && (
+                    <span className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground">
+                      Selected
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border bg-background p-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+                  Brief story
+                </div>
+                <p className="text-sm text-foreground/90 leading-relaxed">{story.treatment}</p>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
+                <div>
+                  <span className="font-medium text-foreground/80">Emotion:</span>{" "}
+                  {story.anchors.emotion}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground/80">Motif:</span>{" "}
+                  {story.anchors.motif}
+                </div>
+                <div className="col-span-2">
+                  <span className="font-medium text-foreground/80">Ends on:</span>{" "}
+                  {story.anchors.finalImage}
+                </div>
+              </div>
+
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectStory(story.id);
+                    setOpenStoryId(story.id);
+                    if (story.scenes.length === 0 && !busy) onGenerateScenes(story.id);
+                  }}
+                  disabled={Boolean(busy)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-medium hover:bg-accent/70 disabled:opacity-50"
+                >
+                  {busy ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Layers className="size-3.5" />
+                  )}
+                  {story.scenes.length > 0
+                    ? `Show ${story.scenes.length} scenes`
+                    : busy
+                      ? "Writing scenes…"
+                      : "Write scene prompts"}
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRegenerateStory(story.id);
+                  }}
+                  disabled={Boolean(busy)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
+                >
+                  <RefreshCw className="size-3.5" />
+                  Change story
+                </button>
+
+                {story.scenes.length > 0 && (
+                  <>
+                    <AuditBadge story={story} />
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onGenerateScenes(story.id);
+                      }}
+                      disabled={Boolean(busy)}
+                      title="Write a fresh set of scene prompts for this story"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
+                    >
+                      <RefreshCw className="size-3.5" />
+                      Rewrite scenes
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <ScenesDrawer
+        story={openStory}
+        open={Boolean(openStoryId)}
+        busy={Boolean(openStoryId && jobFor(jobs, "storyboard", openStoryId))}
+        onOpenChange={(open) => setOpenStoryId(open ? openStoryId : null)}
+        onUpdateScene={onUpdateScene}
+        onRewriteScene={onRewriteScene}
+      />
+
+      <FooterNav
+        onBack={onBack}
+        onNext={onNext}
+        nextLabel={
+          selected && selected.scenes.length > 0
+            ? `Generate all ${selected.scenes.length} clips`
+            : "Write the scene prompts first"
         }
-
-    job = start_job(
-        project_id,
-        "storyboard",
-        work,
-        target_id=story_id,
-        message=f"Writing {len(project.plan.segments)} scene prompts…",
-    )
-    return {"jobId": job.id}
-
-
-@router.post("/projects/{project_id}/select-story")
-async def post_select_story(project_id: str, body: SelectStoryBody) -> dict[str, Any]:
-    project = await require_project(project_id)
-    if not any(story.id == body.storyId for story in project.stories):
-        raise NotFound(f"Story {body.storyId} not found.")
-
-    def mutate(current: Project) -> Project:
-        current.selected_story_id = body.storyId
-        current.clips = sync_clips(current)
-        return current
-
-    updated = await update_project(project_id, mutate)
-    return {"project": updated.dump()}
-
-
-@router.patch("/projects/{project_id}/scenes/{scene_id}")
-async def patch_scene(project_id: str, scene_id: str, body: ScenePatch) -> dict[str, Any]:
-    """Direct edit of a scene prompt from the storyboard drawer."""
-    changes = body.model_dump(exclude_none=True)
-    field_map = {
-        "prompt": "prompt",
-        "title": "title",
-        "summary": "summary",
-        "negativePrompt": "negative_prompt",
-        "transitionOut": "transition_out",
-    }
-    update = {field_map[key]: value for key, value in changes.items()}
-
-    def mutate(current: Project) -> Project:
-        for story in current.stories:
-            story.scenes = [
-                scene.model_copy(update=update) if scene.id == scene_id else scene
-                for scene in story.scenes
-            ]
-        if "prompt" in update:
-            # An edited prompt means the existing clip no longer matches the scene.
-            current.clips = [
-                clip.model_copy(update={"status": "idle", "progress": 0.0, "error": None})
-                if clip.scene_id == scene_id
-                else clip
-                for clip in current.clips
-            ]
-        return current
-
-    project = await update_project(project_id, mutate)
-    return {"project": project.dump()}
-
-
-@router.post("/projects/{project_id}/scenes/{scene_id}/rewrite", status_code=202)
-async def post_rewrite_scene(project_id: str, scene_id: str, body: RewriteBody) -> dict[str, str]:
-    project = await require_project(project_id)
-    story = selected_story(project)
-    scene = next((candidate for candidate in story.scenes if candidate.id == scene_id), None)
-    if scene is None:
-        raise NotFound(f"Scene {scene_id} not found in the selected story.")
-
-    async def work(context: JobContext) -> dict[str, str]:
-        context.progress(0.3, "Rewriting the scene…")
-        rewritten = await rewrite_scene(project.brief, story, scene, body.instruction)
-
-        def mutate(current: Project) -> Project:
-            for candidate in current.stories:
-                if candidate.id != story.id:
-                    continue
-                candidate.scenes = [
-                    rewritten if existing.id == scene_id else existing
-                    for existing in candidate.scenes
-                ]
-            current.clips = [
-                clip.model_copy(update={"status": "idle", "progress": 0.0, "error": None})
-                if clip.scene_id == scene_id
-                else clip
-                for clip in current.clips
-            ]
-            return current
-
-        await update_project(project_id, mutate)
-        return {"sceneId": scene_id}
-
-    return {"jobId": start_job(project_id, "storyboard", work, target_id=scene_id).id}
-
-
-# ---------------------------------------------------------------------------
-# Clips
-# ---------------------------------------------------------------------------
-
-
-@router.post("/projects/{project_id}/clips/generate-all", status_code=202)
-async def post_generate_all(project_id: str, force: bool = Query(default=False)) -> dict[str, str]:
-    project = await require_project(project_id)
-    selected_story(project)  # fail fast with a clear message
-
-    async def work(context: JobContext) -> dict[str, int]:
-        fresh = await require_project(project_id)
-        return await generate_all_clips(fresh, context, force=force)
-
-    job = start_job(
-        project_id,
-        "clips",
-        work,
-        message=f"Generating {len(project.plan.segments)} clips…",
-    )
-    return {"jobId": job.id}
-
-
-@router.post("/projects/{project_id}/clips/{scene_id}/generate", status_code=202)
-async def post_generate_clip(project_id: str, scene_id: str) -> dict[str, str]:
-    await require_project(project_id)
-
-    async def work(context: JobContext) -> dict[str, Any]:
-        fresh = await require_project(project_id)
-        clip = await generate_scene_clip(
-            fresh,
-            scene_id,
-            force=True,
-            on_progress=lambda fraction, message: context.progress(fraction, message),
-        )
-        return clip.model_dump(by_alias=True, mode="json")
-
-    return {"jobId": start_job(project_id, "clip", work, target_id=scene_id).id}
-
-
-# ---------------------------------------------------------------------------
-# Audio
-# ---------------------------------------------------------------------------
-
-
-@router.post("/projects/{project_id}/audio/suggest", status_code=202)
-async def post_audio_suggest(project_id: str) -> dict[str, str]:
-    project = await require_project(project_id)
-    story = selected_story(project)
-
-    async def work(context: JobContext) -> dict[str, int]:
-        context.progress(0.3, "Writing music direction…")
-        tracks = await suggest_tracks(project.brief, story, project.plan.target_seconds)
-
-        def mutate(current: Project) -> Project:
-            # Uploaded tracks survive a re-suggest; generated ideas are replaced.
-            current.audio = [
-                track for track in current.audio if track.source == "uploaded"
-            ] + tracks
-            return current
-
-        await update_project(project_id, mutate)
-        return {"tracks": len(tracks)}
-
-    return {"jobId": start_job(project_id, "audio", work).id}
-
-
-@router.post("/projects/{project_id}/audio/{track_id}/generate", status_code=202)
-async def post_audio_generate(project_id: str, track_id: str) -> dict[str, str]:
-    await require_project(project_id)
-
-    async def work(context: JobContext) -> dict[str, Any]:
-        context.progress(0.2, "Generating audio…")
-        fresh = await require_project(project_id)
-        track = await generate_track(fresh, track_id)
-        return track.model_dump(by_alias=True, mode="json")
-
-    return {"jobId": start_job(project_id, "audio", work, target_id=track_id).id}
-
-
-@router.patch("/projects/{project_id}/audio/{track_id}")
-async def patch_audio(project_id: str, track_id: str, body: TrackPatch) -> dict[str, Any]:
-    changes = body.model_dump(exclude_none=True)
-
-    def mutate(current: Project) -> Project:
-        target = next((track for track in current.audio if track.id == track_id), None)
-        if target is None:
-            return current
-
-        updated = []
-        for track in current.audio:
-            if track.id == track_id:
-                patch = dict(changes)
-                # Editing the prompt invalidates the rendered audio.
-                if (
-                    "prompt" in patch
-                    and patch["prompt"] != track.prompt
-                    and track.source == "generated"
-                ):
-                    patch |= {"status": "idle", "file": None, "url": None}
-                updated.append(track.model_copy(update=patch))
-            elif changes.get("selected") is True and track.kind == target.kind:
-                # Selecting a track deselects the others of the same kind.
-                updated.append(track.model_copy(update={"selected": False}))
-            else:
-                updated.append(track)
-
-        current.audio = updated
-        return current
-
-    project = await update_project(project_id, mutate)
-    return {"project": project.dump()}
-
-
-@router.post("/projects/{project_id}/audio/upload", status_code=201)
-async def post_audio_upload(
-    project_id: str,
-    file: UploadFile = File(...),
-    kind: str = Form(default="music"),
-) -> dict[str, Any]:
-    project = await require_project(project_id)
-    payload = await file.read()
-
-    if len(payload) > 40 * 1024 * 1024:
-        raise BadRequest("Audio uploads are capped at 40MB.")
-    if not payload:
-        raise BadRequest("The uploaded file is empty.")
-
-    track = await save_uploaded_track(
-        project,
-        file.filename or "track.mp3",
-        payload,
-        "voiceover" if kind == "voiceover" else "music",
-    )
-    return {"track": track.model_dump(by_alias=True, mode="json")}
-
-
-# ---------------------------------------------------------------------------
-# Render
-# ---------------------------------------------------------------------------
-
-
-@router.post("/projects/{project_id}/render", status_code=202)
-async def post_render(project_id: str) -> dict[str, str]:
-    project = await require_project(project_id)
-    selected_story(project)
-
-    async def work(context: JobContext) -> dict[str, Any]:
-        fresh = await require_project(project_id)
-        return await render_project(fresh, context)
-
-    job = start_job(project_id, "render", work, message="Accumulating clips…")
-
-    def mutate(current: Project) -> Project:
-        current.render = RenderResult(status="queued", progress=0.0)
-        return current
-
-    await update_project(project_id, mutate)
-    return {"jobId": job.id}
-
-
-# ---------------------------------------------------------------------------
-# Jobs and live progress
-# ---------------------------------------------------------------------------
-
-
-@router.get("/jobs/{job_id}")
-async def get_one_job(job_id: str) -> dict[str, Any]:
-    job = get_job(job_id)
-    if job is None:
-        raise NotFound(f"Job {job_id} not found.")
-    return {"job": job.dump()}
-
-
-@router.post("/jobs/{job_id}/cancel")
-async def post_cancel_job(job_id: str) -> dict[str, bool]:
-    return {"cancelled": cancel_job(job_id)}
-
-
-@router.get("/projects/{project_id}/events")
-async def stream_events(project_id: str, request: Request) -> StreamingResponse:
-    """Live project state over SSE.
-
-    Every event carries full state, so a dropped connection recovers simply by
-    reconnecting — there is no incremental log to replay.
-    """
-    project = await require_project(project_id)
-    queue = subscribe(project_id)
-
-    async def generator():
-        try:
-            yield _sse("project", {"project": project.dump()})
-            for job in list_jobs(project_id):
-                yield _sse("job", {"job": job.dump()})
-
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=20.0)
-                except asyncio.TimeoutError:
-                    # Heartbeat, so proxies keep the connection open through the
-                    # quiet stretches of a long render.
-                    yield ": ping\n\n"
-                    continue
-
-                kind = event.pop("type")
-                yield _sse(kind, event)
-        finally:
-            unsubscribe(project_id, queue)
-
-    return StreamingResponse(
-        generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-def _sse(event: str, data: dict[str, Any]) -> str:
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+        nextIcon={<Wand2 className="size-4" />}
+        disabled={!selected || selected.scenes.length === 0}
+      />
+    </div>
+  );
+}
+
+/** Surfaces the backend's dramaturgy audit so a weak storyboard is visible. */
+function AuditBadge({ story }: { story: StoryOption }) {
+  const errors = story.audit.issues.filter((issue) => issue.severity === "error").length;
+  const warnings = story.audit.issues.length - errors;
+
+  if (story.audit.passed && warnings === 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-600">
+        <ShieldCheck className="size-3.5" />
+        Audit clean
+      </span>
+    );
+  }
+
+  return (
+    <span
+      title={story.audit.issues.map((issue) => `${issue.rule}: ${issue.message}`).join("\n")}
+      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium ${
+        errors > 0 ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-600"
+      }`}
+    >
+      <AlertTriangle className="size-3.5" />
+      {errors > 0
+        ? `${errors} issue${errors === 1 ? "" : "s"}`
+        : `${warnings} note${warnings === 1 ? "" : "s"}`}
+      <span className="opacity-60">· {story.audit.score}/100</span>
+    </span>
+  );
+}
+
+function ScenesDrawer({
+  story,
+  open,
+  busy,
+  onOpenChange,
+  onUpdateScene,
+  onRewriteScene,
+}: {
+  story: StoryOption | null;
+  open: boolean;
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onUpdateScene: (sceneId: string, prompt: string) => void;
+  onRewriteScene: (sceneId: string, instruction: string) => void;
+}) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full sm:max-w-2xl p-0 bg-surface">
+        <div className="h-full overflow-auto p-6">
+          <SheetHeader className="mb-5 text-left">
+            <SheetTitle>{story?.title ?? "Story scenes"}</SheetTitle>
+            <SheetDescription>
+              Each scene is one Veo generation. Edit a prompt directly, or ask for a rewrite.
+            </SheetDescription>
+          </SheetHeader>
+
+          {busy && (
+            <div className="rounded-xl border border-border bg-background p-6 text-center">
+              <Loader2 className="size-5 animate-spin text-primary mx-auto mb-2" />
+              <div className="text-sm">Writing and auditing the scene prompts…</div>
+            </div>
+          )}
+
+          {!busy && story && story.scenes.length > 0 && (
+            <div className="space-y-3">
+              {story.scenes.map((scene) => (
+                <SceneCard
+                  key={scene.id}
+                  scene={scene}
+                  issues={story.audit.issues.filter((issue) => issue.sceneId === scene.id)}
+                  onUpdate={(prompt) => onUpdateScene(scene.id, prompt)}
+                  onRewrite={(instruction) => onRewriteScene(scene.id, instruction)}
+                />
+              ))}
+            </div>
+          )}
+
+          {!busy && story && story.scenes.length === 0 && (
+            <div className="text-sm text-muted-foreground">
+              No scenes written yet. Close this and choose "Write scene prompts".
+            </div>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function SceneCard({
+  scene,
+  issues,
+  onUpdate,
+  onRewrite,
+}: {
+  scene: Scene;
+  issues: { rule: string; severity: string; message: string }[];
+  onUpdate: (prompt: string) => void;
+  onRewrite: (instruction: string) => void;
+}) {
+  const [draft, setDraft] = useState(scene.prompt);
+  const [instruction, setInstruction] = useState("");
+  const [showRewrite, setShowRewrite] = useState(false);
+
+  useEffect(() => setDraft(scene.prompt), [scene.prompt]);
+  const dirty = draft !== scene.prompt;
+
+  return (
+    <div className="rounded-xl border border-border bg-background p-3">
+      <div className="flex items-center justify-between mb-2 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="size-7 shrink-0 rounded-lg bg-primary/10 text-primary text-xs font-semibold grid place-items-center">
+            {scene.order}
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-medium truncate">{scene.title}</div>
+            <div className="text-[11px] text-muted-foreground">
+              {scene.seconds}s · {BEAT_LABELS[scene.beat]} · {scene.shotFunction} ·{" "}
+              {formatSeconds(scene.startsAt)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {issues.length > 0 && (
+        <div className="mb-2 rounded-lg bg-amber-500/5 border border-amber-500/30 p-2 text-[11px] space-y-0.5">
+          {issues.slice(0, 3).map((issue, index) => (
+            <div key={index} className="text-muted-foreground">
+              <span className="font-medium text-amber-600">{issue.rule}</span> — {issue.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        className="w-full min-h-[160px] rounded-lg border border-border bg-surface p-3 text-xs font-mono leading-relaxed resize-y focus:outline-none focus:ring-2 focus:ring-primary"
+      />
+
+      <div className="mt-2 flex items-center gap-2 flex-wrap">
+        <button
+          onClick={() => onUpdate(draft)}
+          disabled={!dirty}
+          className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-40"
+        >
+          Save prompt
+        </button>
+        <button
+          onClick={() => setShowRewrite((value) => !value)}
+          className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs hover:bg-accent"
+        >
+          Ask for a rewrite
+        </button>
+        {scene.continuityNote && (
+          <span className="text-[11px] text-muted-foreground truncate flex-1">
+            Cut: {scene.continuityNote}
+          </span>
+        )}
+      </div>
+
+      {showRewrite && (
+        <div className="mt-2 flex gap-2">
+          <input
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            placeholder="e.g. make it a macro insert on the hands instead"
+            className="flex-1 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <button
+            onClick={() => {
+              onRewrite(instruction);
+              setInstruction("");
+              setShowRewrite(false);
+            }}
+            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium hover:bg-accent/70"
+          >
+            Rewrite
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Step 3: Clips ---------------- */
+
+function ClipsStep({
+  project,
+  jobs,
+  onGenerate,
+  onGenerateAll,
+  onBack,
+  onNext,
+}: {
+  project: Project;
+  jobs: Record<string, Job>;
+  onGenerate: (sceneId: string) => void;
+  onGenerateAll: () => void;
+  onBack: () => void;
+  onNext: () => void;
+}) {
+  const story = project.stories.find((candidate) => candidate.id === project.selectedStoryId);
+  const scenes = story?.scenes ?? [];
+  const byScene = useMemo(
+    () => Object.fromEntries(project.clips.map((clip) => [clip.sceneId, clip])),
+    [project.clips],
+  );
+
+  const ready = project.clips.filter((clip) => clip.status === "ready").length;
+  const failed = project.clips.filter((clip) => clip.status === "failed").length;
+  const batch = jobFor(jobs, "clips");
+  const canProceed = scenes.length > 0 && ready === scenes.length;
+
+  const aspect = useMemo(() => {
+    const [w, h] = project.brief.ratio.split(":").map(Number);
+    return `${w} / ${h}`;
+  }, [project.brief.ratio]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Generate your clips</h2>
+          <p className="text-sm text-muted-foreground">
+            {ready} of {scenes.length} clips ready
+            {failed > 0 && <span className="text-destructive"> · {failed} failed</span>}
+            {batch && <span> · {batch.message}</span>}
+          </p>
+        </div>
+        <button
+          onClick={onGenerateAll}
+          disabled={Boolean(batch)}
+          className="inline-flex items-center gap-2 rounded-xl bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
+        >
+          {batch ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+          {batch ? "Generating…" : "Regenerate all"}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {scenes.map((scene) => (
+          <ClipCard
+            key={scene.id}
+            scene={scene}
+            clip={byScene[scene.id]}
+            aspect={aspect}
+            onGenerate={() => onGenerate(scene.id)}
+          />
+        ))}
+      </div>
+
+      <FooterNav
+        onBack={onBack}
+        onNext={onNext}
+        nextLabel={canProceed ? "Add audio" : `${scenes.length - ready} clip(s) still to generate`}
+        nextIcon={<Music className="size-4" />}
+        disabled={!canProceed}
+      />
+    </div>
+  );
+}
+
+function ClipCard({
+  scene,
+  clip,
+  aspect,
+  onGenerate,
+}: {
+  scene: Scene;
+  clip: Clip | undefined;
+  aspect: string;
+  onGenerate: () => void;
+}) {
+  const status = clip?.status ?? "idle";
+  const { url: mediaUrl } = useAuthenticatedMediaUrl(clip?.url);
+  const { url: posterUrl } = useAuthenticatedMediaUrl(clip?.posterUrl);
+
+  return (
+    <div className="rounded-2xl border border-border bg-surface overflow-hidden">
+      <div className="w-full bg-black relative" style={{ aspectRatio: aspect }}>
+        {status === "ready" && mediaUrl ? (
+          <video
+            src={mediaUrl}
+            poster={posterUrl ?? undefined}
+            controls
+            preload="metadata"
+            playsInline
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 grid place-items-center bg-gradient-to-br from-primary/20 via-primary/5 to-background">
+            {status === "generating" ? (
+              <div className="text-center px-4">
+                <Loader2 className="size-6 animate-spin text-primary mx-auto mb-2" />
+                <div className="text-xs text-muted-foreground">
+                  Generating… {Math.round((clip?.progress ?? 0) * 100)}%
+                </div>
+              </div>
+            ) : status === "failed" ? (
+              <div className="text-center px-4">
+                <AlertTriangle className="size-6 text-destructive mx-auto mb-2" />
+                <div className="text-[11px] text-muted-foreground line-clamp-3">{clip?.error}</div>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                Scene {scene.order} · not generated
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="absolute top-2 left-2 text-[10px] px-2 py-0.5 rounded-full bg-black/60 text-white pointer-events-none">
+          {scene.seconds}s · {BEAT_LABELS[scene.beat]}
+        </div>
+      </div>
+
+      <div className="p-3">
+        <div className="text-xs font-medium mb-1 truncate">{scene.title}</div>
+        <div className="text-xs text-muted-foreground line-clamp-2 min-h-[32px]">
+          {scene.summary}
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          {status === "generating" ? (
+            <div className="flex-1 h-1.5 rounded-full bg-accent overflow-hidden">
+              <div
+                className="h-full bg-primary transition-all"
+                style={{ width: `${Math.max(3, (clip?.progress ?? 0) * 100)}%` }}
+              />
+            </div>
+          ) : (
+            <button
+              onClick={onGenerate}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent text-foreground text-xs font-medium py-1.5 hover:bg-accent/70"
+            >
+              {status === "ready" ? (
+                <>
+                  <RefreshCw className="size-3.5" /> Regenerate
+                </>
+              ) : status === "failed" ? (
+                <>
+                  <RefreshCw className="size-3.5" /> Retry
+                </>
+              ) : (
+                <>
+                  <Wand2 className="size-3.5" /> Generate
+                </>
+              )}
+            </button>
+          )}
+          {clip?.actualSeconds != null && status === "ready" && (
+            <span className="text-[10px] text-muted-foreground">
+              {clip.actualSeconds.toFixed(1)}s
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Step 4: Audio ---------------- */
+
+function AudioStep({
+  project,
+  jobs,
+  health,
+  onSuggest,
+  onGenerate,
+  onSelect,
+  onUpdatePrompt,
+  onUpload,
+  onBack,
+  onNext,
+}: {
+  project: Project;
+  jobs: Record<string, Job>;
+  health: Health | null;
+  onSuggest: () => void;
+  onGenerate: (trackId: string) => void;
+  onSelect: (trackId: string) => void;
+  onUpdatePrompt: (trackId: string, prompt: string) => void;
+  onUpload: (file: File, kind: "music" | "voiceover") => void;
+  onBack: () => void;
+  onNext: () => void;
+}) {
+  const suggesting = jobFor(jobs, "audio");
+  const musicReady = health?.capabilities.find((capability) => capability.id === "music")?.ready;
+  const selectedCount = project.audio.filter((track) => track.selected).length;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Pick an audio vibe for your video</h2>
+          <p className="text-sm text-muted-foreground">
+            Your clips already carry Veo's own room tone and dialogue. This is the score that sits
+            underneath.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm hover:bg-accent cursor-pointer">
+            <Upload className="size-4" />
+            Upload track
+            <input
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onUpload(file, "music");
+                e.currentTarget.value = "";
+              }}
+            />
+          </label>
+          <button
+            onClick={onSuggest}
+            disabled={Boolean(suggesting)}
+            className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-medium hover:bg-accent/70 disabled:opacity-50"
+          >
+            {suggesting ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <RefreshCw className="size-4" />
+            )}
+            New directions
+          </button>
+        </div>
+      </div>
+
+      {!musicReady && (
+        <div className="mb-4 rounded-xl border border-border bg-surface p-4 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 font-medium text-foreground">
+            <Info className="size-4" />
+            No music generator configured
+          </div>
+          <p className="mt-1">
+            These directions are still written for you — upload a track that matches one, or set{" "}
+            <code className="text-xs">MUSIC_PROVIDER</code> in{" "}
+            <code className="text-xs">server/.env</code>. You can also render with Veo's native
+            audio alone.
+          </p>
+        </div>
+      )}
+
+      {project.audio.length === 0 && suggesting && (
+        <div className="rounded-2xl border border-border bg-surface p-10 text-center">
+          <Loader2 className="size-6 animate-spin text-primary mx-auto mb-3" />
+          <div className="text-sm">Writing music direction…</div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {project.audio.map((track) => (
+          <AudioCard
+            key={track.id}
+            track={track}
+            canGenerate={track.kind === "voiceover" ? true : Boolean(musicReady)}
+            onGenerate={() => onGenerate(track.id)}
+            onSelect={() => onSelect(track.id)}
+            onUpdatePrompt={(prompt) => onUpdatePrompt(track.id, prompt)}
+          />
+        ))}
+      </div>
+
+      <FooterNav
+        onBack={onBack}
+        onNext={onNext}
+        nextLabel={`Accumulate into the final video${selectedCount > 0 ? ` (${selectedCount} track)` : " (no music)"}`}
+        nextIcon={<Sparkles className="size-4" />}
+      />
+    </div>
+  );
+}
+
+function AudioCard({
+  track,
+  canGenerate,
+  onGenerate,
+  onSelect,
+  onUpdatePrompt,
+}: {
+  track: AudioTrack;
+  canGenerate: boolean;
+  onGenerate: () => void;
+  onSelect: () => void;
+  onUpdatePrompt: (prompt: string) => void;
+}) {
+  const [draft, setDraft] = useState(track.prompt);
+  const { url: mediaUrl } = useAuthenticatedMediaUrl(track.url);
+  useEffect(() => setDraft(track.prompt), [track.prompt]);
+
+  return (
+    <div
+      className={`rounded-2xl border p-4 transition-colors ${
+        track.selected ? "border-primary bg-primary/5" : "border-border bg-surface"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <button
+          onClick={onSelect}
+          className={`size-5 rounded-md border-2 shrink-0 mt-0.5 grid place-items-center ${
+            track.selected ? "bg-primary border-primary text-primary-foreground" : "border-border"
+          }`}
+          aria-label={`Select ${track.label}`}
+        >
+          {track.selected && <Check className="size-3" />}
+        </button>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-medium truncate">{track.label}</div>
+            <div className="text-xs text-muted-foreground capitalize shrink-0">
+              {track.kind}
+              {track.seconds ? ` · ${formatSeconds(track.seconds)}` : ""}
+            </div>
+          </div>
+
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => draft !== track.prompt && onUpdatePrompt(draft)}
+            className="mt-2 w-full min-h-[72px] rounded-lg border border-border bg-background p-2.5 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+
+          {track.status === "ready" && mediaUrl && (
+            <audio controls src={mediaUrl} className="mt-2 w-full h-8" />
+          )}
+          {track.status === "failed" && (
+            <div className="mt-2 text-[11px] text-destructive line-clamp-2">{track.error}</div>
+          )}
+
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={onGenerate}
+              disabled={track.status === "generating" || !canGenerate}
+              title={canGenerate ? undefined : "No provider configured for this track type"}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium px-3 py-1.5 disabled:opacity-40"
+            >
+              {track.status === "generating" ? (
+                <>
+                  <Loader2 className="size-3 animate-spin" /> Generating…
+                </>
+              ) : track.status === "ready" ? (
+                <>
+                  <RefreshCw className="size-3" /> Regenerate
+                </>
+              ) : (
+                <>
+                  <Wand2 className="size-3" /> Generate
+                </>
+              )}
+            </button>
+            {track.source === "uploaded" && (
+              <span className="text-[11px] text-muted-foreground">Uploaded</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Step 5: Final ---------------- */
+
+function FinalStep({
+  project,
+  onRerender,
+  onBack,
+  onRestart,
+}: {
+  project: Project;
+  onRerender: () => void;
+  onBack: () => void;
+  onRestart: () => void;
+}) {
+  const { render } = project;
+  const { url: mediaUrl, error: mediaError } = useAuthenticatedMediaUrl(render.url);
+  const story = project.stories.find((candidate) => candidate.id === project.selectedStoryId);
+  const scenes = story?.scenes ?? [];
+
+  const aspect = useMemo(() => {
+    const [w, h] = project.brief.ratio.split(":").map(Number);
+    return `${w} / ${h}`;
+  }, [project.brief.ratio]);
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2">
+        <div className="rounded-2xl border border-border bg-surface p-4">
+          <div
+            className="w-full rounded-xl overflow-hidden bg-black relative"
+            style={{ aspectRatio: aspect }}
+          >
+            {render.status === "ready" && mediaUrl ? (
+              <video
+                src={mediaUrl}
+                controls
+                autoPlay
+                playsInline
+                className="absolute inset-0 h-full w-full"
+              />
+            ) : render.status === "failed" ? (
+              <div className="absolute inset-0 grid place-items-center text-white p-6">
+                <div className="text-center">
+                  <AlertTriangle className="size-8 mx-auto mb-3 text-destructive" />
+                  <div className="text-sm font-medium">Render failed</div>
+                  <div className="text-xs text-white/70 mt-1 max-w-md">{render.error}</div>
+                </div>
+              </div>
+            ) : render.status === "ready" && mediaError ? (
+              // The render succeeded and the file is on disk; only fetching it
+              // back failed. Saying "render failed" here would send someone to
+              // debug the renderer instead of their session.
+              <div className="absolute inset-0 grid place-items-center text-white p-6">
+                <div className="text-center">
+                  <AlertTriangle className="size-8 mx-auto mb-3 text-amber-400" />
+                  <div className="text-sm font-medium">Render finished — playback blocked</div>
+                  <div className="text-xs text-white/70 mt-1 max-w-md">{mediaError}</div>
+                </div>
+              </div>
+            ) : (
+              <div className="absolute inset-0 grid place-items-center text-white">
+                <div className="text-center w-full max-w-sm px-6">
+                  <Loader2 className="size-8 animate-spin mx-auto mb-3" />
+                  <div className="text-sm font-medium">
+                    {render.stage ?? "Accumulating clips & mixing audio…"}
+                  </div>
+                  <div className="text-xs text-white/70 mt-1">
+                    {scenes.length} scenes → {project.plan.targetSeconds}s
+                  </div>
+                  <div className="mt-3 h-1 rounded-full bg-white/20 overflow-hidden">
+                    <div
+                      className="h-full bg-white transition-all"
+                      style={{ width: `${Math.max(3, render.progress * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 flex items-center gap-2 flex-wrap">
+            {render.status === "ready" && mediaUrl && (
+              <a
+                href={mediaUrl}
+                download={`video-${project.id}.mp4`}
+                className="inline-flex items-center gap-2 rounded-xl bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:opacity-90"
+              >
+                <Download className="size-4" />
+                Download MP4
+              </a>
+            )}
+            <button
+              onClick={onRerender}
+              disabled={render.status === "rendering" || render.status === "queued"}
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+            >
+              <RefreshCw className="size-4" />
+              Re-render
+            </button>
+            <button
+              onClick={onRestart}
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+            >
+              <Sparkles className="size-4" />
+              Start a new video
+            </button>
+          </div>
+
+          {render.status === "ready" && (
+            <div className="mt-3 text-xs text-muted-foreground">
+              {render.seconds?.toFixed(1)}s · {render.bytes ? formatBytes(render.bytes) : "—"} ·{" "}
+              {project.brief.ratio} · accumulated from {scenes.length} Veo clips
+            </div>
+          )}
+        </div>
+      </div>
+
+      <aside className="space-y-4">
+        <div className="rounded-2xl border border-border bg-surface p-4">
+          <div className="text-sm font-medium mb-3 flex items-center gap-2">
+            <Layers className="size-4 text-primary" />
+            Timeline
+          </div>
+          <div className="space-y-2 max-h-[420px] overflow-auto">
+            {scenes.map((scene) => (
+              <div key={scene.id} className="flex items-center gap-2 text-xs">
+                <div className="size-6 shrink-0 rounded bg-primary/10 text-primary grid place-items-center font-semibold">
+                  {scene.order}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{scene.title}</div>
+                  <div className="text-[10px] text-muted-foreground">{BEAT_LABELS[scene.beat]}</div>
+                </div>
+                <div className="text-muted-foreground shrink-0">{scene.seconds}s</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-border bg-surface p-4">
+          <div className="text-sm font-medium mb-3 flex items-center gap-2">
+            <Music className="size-4 text-primary" />
+            Audio mix
+          </div>
+          {project.audio.filter((track) => track.selected && track.status === "ready").length ===
+          0 ? (
+            <div className="text-xs text-muted-foreground">
+              Veo's native clip audio only — no music bed selected.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {project.audio
+                .filter((track) => track.selected && track.status === "ready")
+                .map((track) => (
+                  <div key={track.id} className="flex items-center gap-2 text-xs">
+                    <Check className="size-3.5 text-primary shrink-0" />
+                    <div className="flex-1 truncate">{track.label}</div>
+                    <div className="text-muted-foreground capitalize">{track.kind}</div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={onBack}
+          className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-background py-2.5 text-sm hover:bg-accent"
+        >
+          <ArrowLeft className="size-4" />
+          Back to audio
+        </button>
+      </aside>
+    </div>
+  );
+}
+
+/* ---------------- Shared footer ---------------- */
+
+function FooterNav({
+  onBack,
+  onNext,
+  nextLabel,
+  nextIcon,
+  disabled,
+}: {
+  onBack: () => void;
+  onNext: () => void;
+  nextLabel: string;
+  nextIcon?: React.ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="mt-6 flex items-center justify-between gap-3">
+      <button
+        onClick={onBack}
+        className="inline-flex items-center cursor-pointer gap-2 rounded-xl border border-border bg-background px-4 py-2.5 text-sm hover:bg-accent"
+      >
+        <ArrowLeft className="size-4" />
+        Back
+      </button>
+      <button
+        onClick={onNext}
+        disabled={disabled}
+        className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-primary text-primary-foreground px-5 py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {nextIcon}
+        {nextLabel}
+        <ArrowRight className="size-4" />
+      </button>
+    </div>
+  );
+}
