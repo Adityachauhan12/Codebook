@@ -1,142 +1,387 @@
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\main.py:203: DeprecationWarning: 
-        on_event is deprecated, use lifespan event handlers instead.
+"""One scene in, one clip file out.
 
-        Read more about it in the
-        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
-        
-  @app.on_event("startup")
-INFO:     Started server process [8280]
-INFO:     Waiting for application startup.
---- Running startup connection checks ---
-2026-08-11T12:27:12 INFO  [utils.appinsights] App Insights initialised via azure-monitor-opentelemetry
-[test/db] OK — inserted: {'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 6, 57, 14, 438607, tzinfo=datetime.timezone.utc)}, all rows: [{'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 6, 57, 14, 438607, tzinfo=datetime.timezone.utc)}]
-[test/blob] Created container 'test-connection'
-[test/blob] OK — uploaded and verified 'test.txt' at https://salab37marketingcampaign.blob.core.windows.net/test-connection/test.txt
-2026-08-11T12:27:19 INFO  [utils.limiter] registered_apps table ready
-2026-08-11T12:27:22 INFO  [auth.azure_auth] Token cleanup: removed 0 expired revoked_tokens row(s)
---- Startup checks complete ---
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-2026-08-11T12:27:26 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [8280]
-2026-08-11T12:41:08 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-2026-08-11T12:41:08 INFO  [opentelemetry.sdk._shared_internal] Shutdown called, ignoring Log.
-LoggingHandler.emit detected recursive logging, skipping to prevent deadlock.
+This is where the "Veo only does 8 seconds" constraint stops being a problem and
+becomes a loop: each scene of the plan is generated on its own, written to
+``storage/projects/<id>/clips/``, measured, and recorded back on the project.
+The renderer later accumulates whatever is ready.
+"""
 
-(venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend>python main.py
-Directory 'campaign_assets' ready
-Directory 'campaign_images' ready
-Directory 'campaign_logo' ready
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\main.py:203: DeprecationWarning: 
-        on_event is deprecated, use lifespan event handlers instead.
+from __future__ import annotations
 
-        Read more about it in the
-        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
-        
-  @app.on_event("startup")
-INFO:     Started server process [3672]
-INFO:     Waiting for application startup.
---- Running startup connection checks ---
-2026-08-11T12:41:49 INFO  [utils.appinsights] App Insights initialised via azure-monitor-opentelemetry
-[test/db] OK — inserted: {'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 7, 11, 52, 570079, tzinfo=datetime.timezone.utc)}, all rows: [{'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 7, 11, 52, 570079, tzinfo=datetime.timezone.utc)}]
-[test/blob] Created container 'test-connection'
-[test/blob] OK — uploaded and verified 'test.txt' at https://salab37marketingcampaign.blob.core.windows.net/test-connection/test.txt
-2026-08-11T12:41:58 INFO  [utils.limiter] registered_apps table ready
-2026-08-11T12:42:02 INFO  [auth.azure_auth] Token cleanup: removed 0 expired revoked_tokens row(s)
---- Startup checks complete ---
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-2026-08-11T12:42:04 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-INFO:     127.0.0.1:58150 - "GET /api/config HTTP/1.1" 200 OK
-2026-08-11T12:42:06 INFO  [auth.azure_auth] Azure AD JWKS combined — 8 total key(s): ['6hXLaIYNSJ0o7zu09dMyI0ji3ug', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'AahUf1bCXvx0JTRcXLrr0U4SluY', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'rRk1d-57BGZfsM4BUHrkx8cQbic']
-2026-08-11T12:42:06 INFO  [auth.azure_auth] Azure AD JWKS combined — 9 total key(s): ['1Nv3JExJrKNx1l7adICQ7Y_Atps', '6hXLaIYNSJ0o7zu09dMyI0ji3ug', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'AahUf1bCXvx0JTRcXLrr0U4SluY', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'rRk1d-57BGZfsM4BUHrkx8cQbic']
-2026-08-11T12:42:07 INFO  [auth.azure_auth] Azure AD JWKS combined — 9 total key(s): ['1Nv3JExJrKNx1l7adICQ7Y_Atps', '6hXLaIYNSJ0o7zu09dMyI0ji3ug', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'AahUf1bCXvx0JTRcXLrr0U4SluY', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'rRk1d-57BGZfsM4BUHrkx8cQbic']
-2026-08-11T12:42:07 INFO  [auth.azure_auth] Azure AD JWKS combined — 8 total key(s): ['6hXLaIYNSJ0o7zu09dMyI0ji3ug', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'AahUf1bCXvx0JTRcXLrr0U4SluY', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'rRk1d-57BGZfsM4BUHrkx8cQbic']
-2026-08-11T12:42:07 INFO  [auth.azure_auth] Azure AD JWKS combined — 8 total key(s): ['6hXLaIYNSJ0o7zu09dMyI0ji3ug', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'AahUf1bCXvx0JTRcXLrr0U4SluY', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'rRk1d-57BGZfsM4BUHrkx8cQbic']
-INFO:     127.0.0.1:64450 - "GET /api/v1/video/projects/vid_19fef8642985da73512/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64448 - "GET /api/v1/video/projects/vid_19fef8642985da73512 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64446 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64449 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51331 - "GET /api/config HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51336 - "GET /api/v1/video/projects/vid_19fef8642985da73512 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51339 - "GET /api/v1/video/projects/vid_19fef8642985da73512/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51337 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51338 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56025 - "GET /api/v1/video/projects/vid_19fef8642985da73512 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63490 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52655 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-2026-08-11T12:42:18 INFO  [video.store] Created project vid_19fefaa376eed733886 (30s, 4 segments)
-INFO:     127.0.0.1:57346 - "POST /api/v1/video/projects HTTP/1.1" 201 Created
-INFO:     127.0.0.1:59402 - "GET /api/v1/video/projects/vid_19fefaa376eed733886/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59401 - "GET /api/v1/video/projects/vid_19fefaa376eed733886 HTTP/1.1" 200 OK
-2026-08-11T12:42:31 INFO  [video.llm] chat ok in 10.9s (1761 tokens, deployment gpt-5.5)
-2026-08-11T12:42:31 INFO  [video.brief] Brief split: intent 893 chars (from 1067), 0 super(s), end card on, 0 unsupported.
-INFO:     127.0.0.1:60632 - "GET /api/config HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60640 - "GET /api/v1/video/projects/vid_19fefaa376eed733886/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60635 - "GET /api/v1/video/projects/vid_19fefaa376eed733886 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60638 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60664 - "GET /api/v1/video/projects/vid_19fefaa376eed733886 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62847 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64768 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60504 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57343 - "GET /api/v1/video/projects/vid_19fefaa376eed733886/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52298 - "GET /api/config HTTP/1.1" 200 OK
-2026-08-11T12:43:50 INFO  [video.llm] treatments ok in 77.5s (26624 tokens, deployment gpt-5.5)
-2026-08-11T12:43:50 INFO  [video.jobs] Job job_19fefaa395c10cc9ba2 (storyboard) succeeded.
-INFO:     127.0.0.1:54176 - "GET /api/config HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53427 - "GET /api/v1/video/projects/vid_19fefaa376eed733886/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53423 - "GET /api/v1/video/projects/vid_19fefaa376eed733886 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53422 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53426 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51705 - "GET /api/v1/video/projects/vid_19fefaa376eed733886 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50830 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:55339 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-2026-08-11T12:44:04 INFO  [video.store] Created project vid_19fefabd7a60b94a4de (30s, 4 segments)
-INFO:     127.0.0.1:58899 - "POST /api/v1/video/projects HTTP/1.1" 201 Created
-INFO:     127.0.0.1:51308 - "GET /api/v1/video/projects/vid_19fefabd7a60b94a4de HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51310 - "GET /api/v1/video/projects/vid_19fefabd7a60b94a4de/events HTTP/1.1" 200 OK
-2026-08-11T12:44:17 INFO  [video.llm] chat ok in 11.3s (1761 tokens, deployment gpt-5.5)
-2026-08-11T12:44:17 INFO  [video.brief] Brief split: intent 893 chars (from 1067), 0 super(s), end card on, 0 unsupported.
-2026-08-11T12:45:38 INFO  [video.llm] treatments ok in 78.9s (26474 tokens, deployment gpt-5.5)
-2026-08-11T12:45:38 INFO  [video.jobs] Job job_19fefabd9169f27f037 (storyboard) succeeded.
-INFO:     127.0.0.1:57769 - "POST /api/v1/video/projects/vid_19fefabd7a60b94a4de/stories/story_19fefad45cd1279f890/scenes HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:57768 - "POST /api/v1/video/projects/vid_19fefabd7a60b94a4de/select-story HTTP/1.1" 200 OK
-2026-08-11T12:47:08 INFO  [video.llm] scenes ok in 75.1s (28415 tokens, deployment gpt-5.5)
-2026-08-11T12:47:08 INFO  [video.jobs] Job job_19fefad7bc8d4023f70 (storyboard) succeeded.
-2026-08-11T12:47:44 INFO  [video.clips] Generating 4 clip(s) for project vid_19fefabd7a60b94a4de, 3 at a time.
-INFO:     127.0.0.1:51915 - "POST /api/v1/video/projects/vid_19fefabd7a60b94a4de/clips/generate-all HTTP/1.1" 202 Accepted
-2026-08-11T12:48:19 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/3yc0m9dc8w7p
-2026-08-11T12:48:21 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/8us18qlgj1u7
-2026-08-11T12:48:26 INFO  [video.veo] Started veo-3.1-generate-preview generation (6s, 16:9): models/veo-3.1-generate-preview/operations/fovhgfvpo8ss
-2026-08-11T12:49:18 INFO  [video.veo] Downloaded 2.1MB to scene-03.mp4
-2026-08-11T12:49:19 WARNING [video.clips] Scene 1 failed on attempt 1; retrying. Veo filtered the generation before it produced a clip (We encountered an issue with the audio for your prompt, which means we could not create your video. This can sometimes happen due to our safety filters or other processing issues. Please modify your request and try again. You have not been charged for this attempt.). Rewrite the scene prompt — usually it names a real person, a brand, or content the safety filter blocks.
-2026-08-11T12:49:24 INFO  [video.clips] Scene 3 ready (6.00s).
-2026-08-11T12:49:53 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/z550ka6ztjuw
-2026-08-11T12:49:57 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/953bdnnfticy
-2026-08-11T12:50:02 INFO  [video.veo] Downloaded 6.3MB to scene-02.mp4
-2026-08-11T12:50:06 INFO  [video.clips] Scene 2 ready (8.00s).
-INFO:     127.0.0.1:62082 - "POST /api/v1/video/projects/vid_19fefabd7a60b94a4de/clips/scene_19fefaea541a77561bc/generate HTTP/1.1" 202 Accepted
-2026-08-11T12:52:07 INFO  [video.veo] Downloaded 8.3MB to scene-04.mp4
-2026-08-11T12:52:16 INFO  [video.clips] Scene 4 ready (8.00s).
-2026-08-11T12:52:16 INFO  [video.jobs] Job job_19fefaf334f6be4d129 (clips) succeeded.
-2026-08-11T12:52:23 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/2wfe735w5nux
-2026-08-11T12:53:24 ERROR [video.jobs] Job job_19fefb2dd98a6be6ef2 (clip) failed: Veo filtered the generation before it produced a clip (We encountered an issue with the audio for your prompt, which means we could not create your video. This can sometimes happen due to our safety filters or other processing issues. Please modify your request and try again. You have not been charged for this attempt.). Rewrite the scene prompt — usually it names a real person, a brand, or content the safety filter blocks.
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\jobs.py", line 68, in runner
-    result = await work(context)
-             ^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\routes\video.py", line 495, in work
-    clip = await generate_scene_clip(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\clips.py", line 150, in generate_scene_clip
-    generated = await veo.generate_clip(
-                ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\veo.py", line 349, in generate_clip
-    size = await download_video(_extract_video_uri(finished), destination)
-                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\veo.py", line 276, in _extract_video_uri
-    raise UpstreamError(
-video.errors.UpstreamError: Veo filtered the generation before it produced a clip (We encountered an issue with the audio for your prompt, which means we could not create your video. This can sometimes happen due to our safety filters or other processing issues. Please modify your request and try again. You have not been charged for this attempt.). Rewrite the scene prompt — usually it names a real person, a brand, or content the safety filter blocks.
+import asyncio
+from pathlib import Path
+
+from ..config import settings
+from ..domain.formats import veo_aspect_for
+from ..domain.models import Clip, Project, Scene, StoryOption, now_iso
+from ..errors import BadRequest, Conflict, UpstreamError
+from ..logging_setup import get_logger
+from ..storage import clips_dir, ensure_dir, persist_media, resolve_in_storage, work_dir
+from . import veo
+from .veo import InlineAsset
+from .ffmpeg import extract_poster, probe
+from .imagegen import asset_from_image, generate_keyframe, livery_assets
+from .jobs import JobContext, map_with_concurrency
+from .storyboard import neutralise_audio
+from .store import require_project, update_project
+
+log = get_logger("clips")
+
+
+def _is_media_filtered(error: UpstreamError) -> bool:
+    """True when Veo's safety filter rejected the generation.
+
+    Read off the structured ``details`` that ``veo._extract_video_uri`` attaches,
+    not the message text, so rewording the message cannot silently disable the
+    audio-neutralising retry that depends on this.
+    """
+    details = getattr(error, "details", None)
+    return isinstance(details, dict) and bool(details.get("filtered"))
+
+
+def selected_story(project: Project) -> StoryOption:
+    story = next((s for s in project.stories if s.id == project.selected_story_id), None)
+    if story is None:
+        raise BadRequest("No story is selected for this project yet.")
+    if not story.scenes:
+        raise BadRequest("The selected story has no scenes yet. Generate the storyboard first.")
+    return story
+
+
+def _find_scene(project: Project, scene_id: str) -> tuple[StoryOption, Scene]:
+    story = selected_story(project)
+    scene = next((s for s in story.scenes if s.id == scene_id), None)
+    if scene is None:
+        raise BadRequest(f"Scene {scene_id} is not part of the selected story.")
+    return story, scene
+
+
+def sync_clips(project: Project) -> list[Clip]:
+    """Derive the clip rows from the selected story, keeping what is generated."""
+    story = next((s for s in project.stories if s.id == project.selected_story_id), None)
+    if story is None:
+        return []
+
+    existing = {clip.scene_id: clip for clip in project.clips}
+    clips: list[Clip] = []
+
+    for scene in story.scenes:
+        previous = existing.get(scene.id)
+        # A scene whose length changed invalidates the clip generated from the
+        # old version — the renderer would otherwise pad or cut the wrong shot.
+        stale = previous is not None and previous.seconds != scene.seconds
+
+        if previous is not None and not stale:
+            refreshed = previous.model_copy(update={"order": scene.order, "seconds": scene.seconds})
+            clips.append(refreshed)
+        else:
+            clips.append(
+                Clip(sceneId=scene.id, order=scene.order, status="idle", seconds=scene.seconds)
+            )
+
+    return clips
+
+
+async def _patch_clip(project_id: str, scene_id: str, **patch) -> None:
+    def mutate(project: Project) -> Project:
+        project.clips = [
+            clip.model_copy(update=patch) if clip.scene_id == scene_id else clip
+            for clip in project.clips
+        ]
+        return project
+
+    await update_project(project_id, mutate)
+
+
+async def generate_scene_clip(
+    project: Project,
+    scene_id: str,
+    *,
+    force: bool = False,
+    on_progress=None,
+    seed_frame: InlineAsset | None = None,
+) -> Clip:
+    """Generate one scene's clip.
+
+    ``seed_frame`` is the previous clip's final frame, supplied by the chained
+    path in ``generate_all_clips``. It takes precedence over a generated
+    keyframe: a real frame of the film we are already making is a stronger
+    continuity anchor than a fresh still of what that frame should have been.
+    """
+    story, scene = _find_scene(project, scene_id)
+    current = next((clip for clip in project.clips if clip.scene_id == scene_id), None)
+
+    if current and current.status == "generating" and not force:
+        raise Conflict(f"Scene {scene.order} is already generating.")
+    if current and current.status == "ready" and not force:
+        return current
+
+    aspect = veo_aspect_for(project.brief.ratio)
+    destination = Path(clips_dir(project.id)) / f"scene-{scene.order:02d}.mp4"
+    poster = destination.with_suffix(".jpg")
+
+    await _patch_clip(
+        project.id,
+        scene_id,
+        status="generating",
+        progress=0.0,
+        error=None,
+        started_at=now_iso(),
+        attempts=(current.attempts if current else 0) + 1,
+    )
+
+    async def report(fraction: float, message: str) -> None:
+        if on_progress is not None:
+            result = on_progress(fraction, message)
+            if asyncio.iscoroutine(result):
+                await result
+        await _patch_clip(project.id, scene_id, progress=fraction)
+
+    try:
+        # Lock continuity with a first frame: the previous clip's tail if we are
+        # chaining, otherwise an optional generated still.
+        first_frame = seed_frame
+        if first_frame is None and settings.veo_use_keyframes:
+            await report(0.02, "Rendering the opening frame…")
+            first_frame = await generate_keyframe(scene, story, aspect)
+
+        # A keyframe already carries the livery in its pixels, so references are
+        # the fallback for when one was not produced — keyframes switched off, no
+        # image key, or a blocked generation. Without either, the aircraft is
+        # whatever Veo invents, which is the failure this reference set exists to
+        # prevent, so it is worth saying per scene.
+        # Success here was silent, so a log could not answer the only question
+        # that matters after a render — did the real livery reach the picture?
+        if first_frame is not None:
+            log.info(
+                "Scene %d seeded from a %s; the IndiGo livery is fixed in its first frame.",
+                scene.order,
+                "chained tail frame" if seed_frame else "generated keyframe",
+            )
+
+        references = None if first_frame else list(livery_assets())
+        if references:
+            log.warning(
+                "Scene %d has no keyframe; falling back to Veo reference images for the "
+                "IndiGo livery. Set VEO_USE_KEYFRAMES=true and GEMINI_IMAGE_API_KEY for the "
+                "stronger path, which fixes the livery in the frame itself.",
+                scene.order,
+            )
+
+        async def submit(prompt: str) -> veo.GeneratedClip:
+            return await veo.generate_clip(
+                destination,
+                prompt=prompt,
+                seconds=scene.seconds,
+                aspect_ratio=aspect,
+                negative_prompt=scene.negative_prompt,
+                model=project.model or None,
+                first_frame=first_frame,
+                reference_images=references or None,
+                on_progress=report,
+            )
+
+        try:
+            generated = await submit(scene.prompt)
+        except UpstreamError as error:
+            # Veo's audio pass is filtered independently of the picture. When it
+            # refuses, no clip comes back at all — and the outer retry re-sends
+            # the same prompt into the same refusal, so the scene burns every
+            # attempt without ever varying what it asked for. Drop the sound
+            # direction and keep the shot.
+            neutral = neutralise_audio(scene.prompt)
+            if not _is_media_filtered(error) or neutral == scene.prompt:
+                raise
+            log.warning(
+                "Scene %d was filtered by Veo's audio pass; retrying with plain room tone. "
+                "The picture is unchanged, the designed sound is lost. Original audio "
+                "direction is the likely cause — a spoken brand name, a PA announcement, "
+                "a lyric, or dialogue.",
+                scene.order,
+            )
+            await report(0.05, "Sound direction was filtered — retrying without it…")
+            generated = await submit(neutral)
+
+        info = await probe(generated.file)
+
+        try:
+            await extract_poster(generated.file, poster, min(0.5, max(0.0, info.seconds / 2)))
+            poster_file, poster_url = await asyncio.to_thread(
+                persist_media, poster, project.id, "posters"
+            )
+        except Exception as error:  # noqa: BLE001 — a missing poster is cosmetic
+            log.warning("Poster extraction failed for scene %d: %s", scene.order, error)
+            poster_file = None
+            poster_url = None
+
+        if info.seconds < scene.seconds - 0.5:
+            log.warning(
+                "Scene %d came back at %.2fs for a %ds request; the renderer will hold the last "
+                "frame to fill the slot.",
+                scene.order, info.seconds, scene.seconds,
+            )
+
+        durable_file, durable_url = await asyncio.to_thread(
+            persist_media, generated.file, project.id, "clips"
+        )
+        await _patch_clip(
+            project.id,
+            scene_id,
+            status="ready",
+            progress=1.0,
+            actual_seconds=info.seconds,
+            file=durable_file,
+            url=durable_url,
+            poster_file=poster_file,
+            poster_url=poster_url,
+            operation=generated.operation,
+            error=None,
+            completed_at=now_iso(),
+        )
+
+        log.info("Scene %d ready (%.2fs).", scene.order, info.seconds)
+        refreshed = await require_project(project.id)
+        return next(clip for clip in refreshed.clips if clip.scene_id == scene_id)
+
+    except asyncio.CancelledError:
+        await _patch_clip(project.id, scene_id, status="idle", progress=0.0, error=None)
+        raise
+    except Exception as error:
+        await _patch_clip(
+            project.id,
+            scene_id,
+            status="failed",
+            progress=0.0,
+            error=str(error),
+            completed_at=now_iso(),
+        )
+        raise
+
+
+async def generate_all_clips(
+    project: Project, context: JobContext, *, force: bool = False
+) -> dict[str, int]:
+    """Generate every scene that is not already done, ``VEO_CONCURRENCY`` at a time.
+
+    One clip failing does not stop the others — the UI shows which one broke and
+    offers a retry, which is much better than losing eleven good generations.
+    """
+    story = selected_story(project)
+
+    by_scene = {clip.scene_id: clip for clip in project.clips}
+    pending = [
+        scene
+        for scene in story.scenes
+        if force or (by_scene.get(scene.id) is None or by_scene[scene.id].status != "ready")
+    ]
+
+    if not pending:
+        return {"ready": len(story.scenes), "failed": 0}
+
+    log.info(
+        "Generating %d clip(s) for project %s, %d at a time.",
+        len(pending), project.id, settings.veo_concurrency,
+    )
+
+    per_scene: dict[str, float] = {}
+
+    def publish() -> None:
+        done = sum(per_scene.values())
+        context.progress(
+            done / len(pending), f"{int(done)} of {len(pending)} clips generated"
+        )
+
+    async def run(scene: Scene, seed_frame: InlineAsset | None = None) -> Clip:
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+
+                async def track(fraction: float, _message: str) -> None:
+                    per_scene[scene.id] = fraction
+                    publish()
+
+                return await generate_scene_clip(
+                    project, scene.id, force=True, on_progress=track, seed_frame=seed_frame
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                if attempt >= settings.veo_max_attempts:
+                    raise
+                log.warning(
+                    "Scene %d failed on attempt %d; retrying. %s", scene.order, attempt, error
+                )
+
+    if settings.veo_chain_keyframes:
+        return await _generate_chained(project, pending, run_scene=run, publish=publish)
+
+    results = await map_with_concurrency(pending, settings.veo_concurrency, run)
+    failed = sum(1 for result in results if isinstance(result, BaseException))
+
+    return {"ready": len(pending) - failed, "failed": failed}
+
+
+async def _tail_frame(clip: Clip, work: Path) -> InlineAsset | None:
+    """The last frame of a finished clip, as a seed for the next one.
+
+    Sampled a beat before the true end: the final frame of a generated clip is
+    the one most likely to carry compression mush or the start of a fade, and
+    seeding the next shot with a smeared frame propagates the smear.
+    """
+    if not clip.file:
+        return None
+    try:
+        source = resolve_in_storage(clip.file)
+        info = await probe(source)
+        at = max(0.0, (info.seconds or 0.0) - 0.15)
+        frame = work / f"tail-{clip.scene_id}.jpg"
+        await extract_poster(source, frame, at)
+        return asset_from_image(frame)
+    except Exception as error:  # noqa: BLE001 — chaining is an optimisation
+        log.warning("Could not take a tail frame from %s: %s", clip.scene_id, error)
+        return None
+
+
+async def _generate_chained(
+    project: Project,
+    pending: list[Scene],
+    *,
+    run_scene,
+    publish,
+) -> dict[str, int]:
+    """Generate clips in story order, each seeded with the previous tail frame.
+
+    Serial by necessity — clip N+1 cannot start until N has produced a frame.
+    That is the cost of the feature, and it is why it is off by default.
+
+    A failure breaks the chain but not the run: the next scene simply starts
+    from its own keyframe, which is exactly the behaviour without chaining.
+    """
+    ordered = sorted(pending, key=lambda scene: scene.order)
+    work = Path(work_dir(project.id)) / "chain"
+    ensure_dir(work)
+
+    log.info("Chaining %d clip(s) for project %s in story order.", len(ordered), project.id)
+
+    ready = 0
+    failed = 0
+    seed: InlineAsset | None = None
+
+    for scene in ordered:
+        try:
+            clip = await run_scene(scene, seed_frame=seed)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 — one bad clip must not stop the film
+            log.warning("Scene %d failed; the chain restarts from scene %d. %s",
+                        scene.order, scene.order + 1, error)
+            failed += 1
+            seed = None
+            continue
+
+        ready += 1
+        seed = await _tail_frame(clip, work)
+        publish()
+
+    return {"ready": ready, "failed": failed}
