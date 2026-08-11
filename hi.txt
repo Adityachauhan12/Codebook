@@ -1,62 +1,147 @@
-revoked_tokens row(s)
---- Startup checks complete ---
-INFO:     Application startup complete.
-2026-08-11T14:15:04 INFO  [auth.azure_auth] Azure AD JWKS combined — 9 total key(s): ['fEtqrhKT1bXAGafSdQoN1vXTRpI', 'jvm_-TtaqTCRrkpnmePvwb75nWE', '1Nv3JExJrKNx1l7adICQ7Y_Atps', 'rRk1d-57BGZfsM4BUHrkx8cQbic', 'NqEBZVuOpstZ__5iZuWH3HPswcI', '6hXLaIYNSJ0o7zu09dMyI0ji3ug', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'AahUf1bCXvx0JTRcXLrr0U4SluY']
-INFO:     127.0.0.1:49214 - "GET /api/config HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53896 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53902 - "GET /api/v1/video/projects/vid_19fefcf242b83c723b8 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:55091 - "GET /api/v1/video/projects/vid_19fefcf242b83c723b8/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53904 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54332 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64005 - "GET /api/v1/video/projects/vid_19fefcf242b83c723b8 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:55771 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-2026-08-11T14:15:14 INFO  [video.store] Created project vid_19fefff4df720028518 (30s, 4 segments)
-INFO:     127.0.0.1:55620 - "POST /api/v1/video/projects HTTP/1.1" 201 Created
-INFO:     127.0.0.1:55357 - "GET /api/v1/video/projects/vid_19fefff4df720028518/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:55355 - "GET /api/v1/video/projects/vid_19fefff4df720028518 HTTP/1.1" 200 OK
-2026-08-11T14:15:29 INFO  [video.llm] chat ok in 12.6s (1816 tokens, deployment gpt-5.5)
-2026-08-11T14:15:29 INFO  [video.brief] Brief split: intent 786 chars (from 1092), 1 super(s), end card on, 0 unsupported.
-2026-08-11T14:16:57 INFO  [video.llm] treatments ok in 85.9s (26834 tokens, deployment gpt-5.5)
-2026-08-11T14:16:57 WARNING [video.storyboard] Discarded 1 invalid treatment(s) before selection.
-2026-08-11T14:16:57 INFO  [video.jobs] Job job_19fefff4f49c1cfdfdc (storyboard) succeeded.
-INFO:     127.0.0.1:64395 - "POST /api/v1/video/projects/vid_19fefff4df720028518/select-story HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53224 - "POST /api/v1/video/projects/vid_19fefff4df720028518/select-story HTTP/1.1" 200 OK
-INFO:     127.0.0.1:65302 - "POST /api/v1/video/projects/vid_19fefff4df720028518/stories/story_19ff000e185e9af49d0/scenes HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:65300 - "POST /api/v1/video/projects/vid_19fefff4df720028518/select-story HTTP/1.1" 200 OK
-2026-08-11T14:18:55 INFO  [video.llm] scenes ok in 88.1s (29121 tokens, deployment gpt-5.5)
-2026-08-11T14:18:55 INFO  [video.storyboard] Story "The sky-blue ribbon": audit found 2 blocking issue(s), running repair pass 1/3
-2026-08-11T14:19:34 INFO  [video.llm] scenes-repair-1 ok in 36.7s (24502 tokens, deployment gpt-5.5)
-2026-08-11T14:19:34 INFO  [video.jobs] Job job_19ff0014d56bc0d4e1e (storyboard) succeeded.
-2026-08-11T14:20:19 INFO  [video.clips] Generating 4 clip(s) for project vid_19fefff4df720028518, 3 at a time.
-INFO:     127.0.0.1:54794 - "POST /api/v1/video/projects/vid_19fefff4df720028518/clips/generate-all HTTP/1.1" 202 Accepted
-2026-08-11T14:20:46 INFO  [video.clips] Scene 1 seeded from a generated keyframe; the IndiGo livery is fixed in its first frame.
-2026-08-11T14:20:49 INFO  [video.clips] Scene 2 seeded from a generated keyframe; the IndiGo livery is fixed in its first frame.
-2026-08-11T14:20:52 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/5jib9bpkij7h
-2026-08-11T14:20:54 INFO  [video.clips] Scene 3 seeded from a generated keyframe; the IndiGo livery is fixed in its first frame.
-2026-08-11T14:20:57 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/kqky457mbb8d
-2026-08-11T14:21:02 INFO  [video.veo] Started veo-3.1-generate-preview generation (6s, 16:9): models/veo-3.1-generate-preview/operations/lba14u2jhycf
-2026-08-11T14:22:00 WARNING [video.clips] Scene 3 was filtered by Veo's audio pass; retrying with plain room tone. The picture is unchanged, the designed sound is lost. Original audio direction is the likely cause — a spoken brand name, a PA announcement, a lyric, or dialogue.
-2026-08-11T14:22:05 INFO  [video.veo] Started veo-3.1-generate-preview generation (6s, 16:9): models/veo-3.1-generate-preview/operations/4ehim4y65pe1
-2026-08-11T14:22:29 INFO  [video.veo] Downloaded 8.1MB to scene-01.mp4
-2026-08-11T14:22:39 INFO  [video.clips] Scene 1 ready (8.00s).
-2026-08-11T14:22:52 INFO  [video.veo] Downloaded 7.4MB to scene-02.mp4
-2026-08-11T14:23:00 INFO  [video.clips] Scene 2 ready (8.00s).
-2026-08-11T14:23:02 INFO  [video.veo] Downloaded 2.1MB to scene-03.mp4
-2026-08-11T14:23:05 INFO  [video.clips] Scene 3 ready (6.00s).
-2026-08-11T14:23:13 INFO  [video.clips] Scene 4 seeded from a generated keyframe; the IndiGo livery is fixed in its first frame.
-2026-08-11T14:23:17 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/obwwgplt3b75
-2026-08-11T14:24:53 INFO  [video.veo] Downloaded 8.5MB to scene-04.mp4
-2026-08-11T14:25:00 INFO  [video.clips] Scene 4 ready (8.00s).
-2026-08-11T14:25:00 INFO  [video.jobs] Job job_19ff003f509f9051231 (clips) succeeded.
-INFO:     127.0.0.1:55502 - "POST /api/v1/video/projects/vid_19fefff4df720028518/audio/suggest HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:63877 - "POST /api/v1/video/projects/vid_19fefff4df720028518/audio/suggest HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:51029 - "POST /api/v1/video/projects/vid_19fefff4df720028518/render HTTP/1.1" 202 Accepted
-2026-08-11T14:25:40 INFO  [video.llm] audio-directions ok in 30.9s (11836 tokens, deployment gpt-5.5)
-2026-08-11T14:25:41 INFO  [video.jobs] Job job_19ff0085cf5d3d50d2b (audio) succeeded.
-2026-08-11T14:25:44 INFO  [video.llm] audio-directions ok in 30.9s (11897 tokens, deployment gpt-5.5)
-2026-08-11T14:25:45 INFO  [video.jobs] Job job_19ff00868b2896a39f8 (audio) succeeded.
-2026-08-11T14:28:58 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-2026-08-11T14:31:41 INFO  [video.render] Rendered project vid_19fefff4df720028518: 30.00s, 23.0MB from 4 clips.
-2026-08-11T14:31:41 INFO  [video.jobs] Job job_19ff00889816e554ae6 (render) succeeded.
-INFO:     127.0.0.1:62330 - "GET /api/v1/video/projects/vid_19fefff4df720028518/render/token HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63279 - "GET /api/v1/video/media/projects/vid_19fefff4df720028518/output/final.mp4?token=MTc4NjQzOTUwMi52aWRfMTlmZWZmZjRkZjcyMDAyODUxOC5hODVmZmYzMGU4MzIxYWUwMDYzMWFiMzg2MTc4YzQ4NDI1NTllMzg0ODczYjA4YTEyMTExODQ4MDM2M2YyYzFj HTTP/1.1" 401 Unauthorized
+old file 
+from contextlib import contextmanager
+import logging
+import os
+import psycopg2
+from azure.identity import ClientSecretCredential
+from dotenv import load_dotenv
+
+_logger = logging.getLogger(__name__)
+
+load_dotenv()
+
+_credential = ClientSecretCredential(
+    tenant_id=os.getenv("AZURE_TENANT_ID", ""),
+    client_id=os.getenv("AZURE_CLIENT_ID", ""),
+    client_secret=os.getenv("AZURE_CLIENT_SECRET", ""),
+)
+
+
+def _get_token() -> str:
+    # Token is fetched fresh each call — DefaultAzureCredential caches and
+    # auto-refreshes it, so this is safe to call on every connection.
+    #token = _credential.get_token("https://ossrdbms-aad.database.windows.net/.default")
+    token = _credential.get_token("https://token.postgres.cosmos.azure.com/.default")
+    return token.token
+
+
+def _connect() -> psycopg2.extensions.connection:
+    return psycopg2.connect(
+        host=os.getenv("PGHOST"),
+        port=int(os.getenv("PGPORT", "5432")),
+        dbname=os.getenv("PGDATABASE"),
+        user=os.getenv("PGUSER"),
+        password=_get_token(),
+        sslmode="require",
+    )
+
+
+@contextmanager
+def get_db():
+    conn = _connect()
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def log_blocked_prompt(user_id: str, blocked_prompt: str, category: str, blocked_reason: str) -> None:
+    """Insert a blocked-prompt audit row. Swallows errors so it never blocks the main request path."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO blocked_prompts (user_id, blocked_prompt, category, blocked_reason)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (user_id, blocked_prompt, category, blocked_reason),
+                )
+                conn.commit()
+    except Exception as exc:
+        _logger.error("log_blocked_prompt | failed | user=%s | category=%s | error=%s", user_id, category, exc)
+
+
+new file
+from contextlib import contextmanager
+import logging
+import os
+import psycopg2
+from azure.identity import ClientSecretCredential
+from dotenv import load_dotenv
+
+_logger = logging.getLogger(__name__)
+
+load_dotenv()
+
+
+def _is_keyvault_ref(value: str) -> bool:
+    return value.strip().startswith("@Microsoft.KeyVault(")
+
+
+_client_secret = os.getenv("AZURE_CLIENT_SECRET", "")
+if _is_keyvault_ref(_client_secret):
+    _logger.warning(
+        "AZURE_CLIENT_SECRET is a Key Vault reference — DB connections will fail locally. "
+        "Replace it with the actual secret value in your .env file."
+    )
+    _credential = None
+else:
+    _credential = ClientSecretCredential(
+        tenant_id=os.getenv("AZURE_TENANT_ID", ""),
+        client_id=os.getenv("AZURE_CLIENT_ID", ""),
+        client_secret=_client_secret,
+    )
+
+
+def _get_token() -> str:
+    if _credential is None:
+        raise RuntimeError(
+            "DB credential not initialised — AZURE_CLIENT_SECRET is a Key Vault reference. "
+            "Set the actual secret value in your local .env file."
+        )
+    token = _credential.get_token("https://token.postgres.cosmos.azure.com/.default")
+    return token.token
+
+
+def _connect() -> psycopg2.extensions.connection:
+    return psycopg2.connect(
+        host=os.getenv("PGHOST"),
+        port=int(os.getenv("PGPORT", "5432")),
+        dbname=os.getenv("PGDATABASE"),
+        user=os.getenv("PGUSER"),
+        password=_get_token(),
+        sslmode="require",
+    )
+
+
+@contextmanager
+def get_db():
+    conn = _connect()
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def log_blocked_prompt(user_id: str, blocked_prompt: str, category: str, blocked_reason: str) -> None:
+    """Insert a blocked-prompt audit row. Swallows errors so it never blocks the main request path."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO blocked_prompts (user_id, blocked_prompt, category, blocked_reason)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (user_id, blocked_prompt, category, blocked_reason),
+                )
+                conn.commit()
+    except Exception as exc:
+        _logger.error("log_blocked_prompt | failed | user=%s | category=%s | error=%s", user_id, category, exc)
