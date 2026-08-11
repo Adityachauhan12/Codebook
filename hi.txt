@@ -1,77 +1,40 @@
-new dockefile
-FROM node:22-bookworm-slim AS frontend-builder
+Ye wala bilkul ulta case hai — connection.py zaroori nahi tha, ye Dockerfile change zaroori hai. Rakho isko.
 
-WORKDIR /build/frontend
+Pehle ek baat: aapne jo paste kiya usme CMD line missing thi, lekin asli file mein hai. Aapne shayad adhoora copy kiya. Disk pe jo file hai wo aur bhi behtar hai — usme ek extra line bhi hai jo aapke Windows ke liye important hai.
 
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+Purane Dockerfile mein 4 badi problem thi
+1. ffmpeg tha hi nahi — sabse bada issue
 
-COPY frontend/ ./
-RUN npm run build
+Poora video system ffmpeg pe chalta hai — clips jodna, logo lagana, audio mix karna, sab. Purane Dockerfile mein ffmpeg install hi nahi hota tha. Matlab container mein video kabhi ban hi nahi sakti thi.
+
+2. Font nahi tha
+
+fonts-dejavu-core — iske bina "WINTER SALE", "Book Now" jaisa koi text screen pe nahi likha jaata. Bare python image mein ek bhi font nahi hota. Font nahi → supers nahi → end card ka text nahi.
+
+3. Frontend build ka jhol
+
+Purana Dockerfile aapke computer se frontend/dist/ copy karta tha. Matlab har baar aapko yaad rakhna padta ki pehle npm run build chalao. Aur aaj poora din yahi problem thi na? Purana JS chal raha tha kyunki build nahi hua tha.
+
+Naya Dockerfile frontend khud andar hi build karta hai. Ab bhoolne ka sawaal hi nahi.
+
+4. Windows wali CRLF problem
+
+Ye line disk wali file mein hai (aapke paste mein nahi thi):
 
 
-FROM python:3.11-slim-bookworm AS runtime
+RUN sed -i 's/\r$//' /app/backend/entrypoint.sh
+Aap Windows pe kaam kar rahe ho. Windows har line ke end mein ek invisible \r daal deta hai. Linux container usko padhta hai to error aata hai:
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    STORAGE_DIR=/tmp/marketing-video \
-    VIDEO_STORAGE_DIR=/tmp/marketing-video
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        fontconfig \
-        fonts-dejavu-core \
-    && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
-    && ffprobe -version >/dev/null \
-    && rm -rf /var/lib/apt/lists/*
+/bin/sh^M: bad interpreter
+Aur container boot hote hi mar jaata hai. Ye line usko saaf kar deti hai. Aapke setup ke liye ye zaroori hai.
 
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+Ek accha bonus
 
-WORKDIR /app
+&& ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext
+Ye build ke time hi check karta hai ki ffmpeg mein drawtext hai ya nahi. Agar nahi hua to build fail ho jayega — deploy karke baad mein pata chalne se accha hai.
 
-COPY backend/requirements.txt ./backend/
-RUN pip install --no-cache-dir -r backend/requirements.txt
+Ek dhyaan rakhne wali baat
 
-# This preserves all vendored backend content, including video skills and brand assets.
-COPY backend/ ./backend/
-COPY --from=frontend-builder /build/frontend/dist/ ./frontend/dist/
-
-RUN chmod +x /app/backend/entrypoint.sh \
-    && mkdir -p "$STORAGE_DIR" \
-    && chown -R appuser:appgroup /app "$STORAGE_DIR"
-
-WORKDIR /app/backend
-
-USER appuser
-
-EXPOSE 8000
-
-old dockerfile
-
-FROM python:3.11-slim
-
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
-
-WORKDIR /app
-
-COPY backend/requirements.txt ./backend/
-RUN pip install --no-cache-dir -r backend/requirements.txt
-
-COPY backend/ ./backend/
-COPY frontend/dist/ ./frontend/dist/
-
-# Keep the verification
-RUN ls -la frontend/dist/ && echo "Frontend dist copied successfully"
-
-RUN chmod +x /app/backend/entrypoint.sh
-RUN chown -R appuser:appgroup /app
-
-WORKDIR /app/backend
-
-USER appuser
-
-EXPOSE 8000
-
-CMD ["sh", "/app/backend/entrypoint.sh"]
-CMD ["sh", "/app/backend/entrypoint.sh"]
+STORAGE_DIR=/tmp/marketing-video
+/tmp container restart hone pe khaali ho jaata hai. Matlab purani videos gayab. Agar aap videos Azure Blob pe save kar rahe ho to koi dikkat nahi. Agar sirf yahin rakhte ho, to restart ke baad sab chala jayega. Bas jaan lo.
