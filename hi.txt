@@ -14,16 +14,23 @@ FROM python:3.11-slim-bookworm AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     STORAGE_DIR=/tmp/marketing-video \
-    VIDEO_STORAGE_DIR=/tmp/marketing-video
+    VIDEO_STORAGE_DIR=/tmp/marketing-video \
+    BRAND_FONT_PATH=/app/backend/video/brand/assets/fonts/DejaVuSans.ttf
 
-RUN apt-get update --fix-missing \
-    && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        fontconfig \
-        fonts-dejavu-core \
-    && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
-    && ffprobe -version >/dev/null \
-    && rm -rf /var/lib/apt/lists/*
+# ffmpeg arrives as a static binary rather than from apt. The self-hosted runner
+# sits inside the corporate network and cannot reach deb.debian.org, and
+# `apt-get update` only *warns* when it fails to fetch its lists — it still
+# exits 0, so the `&&` chain walked on and died at `apt-get install` instead,
+# reporting "Unable to locate package ffmpeg". Docker Hub is reachable (the base
+# images pull fine), so take the binaries from there.
+#
+# These are statically linked: no shared libraries to install, and the build
+# carries drawtext, which is what puts the supers on the picture.
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg  /usr/local/bin/ffmpeg
+COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/ffprobe
+
+RUN ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
+    && ffprobe -version >/dev/null
 
 RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 
@@ -36,7 +43,21 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY backend/ ./backend/
 COPY --from=frontend-builder /build/frontend/dist/ ./frontend/dist/
 
-RUN chmod +x /app/backend/entrypoint.sh \
+# `fonts-dejavu-core` used to come from apt too, and drawtext needs a real font
+# file — without one the lockup still composites (it is a PNG overlay) but every
+# burnt-in super silently renders as nothing. Say so at build time rather than
+# letting it be discovered in a finished film.
+RUN if [ -f "$BRAND_FONT_PATH" ]; then \
+        echo "Brand font found: $BRAND_FONT_PATH"; \
+    else \
+        echo "WARNING: no font at $BRAND_FONT_PATH — supers and end-card text will NOT render."; \
+        echo "         Commit a .ttf to backend/video/brand/assets/fonts/ to fix this."; \
+    fi
+
+# The build context can come off a Windows checkout, where a CRLF entrypoint
+# hands "\r" to sh and kills the container on boot with "bad interpreter".
+RUN sed -i 's/\r$//' /app/backend/entrypoint.sh \
+    && chmod +x /app/backend/entrypoint.sh \
     && mkdir -p "$STORAGE_DIR" \
     && chown -R appuser:appgroup /app "$STORAGE_DIR"
 
