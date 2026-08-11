@@ -1,958 +1,492 @@
-"""Two-pass storyboarding.
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useIdleTimer } from './hooks/useIdleTimer';
+import { useIsAuthenticated, useMsal } from '@azure/msal-react';
+import { Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom';
+import { LoginPage } from './components/LoginPage';
+import { ALLOWED_DOMAIN } from './auth/authConfig';
+import { ProjectsPage } from './components/ProjectsPage';
+import { StudioPage } from './components/StudioPage';
+import { ExplorePage } from './components/ExplorePage';
+import { SixECreativesPage } from './components/SixECreativesPage';
+import { AnalyticsPage } from './components/AnalyticsPage';
+import { FeedbackPage } from './components/FeedbackPage';
+import { MyCreativesPage } from './components/MyCreativesPage';
+import { ApproverCreativesPage } from './components/ApproverCreativesPage';
+import EditorPage from './components/EditorPage';
+import { FolderOpen, Compass, LogOut, MessageSquare, TrendingUp, Images, Image,Crop, ClipboardCheck, Clapperboard } from 'lucide-react';
+import { setAuthToken, setUnauthorizedHandler, apiFetch } from './services/apiClient';
+import { getPublicLogoUrl } from './utils/logoAsset';
+import { CONFIG } from './config';
+import { VideoPage } from './features/video/VideoPage';
 
-  Pass 1 — treatments. Four genuinely different directions in one call, each
-           committing to the five anchors and a continuity block. Cheap, and it
-           is all the UI needs to render the story cards.
-  Pass 2 — scenes. Run per story, on demand, because writing 4 x 12 shot cards
-           up front burns tokens on three directions the user will discard.
+// ─── Root: handles auth gate ──────────────────────────────────────────────────
 
-Every pass-2 result goes through the programmatic audit; failures come back as a
-repair brief rather than shipping mush to Veo.
-"""
+export default function App() {
+  const isAuthenticated = useIsAuthenticated();
+  const { instance, accounts } = useMsal();
+  const [loggedOut, setLoggedOut] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [idleWarning, setIdleWarning] = useState(false);
+  const [countdown, setCountdown] = useState(120); // seconds
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-from __future__ import annotations
+  const handleLogout = useCallback(async () => {
+    // Revoke the current token on the backend before wiping local session state.
+    // Errors are swallowed so a network failure never blocks the client-side logout.
+    try {
+      await apiFetch('/api/v1/auth/logout', { method: 'POST' });
+    } catch {
+      // proceed regardless
+    }
+    setAuthToken('');
+    sessionStorage.clear();
+    localStorage.clear();
+    setLoggedOut(true);
+    setIdleWarning(false);
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    window.history.pushState(null, '', '/');
+  }, []);
 
-import asyncio
-import json
-import re
-from typing import Any, Awaitable, Callable
+  // Start countdown when idle warning appears
+  useEffect(() => {
+    if (idleWarning) {
+      setCountdown(120);
+      countdownRef.current = setInterval(() => {
+        setCountdown(prev => {
+          if (prev <= 1) {
+            clearInterval(countdownRef.current!);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    }
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
+  }, [idleWarning]);
 
-from pydantic import BaseModel, Field, ValidationError
+  const handleIdleWarn   = useCallback(() => { setIdleWarning(true); }, []);
+  const handleIdleExpire = useCallback(() => {
+    setIdleWarning(false);
+    setSessionExpired(true);
+  }, []);
+  const handleIdleReset  = useCallback(() => {
+    setIdleWarning(false);
+    // Do NOT clear sessionExpired here — once the session has expired it must
+    // stay expired until the user explicitly clicks Re-login.
+  }, []);
 
-from ..brand import (
-    brand_beat_label,
-    brand_brief_block,
-    brand_negative_prompt,
-    brand_normalise_story,
-)
-from ..domain.duration import beat_label
-from ..domain.models import (
-    ContinuityBlock,
-    DurationPlan,
-    ProjectBrief,
-    Scene,
-    ShotCard,
-    StoryAnchors,
-    StoryOption,
-)
-from ..config import settings
-from ..errors import BadRequest, UpstreamError
-from ..ids import short_id
-from ..logging_setup import get_logger
-from ..skills.audit import audit_story_option, build_repair_brief
-from ..skills.registry import compose_skill
-from .llm import ChatMessage, chat_json
-
-log = get_logger("storyboard")
-
-MAX_REPAIR_PASSES = 3
-
-_CRAFT_NEGATIVE = (
-    "subtitles, on-screen text, watermark, logos, extra characters, changing clothes, "
-    "changing face, distorted hands, extra fingers, melted features, background music, "
-    "random camera drift"
-)
-
-#: Craft defaults plus whatever the active brand forbids in frame.
-DEFAULT_NEGATIVE = ", ".join(part for part in (_CRAFT_NEGATIVE, brand_negative_prompt()) if part)
-
-ProgressFn = Callable[[float, str], Awaitable[None] | None]
-
-
-# ---------------------------------------------------------------------------
-# Schemas for what the model returns
-# ---------------------------------------------------------------------------
-
-
-class _Treatment(BaseModel):
-    title: str = ""
-    summary: str = ""
-    treatment: str = ""
-    angle: str = ""
-    anchors: StoryAnchors = Field(default_factory=StoryAnchors)
-    continuity: ContinuityBlock = Field(default_factory=ContinuityBlock)
-
-
-class _TreatmentsResponse(BaseModel):
-    stories: list[_Treatment] = Field(default_factory=list)
-
-
-class _WrittenScene(BaseModel):
-    order: int
-    title: str = ""
-    summary: str = ""
-    continuity_note: str = Field(default="", alias="continuityNote")
-    transition_out: str = Field(default="hardcut", alias="transitionOut")
-    shot_card: ShotCard = Field(default_factory=ShotCard, alias="shotCard")
-    prompt: str = ""
-    #: Sound direction only — no `Audio:` label, no duration. Both are spliced
-    #: on deterministically in `_materialise_scenes` (see the comment there for
-    #: why this is a separate field instead of trusting the model to keep two
-    #: fixed boilerplate lines inside a long freeform prompt).
-    audio: str = ""
-    negative_prompt: str = Field(default="", alias="negativePrompt")
-
-    model_config = {"populate_by_name": True}
-
-
-class _ScenesResponse(BaseModel):
-    scenes: list[_WrittenScene] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Prompt building
-# ---------------------------------------------------------------------------
-
-
-def _brief_block(brief: ProjectBrief, plan: DurationPlan) -> str:
-    # `creative()`, never `brief`. The raw brief carries on-screen copy, and a
-    # scene writer that can see copy will ask Veo to render it — which is how
-    # four of five cards shipped misspelt. Copy is composited after the render;
-    # see `services.brief` and `brand.supers`.
-    lines = [
-        "## The brief",
-        "",
-        f"Idea: {brief.creative()}",
-        f"Deliverable: {plan.target_seconds} seconds, {brief.ratio}, "
-        f'style preset "{brief.style}", pacing "{brief.pacing}".',
-        f"Response language for titles/summaries/treatments: {brief.language}. "
-        "Prompts stay in English.",
-    ]
-
-    if brief.references:
-        lines += ["", "Reference material the user attached:"]
-        lines += [f"- {item}" for item in brief.references]
-    if brief.avoid:
-        lines += ["", "Must not appear:"]
-        lines += [f"- {item}" for item in brief.avoid]
-
-    lines += [
-        "",
-        "## The delivery constraint",
-        "",
-        f"Veo renders 4, 6 or 8 second clips. This film is {len(plan.segments)} separate "
-        f"generations accumulated by ffmpeg into one {plan.target_seconds}s file.",
-        *[f"- {note}" for note in plan.notes],
-    ]
-
-    brand = brand_brief_block()
-    if brand:
-        lines += ["", brand]
-
-    return "\n".join(lines)
-
-
-def _segment_table(plan: DurationPlan) -> str:
-    # The brand may recolour a beat without changing the structure — see
-    # `brand.brand_beat_label`. Falls back to the craft label when brand is off.
-    rows = [
-        f"| {segment.index + 1} | {segment.starts_at}s–{segment.starts_at + segment.seconds}s "
-        f"| {segment.seconds}s | {segment.beat} | {segment.shot_function} "
-        f"| {brand_beat_label(segment.beat) or beat_label(segment.beat)} |"
-        for segment in plan.segments
-    ]
-    return "\n".join(
-        [
-            "| Scene | Timecode | Seconds | Beat | Shot function | What this beat is for |",
-            "|---|---|---|---|---|---|",
-            *rows,
-        ]
-    )
-
-
-def _veo_skeleton(seconds: int) -> str:
-    """The `prompt` field's shape. Sound and duration are NOT part of it.
-
-    Both are 100% mechanical — duration is already fixed by the plan, and the
-    `Audio:`/`Duration:` lines are boilerplate the writer kept dropping under
-    narrative pressure across a long freeform string. So the split moved them
-    to their own JSON field / plan value and `_materialise_scenes` appends both
-    deterministically. That guarantees every scene carries them regardless of
-    what the model does — see the audit rules `veo/audio-line` and
-    `duration-discipline`, which exist to catch exactly this failure mode.
-    """
-    return "\n".join(
-        [
-            "```text",
-            "<Camera framing, lens, one primary move>. <Character identity block> "
-            "<physical action> in <environment>.",
-            "<Environmental pressure sentence>. <Physical micro-action sentence>.",
-            "Lighting. <named source> as key from <direction>, <secondary source> as <role>.",
-            "Palette. <the two or three colours in THIS frame>.",
-            "Continuity. <identity and wardrobe of whoever is in THIS shot — nobody else>.",
-            "Ends on <the exact final frame>.",
-            "```",
-            "",
-            "Aim for 120-200 words. A scene prompt is mostly the shot in front of you: the "
-            "framing, the move, the action, the pressure. If more than about a third of it "
-            "could be pasted unchanged into a different scene, it is boilerplate, and "
-            "boilerplate is what makes every shot look the same.",
-            "",
-            f"(Sound direction — room tone, texture, motif, SFX with timing, dialogue if any — "
-            f"goes in the separate `audio` field, not here. This scene is fixed at {seconds} "
-            "seconds; do not write a Duration line either — both are appended for you.)",
-        ]
-    )
-
-
-def _story_context(story: StoryOption) -> str:
-    c = story.continuity
-    return "\n".join(
-        [
-            "## The story you are shooting",
-            "",
-            f"Title: {story.title}",
-            f"Angle: {story.angle}",
-            f"Treatment: {story.treatment}",
-            "",
-            "### The five anchors — every scene serves these",
-            f"- Emotion: {story.anchors.emotion}",
-            f"- Visual motif: {story.anchors.motif}",
-            f"- Anchor object: {story.anchors.object}",
-            f"- The break: {story.anchors.break_}",
-            f"- Final image: {story.anchors.final_image}",
-            "",
-            "### Continuity — restate what is IN THE SHOT, not the whole block",
-            "",
-            "Veo has no memory between clips, so anything the camera can see has to be "
-            "described again in that clip's prompt. That is not the same as pasting this "
-            "whole block into every scene. Two failure modes come from over-restating, and "
-            "both are worse than a small continuity drift:",
-            "",
-            "1. When most of a prompt is identical to the previous prompt, the model weights "
-            "the repeated mass and every shot converges on the same composition. A film of "
-            "eight identical framings is a failed film even if continuity is perfect.",
-            "2. A character described in a prompt gets RENDERED. Describe the whole cast in "
-            "every scene and people who are not in the scene turn up as bystanders — a flight "
-            "attendant standing in a train carriage, a child in an empty boardroom.",
-            "",
-            "So in each scene prompt, restate only:",
-            "- the identity and wardrobe of characters PHYSICALLY PRESENT in that shot, in "
-            "full detail (face, hair, skin tone, exact garments) — and nobody else",
-            "- the lighting key, because it must not drift",
-            "- the two or three palette colours actually in that frame",
-            "",
-            "Everything else in this block is reference for YOU, to keep the film coherent. "
-            "It is not text to copy into prompts.",
-            "",
-            f"- Characters: {' | '.join(c.characters) or '—'}",
-            f"- Wardrobe: {' | '.join(c.wardrobe) or '—'}",
-            f"- Location: {c.location or '—'}",
-            f"- Palette: {c.palette or '—'}",
-            f"- Lighting constant: {c.lighting_constant or '—'}",
-            f"- Camera language: {c.camera_language or '—'}",
-            f"- Props: {', '.join(c.props) or '—'}",
-            f"- Rules: {' | '.join(c.rules) or '—'}",
-            "",
-            "The rules line is a constraint on YOUR writing, not a line to quote. Prohibitions "
-            "belong in the negative prompt: naming a thing in order to forbid it inside a "
-            "positive prompt is one of the most reliable ways to summon it.",
-        ]
-    )
-
-
-_TREATMENT_SHAPE = {
-    "stories": [
-        {
-            "title": "Short label, e.g. 'The last boarding call'",
-            "summary": "One line for the story card.",
-            "treatment": "3-5 sentences: core idea, emotional arc, rhythm, ending image.",
-            "angle": "The directorial angle in a short phrase.",
-            "anchors": {
-                "emotion": "",
-                "motif": "",
-                "object": "",
-                "break": "",
-                "finalImage": "",
-            },
-            "continuity": {
-                "characters": ["Full identity block per character"],
-                "wardrobe": ["Exact garments"],
-                "location": "",
-                "palette": "Approved in-frame colours only; put prohibitions in rules",
-                "lightingConstant": "Source, role, direction",
-                "cameraLanguage": "The dominant grammar of the whole piece",
-                "props": [],
-                "rules": ["Anything that must stay constant across every clip"],
-            },
+  // On 401: try a silent renewal before declaring the session dead.
+  //
+  // The token is acquired once on mount and MSAL caches it for about an hour.
+  // Anything that outlives that — a video render runs for fifteen minutes and
+  // can start late in the hour — comes back to a stale token, and the first
+  // request afterwards is the one that fetches the finished film. Returning
+  // false unconditionally made every such 401 permanent and left the retry
+  // branch in apiFetch unreachable, so a completed render presented as a dead
+  // session. `acquireTokenSilent` renews from the refresh token without any
+  // user interaction; only a genuine failure is a real expiry.
+  useEffect(() => {
+    const handle401 = async (): Promise<boolean> => {
+      const account = accounts[0];
+      if (account) {
+        try {
+          const result = await instance.acquireTokenSilent({
+            scopes: ['openid', 'profile', 'email'],
+            account,
+          });
+          setAuthToken(result.idToken);
+          return true;
+        } catch {
+          // Silent renewal failed — the session really is over.
         }
-    ]
+      }
+      setSessionExpired(true);
+      return false;
+    };
+    setUnauthorizedHandler(handle401);
+    return () => setUnauthorizedHandler(() => {});
+  }, [accounts, instance]);
+
+  //console.log('Accounts:', accounts[0]);
+  const userEmail = accounts[0]?.username ?? '';
+  const wrongDomain = isAuthenticated && userEmail && !userEmail.toLowerCase().endsWith(ALLOWED_DOMAIN);
+
+  if (loggedOut || !isAuthenticated || wrongDomain) {
+    if (wrongDomain && !loggedOut) handleLogout();
+    return <LoginPage />;
+  }
+
+  return (
+    <>
+      {idleWarning && !sessionExpired && (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4 flex flex-col items-center gap-5">
+            <div className="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center">
+              <svg className="w-7 h-7 text-[#000099]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div className="text-center">
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Still there?</h2>
+              <p className="text-sm text-gray-500">
+                You've been inactive. Your current session will expire in{' '}
+                <span className="font-semibold text-[#000099]">
+                  {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')}
+                </span>
+                .
+              </p>
+            </div>
+            <button
+              onClick={() => setIdleWarning(false)}
+              className="w-full cursor-pointer px-4 py-2 rounded-lg bg-[#000099] text-white text-sm font-medium hover:bg-[#0000cc] transition-colors"
+            >
+              I'm still here
+            </button>
+          </div>
+        </div>
+      )}
+      {sessionExpired && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4 flex flex-col items-center gap-5">
+            <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center">
+              <svg className="w-7 h-7 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              </svg>
+            </div>
+            <div className="text-center">
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Session Expired</h2>
+              <p className="text-sm text-gray-500">Your session has timed out. Please log in again to continue.</p>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="w-full cursor-pointer px-4 py-2 rounded-lg bg-[#000099] text-white text-sm font-medium hover:bg-[#0000cc] transition-colors"
+            >
+              Re-login
+            </button>
+          </div>
+        </div>
+      )}
+      <AuthenticatedApp
+        onLogout={handleLogout}
+        onIdleWarn={handleIdleWarn}
+        onIdleExpire={handleIdleExpire}
+        onIdleReset={handleIdleReset}
+      />
+    </>
+  );
 }
 
-_SCENE_SHAPE = {
-    "scenes": [
-        {
-            "order": 1,
-            "title": "Short label for the storyboard row",
-            "summary": "One line describing what happens.",
-            "continuityNote": "How this cuts against the previous scene.",
-            "transitionOut": "hardcut",
-            "shotCard": {
-                "frame": "wide / medium / close-up / macro insert",
-                "composition": "",
-                "camera": "",
-                "movementReason": 'Answers "what changed?"',
-                "action": "The exact physical event",
-                "eyeTrace": "Where the eye lands in the first 0.3s",
-                "environmentalPressure": "",
-                "microAction": "",
-                "soundAnchor": "",
-                "lighting": "",
-                "palette": "",
-                "cutType": "match cut / smash cut / cut on action / J-cut / L-cut",
-            },
-            "prompt": (
-                "The full shot description — camera, identity, action, environment, lighting, "
-                "palette, continuity, final frame. Do NOT include an `Audio:` line or a "
-                "`Duration:` line — those are appended automatically from the `audio` field "
-                "below and this scene's fixed length."
-            ),
-            "audio": (
-                "Sound direction only: room tone, texture, body sound, the motif, SFX with "
-                "timing, dialogue if any. No music — a score is mixed in afterwards. "
-                "No spoken brand name, no PA or tannoy announcement, no lyrics: Veo's audio "
-                "pass is filtered separately and refuses those, returning no clip at all."
-            ),
-            "negativePrompt": "Comma-separated things that must not appear.",
+// ─── Shell: header + React Router routes ─────────────────────────────────────
+
+function AuthenticatedApp({
+  onLogout,
+  onIdleWarn,
+  onIdleExpire,
+  onIdleReset,
+}: {
+  onLogout: () => void;
+  onIdleWarn: () => void;
+  onIdleExpire: () => void;
+  onIdleReset: () => void;
+}) {
+  const { accounts, instance } = useMsal();
+  const location = useLocation();
+  const currentUser = accounts[0];
+  const userName = currentUser?.name ?? currentUser?.username ?? '';
+  const userEmail = currentUser?.username ?? '';
+  const [tokenReady, setTokenReady] = useState(false);
+
+  // Roles are injected by Azure AD into the ID token — no hardcoded lists needed.
+  const idTokenClaims = currentUser?.idTokenClaims as Record<string, unknown> | undefined;
+  const roles: string[] = (idTokenClaims?.roles as string[]) ?? [];
+  const canViewAnalytics = roles.includes('Analytics.View') || roles.includes('view.analytics');
+  const canHideInExplore = roles.some((role) => role.toLowerCase() === 'analytics.view');
+  const groupClaims = Array.isArray(idTokenClaims?.groups) ? (idTokenClaims?.groups as string[]) : [];
+  const [userSubDepartment, setUserSubDepartment] = useState<string | null>(null);
+
+  const canViewApprover = Boolean(
+    CONFIG.PNM_APPROVERS_GROUP_ID && groupClaims.includes(CONFIG.PNM_APPROVERS_GROUP_ID),
+  );
+  const canViewMyCreatives = userSubDepartment === CONFIG.PNM_SUB_DEPARTMENT;
+  const isEditorRoute = location.pathname === '/editor';
+
+  useIdleTimer({
+    onWarn:   onIdleWarn,
+    onExpire: onIdleExpire,
+    onReset:  onIdleReset,
+  });
+
+  // Acquire / refresh ID token for all API calls.
+  // We gate rendering until the token is available so that child components
+  // never fire an API request with an empty Bearer token (which causes 401s
+  // on page refresh before acquireTokenSilent has finished).
+  useEffect(() => {
+    if (!currentUser) return;
+    const supplyToken = async () => {
+      const tokenRequest = { scopes: ['openid', 'profile', 'email'], account: currentUser };
+      try {
+        const result = await instance.acquireTokenSilent(tokenRequest);
+        setAuthToken(result.idToken);
+        setTokenReady(true);
+      } catch {
+        try {
+          const result = await instance.acquireTokenPopup(tokenRequest);
+          setAuthToken(result.idToken);
+          setTokenReady(true);
+        } catch (err) {
+          console.error('Failed to acquire auth token:', err);
         }
-    ]
+      }
+    };
+    void supplyToken();
+
+    // MSAL hands back the *cached* ID token until it expires and nothing was
+    // ever asking for a fresh one, so a token minted early in a browser session
+    // could lapse an hour later while a job was still running. A video render
+    // takes twenty minutes, which made the request that fetched the finished
+    // film the one that wore the failure — the render had succeeded, and the UI
+    // showed a spinner. Renew well inside the lifetime so it is never stale.
+    //
+    // Silent only: `acquireTokenPopup` fired from a background timer would
+    // ambush someone mid-work. A genuine silent failure still falls through to
+    // the 401 handler, which can prompt properly.
+    const renew = setInterval(
+      () => {
+        instance
+          .acquireTokenSilent({ scopes: ['openid', 'profile', 'email'], account: currentUser })
+          .then((result) => setAuthToken(result.idToken))
+          .catch(() => {
+            /* Handled on the next 401. */
+          });
+      },
+      10 * 60 * 1000,
+    );
+    return () => clearInterval(renew);
+  }, [currentUser, instance]);
+
+  useEffect(() => {
+    if (!tokenReady) return;
+
+    const loadCurrentUser = async () => {
+      try {
+        const res = await apiFetch(`${CONFIG.API_BASE_URL}/api/v1/users/me`);
+        if (!res.ok) {
+          setUserSubDepartment(null);
+          return;
+        }
+        const user = (await res.json()) as { sub_department?: string | null };
+        setUserSubDepartment(user.sub_department ?? null);
+      } catch {
+        setUserSubDepartment(null);
+      }
+    };
+
+    void loadCurrentUser();
+  }, [tokenReady]);
+
+  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+      isActive
+        ? 'bg-[#e6e6ff] text-[#000099]'
+        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+    }`;
+
+  // Wait until the access token is ready before rendering any authenticated
+  // content — prevents child components from firing API calls with an empty
+  // Bearer token on page refresh.
+  if (!tokenReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-8 h-8 border-4 border-[#000099] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className={isEditorRoute ? 'h-screen overflow-hidden' : 'min-h-screen bg-gray-50 flex flex-col font-sans'}>
+      {!isEditorRoute && (
+        <>
+          {/* ── Approval disclaimer banner ──────────────────────────────────── */}
+          <div className="w-full bg-amber-50 border-b border-amber-300 px-4 py-2 flex items-center justify-center gap-2 text-amber-800 text-xs font-medium z-20 sticky top-0">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            All creatives generated by this app must be reviewed and approved by the Marketing team before being used in any campaign or published externally.
+          </div>
+          {/* ── Global header ───────────────────────────────────────────────── */}
+          <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-3 shadow-sm z-10">
+            <img
+              src={getPublicLogoUrl()}
+              alt=""
+              className="h-6 w-auto max-w-[140px] object-contain rounded"
+              onClick={() => window.location.href = '/projects'}
+            />
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight cursor-pointer" onClick={() => window.location.href = '/projects'}>IndiGoBluPrint</h1>
+
+            {/* Nav links */}
+            <nav className="hidden sm:flex items-center gap-1 ml-6">
+              <NavLink to="/projects" className={navLinkClass} end>
+                <FolderOpen className="w-4 h-4" />
+                Projects
+              </NavLink>
+              <NavLink to="/explore" className={navLinkClass}>
+                <Compass className="w-4 h-4" />
+                Explore
+              </NavLink>
+              <NavLink to="/6e-creatives" className={navLinkClass}>
+                <Images className="w-4 h-4" />
+                6ECreatives
+              </NavLink>
+              <NavLink to="/video" className={navLinkClass}>
+                <Clapperboard className="w-4 h-4" />
+                AI Video
+              </NavLink>
+              {canViewMyCreatives && (
+                <NavLink to="/my-creatives" className={navLinkClass}>
+                  <Image className="w-4 h-4" />
+                  My Creatives
+                </NavLink>
+              )}
+              <NavLink to="/editor?tab=uploads" className={navLinkClass}>
+                <Crop className="w-4 h-4" />
+                Editor
+              </NavLink>
+              {canViewApprover && (
+                <NavLink to="/approver" className={navLinkClass}>
+                  <ClipboardCheck className="w-4 h-4" />
+                  My Approvals
+                </NavLink>
+              )}
+              {canViewAnalytics && (
+                <NavLink to="/analytics" className={navLinkClass}>
+                  <TrendingUp className="w-4 h-4" />
+                  Analytics
+                </NavLink>
+              )}
+              {canViewAnalytics && (
+                <NavLink to="/feedback" className={navLinkClass}>
+                  <MessageSquare className="w-4 h-4" />
+                  Feedbacks
+                </NavLink>
+              )}
+            </nav>
+
+            {/* User info + sign out */}
+            <div className="ml-auto flex items-center gap-3">
+              <div className="hidden sm:flex flex-col items-end leading-tight">
+                <span className="text-sm font-semibold text-gray-800">{userName}</span>
+                <span className="text-xs text-gray-500">{userEmail} ({userSubDepartment})</span>
+              </div>
+              <button
+                onClick={onLogout}
+                title="Sign out"
+                className="flex cursor-pointer items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 border border-gray-200 hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">Sign out</span>
+              </button>
+            </div>
+          </header>
+        </>
+      )}
+
+      {/* ── Page routes ─────────────────────────────────────────────────── */}
+      <Routes>
+        <Route index element={<Navigate to="/projects" replace />} />
+        <Route
+          path="/editor"
+          element={<EditorPage />}
+        />
+        <Route
+          path="/projects"
+          element={
+            <main className="flex-1 flex flex-col bg-gray-50">
+              <ProjectsPage />
+            </main>
+          }
+        />
+        <Route
+          path="/projects/:projectId"
+          element={
+            <main className="bg-gray-50">
+              <StudioPage />
+            </main>
+          }
+        />
+        <Route
+          path="/explore"
+          element={
+            <main className="flex-1 flex flex-col overflow-hidden">
+              <ExplorePage canHideCreatives={canHideInExplore} />
+            </main>
+          }
+        />
+        <Route
+          path="/6e-creatives"
+          element={
+            <main className="flex-1 flex flex-col overflow-hidden">
+              <SixECreativesPage />
+            </main>
+          }
+        />
+        <Route
+          path="/video"
+          element={
+            <main className="flex-1 flex flex-col bg-gray-50">
+              <VideoPage />
+            </main>
+          }
+        />
+        <Route
+          path="/my-creatives"
+          element={
+            canViewMyCreatives ? (
+              <main className="flex-1 flex flex-col bg-gray-50">
+                <MyCreativesPage />
+              </main>
+            ) : (
+              <Navigate to="/projects" replace />
+            )
+          }
+        />
+        <Route
+          path="/approver"
+          element={
+            canViewApprover ? (
+              <main className="flex-1 flex flex-col bg-gray-50">
+                <ApproverCreativesPage />
+              </main>
+            ) : (
+              <Navigate to="/projects" replace />
+            )
+          }
+        />
+        <Route
+          path="/analytics"
+          element={
+            canViewAnalytics ? (
+              <main className="flex-1 flex flex-col bg-gray-50">
+                <AnalyticsPage />
+              </main>
+            ) : (
+              <Navigate to="/projects" replace />
+            )
+          }
+        />
+        <Route
+          path="/feedback"
+          element={
+            canViewAnalytics ? (
+              <main className="flex-1 flex flex-col bg-gray-50">
+                <FeedbackPage />
+              </main>
+            ) : (
+              <Navigate to="/projects" replace />
+            )
+          }
+        />
+        <Route path="*" element={<Navigate to="/projects" replace />} />
+      </Routes>
+    </div>
+  );
 }
-
-
-def _prepare_treatment(
-    treatment: _Treatment, index: int, *, story_id: str | None = None
-) -> StoryOption:
-    """Materialise, normalise and audit a treatment before it can be selected."""
-    story = StoryOption(
-        id=story_id or short_id("story"),
-        title=treatment.title or f"Story {index + 1}",
-        summary=treatment.summary,
-        treatment=treatment.treatment,
-        angle=treatment.angle,
-        anchors=treatment.anchors,
-        continuity=treatment.continuity,
-        scenes=[],
-    )
-    story = brand_normalise_story(story)
-    story.audit = audit_story_option(story)
-    return story
-
-
-# ---------------------------------------------------------------------------
-# Pass 1 — treatments
-# ---------------------------------------------------------------------------
-
-
-async def generate_treatments(
-    brief: ProjectBrief, plan: DurationPlan, count: int = 4
-) -> list[StoryOption]:
-    user = "\n".join(
-        [
-            _brief_block(brief, plan),
-            "",
-            "## Your task — director treatments only",
-            "",
-            f"Produce {count} genuinely different director treatments for this film. Not four "
-            "rewordings of one idea: different emotional spine, different obstacle, different "
-            "visual motif, different ending image.",
-            "",
-            "For each one commit to the five anchors (one emotion, one motif, one anchor object, "
-            "one break, one final image) and to a continuity block precise enough that twelve "
-            "independent generations produce the same person in the same clothes under the same "
-            "light. Identity means face shape, eye colour, skin tone, hair, facial hair, exact "
-            "garments. Palette means named colours. Lighting constant means source, role and "
-            "direction.",
-            "",
-            "Do not write scene prompts yet.",
-            "",
-            "## Output",
-            "",
-            "Return JSON only, this exact shape:",
-            "```json",
-            json.dumps(_TREATMENT_SHAPE, indent=2),
-            "```",
-        ]
-    )
-
-    messages: list[ChatMessage] = [
-        {"role": "system", "content": compose_skill("storyboard")},
-        {"role": "user", "content": user},
-    ]
-
-    raw = await chat_json(messages, label="treatments", temperature=0.95)
-
-    try:
-        parsed = _TreatmentsResponse.model_validate(raw)
-    except ValidationError as error:
-        raise UpstreamError(
-            "The storyboard model returned a treatment payload we could not read.",
-            details=error.errors()[:5],
-        ) from error
-
-    if not parsed.stories:
-        raise UpstreamError("The storyboard model returned no treatments.")
-
-    stories = [
-        _prepare_treatment(story, index)
-        for index, story in enumerate(parsed.stories[:count])
-    ]
-    valid = [story for story in stories if story.audit.passed]
-    if not valid:
-        failures = [
-            issue.message
-            for story in stories
-            for issue in story.audit.issues
-            if issue.severity == "error"
-        ]
-        raise UpstreamError(
-            "The storyboard model returned no brand-safe treatments.",
-            details=failures[:8],
-        )
-    if len(valid) != len(stories):
-        log.warning("Discarded %d invalid treatment(s) before selection.", len(stories) - len(valid))
-    return valid
-
-
-async def regenerate_treatment(
-    brief: ProjectBrief, plan: DurationPlan, existing: list[StoryOption], replace_id: str
-) -> StoryOption:
-    """Regenerate one treatment, told what to avoid so it lands somewhere new."""
-    others = [story for story in existing if story.id != replace_id]
-
-    user = "\n".join(
-        [
-            _brief_block(brief, plan),
-            "",
-            "## Your task — one replacement treatment",
-            "",
-            "The user rejected one of the directions. Write a single new treatment that is "
-            "clearly different from these:",
-            "",
-            *[
-                f'- "{story.title}" — {story.angle}. Emotion: {story.anchors.emotion}. '
-                f"Motif: {story.anchors.motif}. Ends on: {story.anchors.final_image}"
-                for story in others
-            ],
-            "",
-            "Change the emotional spine, the motif and the ending image. Same five anchors and "
-            "continuity discipline as before.",
-            "",
-            "## Output",
-            "",
-            'Return JSON only: {"stories": [ <one treatment object, same shape as before> ]}',
-        ]
-    )
-
-    raw = await chat_json(
-        [
-            {"role": "system", "content": compose_skill("storyboard")},
-            {"role": "user", "content": user},
-        ],
-        label="treatment-regenerate",
-        temperature=1.0,
-    )
-
-    parsed = _TreatmentsResponse.model_validate(raw)
-    if not parsed.stories:
-        raise UpstreamError("The storyboard model did not return a replacement treatment.")
-
-    story = _prepare_treatment(parsed.stories[0], 0, story_id=replace_id)
-    if not story.audit.passed:
-        failures = [
-            issue.message for issue in story.audit.issues if issue.severity == "error"
-        ]
-        raise UpstreamError(
-            "The storyboard model returned an invalid replacement treatment.",
-            details=failures[:8],
-        )
-    return story
-
-
-# ---------------------------------------------------------------------------
-# Pass 2 — scenes
-# ---------------------------------------------------------------------------
-
-
-def _repair_context(plan: DurationPlan, story: StoryOption) -> str:
-    """The spine a repair pass needs, without the brief that caused the fault.
-
-    A repair conversation that replays the original brief is asking the model to
-    satisfy two instructions that disagree — the brief wants a thing, the repair
-    brief says remove it. It keeps the thing. The story, the shot plan and the
-    named failures are enough to rewrite against, and none of them can argue
-    with the fix.
-    """
-    return "\n".join(
-        [
-            _story_context(story),
-            "",
-            "## The shot plan — fixed, do not change it",
-            "",
-            _segment_table(plan),
-            "",
-            f"There are exactly {len(plan.segments)} scenes. Keep every scene's seconds, beat, "
-            "shot function and order exactly as they are. You are rewriting prompts in place, "
-            "not re-planning the film.",
-        ]
-    )
-
-
-def _scenes_task(brief: ProjectBrief, plan: DurationPlan, story: StoryOption) -> str:
-    first_seconds = plan.segments[0].seconds if plan.segments else 8
-    return "\n".join(
-        [
-            _brief_block(brief, plan),
-            "",
-            _story_context(story),
-            "",
-            "## The shot plan — fixed, do not change it",
-            "",
-            _segment_table(plan),
-            "",
-            f"Write exactly {len(plan.segments)} scenes, one per row, in order. The seconds, beat "
-            "and shot function of each row are already decided by the renderer — write to them. "
-            "Do not merge, split, add or drop a scene.",
-            "",
-            "## How each prompt must be written",
-            "",
-            "Open with camera and lens: the model drops camera direction that arrives late. Then "
-            "the identity block, then the action.",
-            "Every scene carries, without exception: one environmental pressure, one physical "
-            "micro-action on a body, one sound anchor or visual motif, a stated focal length, "
-            "exactly one primary camera move with a reason, a named light source with its "
-            "direction, the colours actually in that frame, the identity of whoever is in that "
-            "shot, and an explicit final frame.",
-            "",
-            "Skeleton to fill, per scene (this example is sized for one scene — use that scene's "
-            "own seconds):",
-            _veo_skeleton(first_seconds),
-            "",
-            "Budget the action to the seconds: a 4s shot holds one action and a reaction, an 8s "
-            "shot holds two or three with a pause.",
-            "Dialogue is optional and must fit the clip — roughly 2.5 words per second, never "
-            "more than 8 seconds of speech.",
-            "Do not ask Veo for music; a score is mixed in afterwards. Ask it for room tone, "
-            "texture and the motif.",
-            "Veo generates the audio, and that pass is filtered separately from the picture — "
-            "when it refuses, NO clip comes back. Keep spoken brand names, airport PA and "
-            "tannoy announcements, sung lyrics and any named real person out of the sound. "
-            "The brand belongs in the picture; the sound stays human and ambient.",
-            "",
-            "`continuityNote` states how this scene joins the previous one — the matching pose, "
-            "light and lens height that make the cut work. Scene 1's note describes the opening "
-            "frame instead.",
-            "",
-            "## Output",
-            "",
-            "Return JSON only, this exact shape:",
-            "```json",
-            json.dumps(_SCENE_SHAPE, indent=2),
-            "```",
-        ]
-    )
-
-
-#: Strips a model-written `Audio:`/`Duration:` line if one slipped into `prompt`
-#: anyway, so composing our own copy can never double them up.
-#:
-#: `SFX:` and `Says:` are deliberately NOT stripped. They are content, not
-#: boilerplate — nothing regenerates them, so removing them silently destroyed
-#: every punctual sound cue and every line of dialogue the model wrote, and Veo
-#: received a silent scene. Only strip what you can put back.
-_BOILERPLATE_LINE = re.compile(r"^\s*(?:audio|duration)\s*:.*$\n?", re.IGNORECASE | re.MULTILINE)
-_AUDIO_LINE = re.compile(r"^\s*audio\s*:\s*(.*?)\s*$", re.IGNORECASE | re.MULTILINE)
-
-#: The same line, matched without reaching into the newlines around it. The
-#: pattern above leads with ``\s*``, which spans blank lines — fine for reading
-#: the value out, but a substitution with it collapses the paragraph breaks the
-#: prompt is composed with. This one only ever touches its own line.
-_AUDIO_LINE_ONLY = re.compile(r"^[ \t]*audio[ \t]*:.*$", re.IGNORECASE | re.MULTILINE)
-
-_DEFAULT_AUDIO = "room tone and ambient texture consistent with the scene, no music."
-
-
-def _compose_negative(written: str) -> str:
-    """The model's negative prompt, with the brand's own bans forced back in.
-
-    The model writes a per-scene negative, so brand terms cannot live in the
-    fallback alone — a scene where the model wrote anything at all would ship
-    without them. The brand bans are the reason the plate stays clean enough to
-    composite a real logo onto, so they are appended unconditionally.
-    """
-    parts = [written.strip() or _CRAFT_NEGATIVE]
-    brand = brand_negative_prompt()
-    if brand:
-        existing = parts[0].lower()
-        parts += [term for term in (t.strip() for t in brand.split(",")) if term.lower() not in existing]
-    return ", ".join(part for part in parts if part)
-
-
-def _compose_prompt(base_prompt: str, audio: str, seconds: int) -> str:
-    """Assemble the final Veo prompt from the model's shot description plus the
-    two boilerplate lines it kept dropping — `Audio:` and `Duration:` — added
-    here deterministically instead of trusted to survive a long freeform
-    string. See the comment on `_veo_skeleton` for why.
-    """
-    body = _BOILERPLATE_LINE.sub("", base_prompt).strip()
-    sound = audio.strip() or _DEFAULT_AUDIO
-    return f"{body}\n\nAudio: {sound}\n\nDuration: {seconds} seconds."
-
-
-def neutralise_audio(prompt: str) -> str:
-    """Swap the scene's sound direction for plain room tone.
-
-    Veo 3 generates real audio from the ``Audio:`` line, and that generation has
-    its own safety filter, separate from the picture. A spoken brand name, a
-    terminal PA announcement, a lyric or a line of dialogue can be refused with
-    "an issue with the audio for your prompt" — and the refusal returns *no
-    clip at all*, not a silent one.
-
-    Retrying the identical prompt spends the second attempt on the same refusal,
-    which is how one scene burns both tries and fails the film. Neutralising the
-    sound costs the scene its designed audio and keeps its picture.
-
-    Returns the prompt unchanged when there is no ``Audio:`` line to replace.
-    """
-    if not _AUDIO_LINE_ONLY.search(prompt or ""):
-        return prompt
-    return _AUDIO_LINE_ONLY.sub(f"Audio: {_DEFAULT_AUDIO}", prompt, count=1)
-
-
-def _split_prompt(prompt: str) -> tuple[str, str]:
-    """Recover the model-authored body and audio from a materialised prompt."""
-    match = _AUDIO_LINE.search(prompt or "")
-    audio = match.group(1).strip() if match else ""
-    body = _BOILERPLATE_LINE.sub("", prompt or "").strip()
-    return body, audio
-
-
-def _written_scene(scene: Scene) -> _WrittenScene:
-    prompt, audio = _split_prompt(scene.prompt)
-    return _WrittenScene(
-        order=scene.order,
-        title=scene.title,
-        summary=scene.summary,
-        continuityNote=scene.continuity_note,
-        transitionOut=scene.transition_out,
-        shotCard=scene.shot_card,
-        prompt=prompt,
-        audio=audio,
-        negativePrompt=scene.negative_prompt,
-    )
-
-
-def _materialise_scenes(
-    plan: DurationPlan, story: StoryOption, written: list[_WrittenScene]
-) -> list[Scene]:
-    by_order = {scene.order: scene for scene in written}
-    scenes: list[Scene] = []
-
-    for index, segment in enumerate(plan.segments):
-        order = index + 1
-        # Fall back to positional matching when the model mislabels `order`.
-        entry = by_order.get(order) or (written[index] if index < len(written) else None)
-        if entry is None:
-            raise UpstreamError(
-                f"The storyboard model returned {len(written)} scenes but the plan needs "
-                f"{len(plan.segments)}."
-            )
-
-        previous = story.scenes[index] if index < len(story.scenes) else None
-        transition = entry.transition_out if entry.transition_out in ("hardcut", "crossfade") else "hardcut"
-
-        scenes.append(
-            Scene(
-                id=previous.id if previous else short_id("scene"),
-                order=order,
-                title=entry.title or f"Scene {order}",
-                beat=segment.beat,
-                shotFunction=segment.shot_function,
-                seconds=segment.seconds,
-                startsAt=segment.starts_at,
-                summary=entry.summary,
-                prompt=_compose_prompt(entry.prompt, entry.audio, segment.seconds),
-                shotCard=entry.shot_card,
-                negativePrompt=_compose_negative(entry.negative_prompt),
-                transitionOut=transition,  # type: ignore[arg-type]
-                continuityNote=entry.continuity_note,
-            )
-        )
-
-    return scenes
-
-
-async def _run_scene_pass(
-    messages: list[ChatMessage],
-    story: StoryOption,
-    plan: DurationPlan,
-    label: str,
-    *,
-    allow_partial: bool = False,
-) -> StoryOption:
-    raw = await chat_json(messages, label=label, temperature=0.85)
-
-    try:
-        parsed = _ScenesResponse.model_validate(raw)
-    except ValidationError as error:
-        raise UpstreamError(
-            "The storyboard model returned a scene payload we could not read.",
-            details=error.errors()[:5],
-        ) from error
-
-    if not parsed.scenes:
-        raise UpstreamError("The storyboard model returned no scenes.")
-
-    expected_orders = set(range(1, len(plan.segments) + 1))
-    returned_orders = [scene.order for scene in parsed.scenes]
-    if len(returned_orders) != len(set(returned_orders)):
-        raise UpstreamError("The storyboard model returned duplicate scene orders.")
-    if not set(returned_orders).issubset(expected_orders):
-        raise UpstreamError(
-            f"The storyboard model returned scene orders outside 1–{len(plan.segments)}."
-        )
-
-    written = parsed.scenes
-    if len(written) != len(plan.segments):
-        if not allow_partial or not story.scenes:
-            raise UpstreamError(
-                f"The storyboard model returned {len(written)} scenes but the plan needs "
-                f"{len(plan.segments)}."
-            )
-        # Repair models sometimes return only the rows they changed despite being
-        # asked for the complete payload. Merge those rows by order so a useful
-        # repair cannot erase the other valid scene drafts.
-        by_order = {scene.order: scene for scene in map(_written_scene, story.scenes)}
-        by_order.update({scene.order: scene for scene in written})
-        written = [by_order[order] for order in sorted(expected_orders)]
-        log.info(
-            "%s returned %d/%d scenes; preserved unchanged rows from the previous draft.",
-            label,
-            len(parsed.scenes),
-            len(plan.segments),
-        )
-
-    candidate = story.model_copy(deep=True)
-    candidate.scenes = _materialise_scenes(plan, story, written)
-    return candidate
-
-
-def _to_model_shape(story: StoryOption) -> list[dict[str, Any]]:
-    """Feed the previous draft back to the model in the shape it produced it."""
-    return [
-        _written_scene(scene).model_dump(by_alias=True)
-        for scene in story.scenes
-    ]
-
-
-async def _emit(callback: ProgressFn | None, fraction: float, message: str) -> None:
-    if callback is None:
-        return
-    result = callback(fraction, message)
-    if asyncio.iscoroutine(result):
-        await result
-
-
-async def generate_scenes(
-    brief: ProjectBrief,
-    plan: DurationPlan,
-    story: StoryOption,
-    on_progress: ProgressFn | None = None,
-) -> tuple[StoryOption, int]:
-    """Write the scene prompts, audit them, repair what fails.
-
-    Returns ``(story_with_scenes, repair_passes_used)``.
-    """
-    if not plan.segments:
-        raise BadRequest("The duration plan has no segments.")
-
-    # Old projects may contain treatments written before brand normalisation was
-    # introduced. Fix deterministic fields before spending a scene-generation
-    # call, then reject any remaining story-level problem that a scene-only
-    # repair could never change.
-    story = brand_normalise_story(story)
-    preflight = audit_story_option(story)
-    story_errors = [
-        issue
-        for issue in preflight.issues
-        if issue.severity == "error" and issue.scene_order is None
-    ]
-    if story_errors:
-        raise BadRequest(
-            f'"{story.title}" has {len(story_errors)} treatment-level blocking issue(s): '
-            + "; ".join(issue.message for issue in story_errors[:4])
-        )
-
-    task = _scenes_task(brief, plan, story)
-    messages: list[ChatMessage] = [
-        {"role": "system", "content": compose_skill("storyboard")},
-        {"role": "user", "content": task},
-    ]
-
-    await _emit(on_progress, 0.1, f"Writing {len(plan.segments)} scene prompts…")
-
-    candidate = await _run_scene_pass(messages, story, plan, "scenes")
-    report = audit_story_option(candidate)
-    repair_passes = 0
-
-    while not report.passed and repair_passes < MAX_REPAIR_PASSES:
-        repair_passes += 1
-        errors = sum(1 for issue in report.issues if issue.severity == "error")
-        log.info(
-            'Story "%s": audit found %d blocking issue(s), running repair pass %d/%d',
-            story.title, errors, repair_passes, MAX_REPAIR_PASSES,
-        )
-        await _emit(
-            on_progress,
-            min(0.9, 0.4 + repair_passes * 0.2),
-            f"Audit found {errors} issue{'' if errors == 1 else 's'} — rewriting…",
-        )
-
-        # Deliberately NOT the original `task`. Replaying the full brief here
-        # puts the repair model in an argument with itself: the brief asks for
-        # something, the repair brief says remove it, and the model splits the
-        # difference and keeps it — which is how supers survived two repair
-        # passes and reached Veo. The repair pass gets the story spine and the
-        # specific failures, and nothing that can contradict them.
-        repair_messages: list[ChatMessage] = [
-            {"role": "system", "content": compose_skill("repair")},
-            {"role": "user", "content": _repair_context(plan, story)},
-            {
-                "role": "assistant",
-                "content": json.dumps({"scenes": _to_model_shape(candidate)}),
-            },
-            {"role": "user", "content": build_repair_brief(candidate, report)},
-        ]
-
-        try:
-            candidate = await _run_scene_pass(
-                repair_messages,
-                candidate,
-                plan,
-                f"scenes-repair-{repair_passes}",
-                allow_partial=True,
-            )
-        except UpstreamError as error:
-            log.warning("Repair pass failed; keeping the previous draft. %s", error)
-            break
-
-        report = audit_story_option(candidate)
-
-    await _emit(
-        on_progress, 1.0, "Storyboard ready." if report.passed else "Storyboard ready with warnings."
-    )
-
-    candidate.audit = report
-
-    if not report.passed:
-        blocking = [issue for issue in report.issues if issue.severity == "error"]
-        log.warning(
-            'Story "%s" finished with %d unresolved issue(s), score %d.',
-            story.title, len(blocking), report.score,
-        )
-
-        # An audit that logs and ships is decoration. Every blocking rule here
-        # costs real Veo time and comes back as a defect that cannot be fixed in
-        # post — misspelt supers, a mangled wordmark, eight identical framings.
-        # Refuse, and say exactly what to change.
-        if settings.brand_enforce_audit:
-            summary = "; ".join(
-                f"scene {issue.scene_order}: {issue.message}"
-                if issue.scene_order
-                else issue.message
-                for issue in blocking[:4]
-            )
-            more = f" (+{len(blocking) - 4} more)" if len(blocking) > 4 else ""
-            raise BadRequest(
-                f'"{story.title}" still fails {len(blocking)} blocking check(s) after '
-                f"{repair_passes} repair pass(es), so it has not been sent to Veo. {summary}{more}"
-            )
-
-    return candidate, repair_passes
-
-
-# ---------------------------------------------------------------------------
-# Single-scene rewrite
-# ---------------------------------------------------------------------------
-
-
-async def rewrite_scene(
-    brief: ProjectBrief, story: StoryOption, scene: Scene, instruction: str
-) -> Scene:
-    neighbours = [other for other in story.scenes if abs(other.order - scene.order) == 1]
-
-    lines = [
-        _story_context(story),
-        "",
-        "## The scene to rewrite",
-        "",
-        f"Scene {scene.order} of {len(story.scenes)} — {scene.seconds}s, "
-        f'beat "{scene.beat}", shot function "{scene.shot_function}".',
-        f'Delivery ratio {brief.ratio}, style preset "{brief.style}".',
-        "",
-        "Current prompt:",
-        "```text",
-        scene.prompt,
-        "```",
-        "",
-    ]
-
-    if neighbours:
-        lines += [
-            "Neighbouring scenes, so the cut still matches:",
-            *[
-                f"- Scene {other.order}: {other.summary} ({other.continuity_note})"
-                for other in neighbours
-            ],
-            "",
-        ]
-
-    lines += [
-        "## What the user asked for",
-        "",
-        instruction.strip() or "Make it stronger without changing what happens.",
-        "",
-        "Keep the duration, the beat and the shot function. Keep the continuity block intact — "
-        "the other scenes still depend on it. All the per-scene hard requirements still apply.",
-        "",
-        "Write sound direction in the separate `audio` field, not inside `prompt`. Do not write "
-        "an `Audio:` or `Duration:` line in `prompt` — both are appended automatically.",
-        "",
-        "## Output",
-        "",
-        'Return JSON only: {"scenes": [ <one scene object, same shape as the storyboard schema, '
-        f"order {scene.order}> ]}}",
-    ]
-
-    raw = await chat_json(
-        [
-            {"role": "system", "content": compose_skill("scene")},
-            {"role": "user", "content": "\n".join(lines)},
-        ],
-        label="scene-rewrite",
-        temperature=0.9,
-    )
-
-    parsed = _ScenesResponse.model_validate(raw)
-    if not parsed.scenes:
-        raise UpstreamError("The model did not return a rewritten scene.")
-
-    written = parsed.scenes[0]
-    transition = (
-        written.transition_out
-        if written.transition_out in ("hardcut", "crossfade")
-        else scene.transition_out
-    )
-
-    updated = scene.model_copy(deep=True)
-    updated.title = written.title or scene.title
-    updated.summary = written.summary or scene.summary
-    updated.prompt = (
-        _compose_prompt(written.prompt, written.audio, scene.seconds)
-        if written.prompt.strip()
-        else scene.prompt
-    )
-    updated.shot_card = written.shot_card
-    updated.negative_prompt = _compose_negative(written.negative_prompt or scene.negative_prompt)
-    updated.transition_out = transition  # type: ignore[assignment]
-    updated.continuity_note = written.continuity_note or scene.continuity_note
-    return updated
