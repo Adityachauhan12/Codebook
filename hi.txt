@@ -1,172 +1,393 @@
-  @app.on_event("startup")
-INFO:     Started server process [17952]
-INFO:     Waiting for application startup.
---- Running startup connection checks ---
-2026-08-11T12:02:23 INFO  [utils.appinsights] App Insights initialised via azure-monitor-opentelemetry
-[test/db] OK — inserted: {'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 6, 32, 27, 207469, tzinfo=datetime.timezone.utc)}, all rows: [{'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 6, 32, 27, 207469, tzinfo=datetime.timezone.utc)}]
-[test/blob] Created container 'test-connection'
-[test/blob] OK — uploaded and verified 'test.txt' at https://salab37marketingcampaign.blob.core.windows.net/test-connection/test.txt
-2026-08-11T12:02:34 INFO  [utils.limiter] registered_apps table ready
-2026-08-11T12:02:38 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-2026-08-11T12:02:39 INFO  [auth.azure_auth] Token cleanup: removed 0 expired revoked_tokens row(s)
---- Startup checks complete ---
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:61089 - "GET /api/config HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51908 - "GET /api/config HTTP/1.1" 200 OK
-2026-08-11T12:02:45 INFO  [auth.azure_auth] Azure AD JWKS combined — 9 total key(s): ['AahUf1bCXvx0JTRcXLrr0U4SluY', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'rRk1d-57BGZfsM4BUHrkx8cQbic', '1Nv3JExJrKNx1l7adICQ7Y_Atps', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', '6hXLaIYNSJ0o7zu09dMyI0ji3ug']
-2026-08-11T12:02:45 INFO  [auth.azure_auth] Azure AD JWKS combined — 9 total key(s): ['AahUf1bCXvx0JTRcXLrr0U4SluY', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'rRk1d-57BGZfsM4BUHrkx8cQbic', '1Nv3JExJrKNx1l7adICQ7Y_Atps', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', '6hXLaIYNSJ0o7zu09dMyI0ji3ug']
-2026-08-11T12:02:45 INFO  [auth.azure_auth] Azure AD JWKS combined — 8 total key(s): ['AahUf1bCXvx0JTRcXLrr0U4SluY', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'rRk1d-57BGZfsM4BUHrkx8cQbic', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', '6hXLaIYNSJ0o7zu09dMyI0ji3ug']
-INFO:     127.0.0.1:54618 - "GET /api/v1/video/projects/vid_19fef79fab0c88c1fe4 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54620 - "GET /api/v1/video/projects/vid_19fef79fab0c88c1fe4/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54619 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54640 - "GET /api/v1/video/projects/vid_19fef79fab0c88c1fe4 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49785 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50227 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49728 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-2026-08-11T12:03:01 INFO  [video.store] Created project vid_19fef8642985da73512 (30s, 4 segments)
-INFO:     127.0.0.1:52649 - "POST /api/v1/video/projects HTTP/1.1" 201 Created
-INFO:     127.0.0.1:61687 - "GET /api/v1/video/projects/vid_19fef8642985da73512/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:61686 - "GET /api/v1/video/projects/vid_19fef8642985da73512 HTTP/1.1" 200 OK
-2026-08-11T12:03:14 INFO  [video.llm] chat ok in 10.5s (1760 tokens, deployment gpt-5.5)
-2026-08-11T12:03:14 INFO  [video.brief] Brief split: intent 893 chars (from 1067), 0 super(s), end card off, 0 unsupported.
-2026-08-11T12:03:14 WARNING [video.brief] The brief asks for an end card but the split returned enabled=false — the film will render with NO brand mark. Model returned keys: avoid, endCard, intent, music, supers.
-2026-08-11T12:04:17 INFO  [video.llm] treatments ok in 61.1s (26055 tokens, deployment gpt-5.5)
-2026-08-11T12:04:17 WARNING [video.storyboard] Discarded 1 invalid treatment(s) before selection.
-2026-08-11T12:04:18 INFO  [video.jobs] Job job_19fef86440e89b63368 (storyboard) succeeded.
-INFO:     127.0.0.1:63351 - "GET /api/v1/video/projects/vid_19fef8642985da73512 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63536 - "GET /api/v1/video/projects/vid_19fef8642985da73512/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63535 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64516 - "GET /api/v1/video/projects/vid_19fef8642985da73512 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:61398 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64056 - "POST /api/v1/video/projects/vid_19fef8642985da73512/stories/story_19fef876cdeecfd22ea/scenes HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:64054 - "POST /api/v1/video/projects/vid_19fef8642985da73512/select-story HTTP/1.1" 200 OK
-2026-08-11T12:07:21 INFO  [video.llm] scenes ok in 63.6s (27017 tokens, deployment gpt-5.5)
-2026-08-11T12:07:21 ERROR [video.jobs] Job job_19fef893b8252290421 (storyboard) failed: The storyboard model returned 1 scenes but the plan needs 4.
-Traceback (most recent call last):
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\jobs.py", line 68, in runner
-    result = await work(context)
-             ^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\routes\video.py", line 352, in work
-    written, repair_passes = await generate_scenes(
-                             ^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\storyboard.py", line 761, in generate_scenes
-    candidate = await _run_scene_pass(messages, story, plan, "scenes")
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\storyboard.py", line 685, in _run_scene_pass
-    raise UpstreamError(
-video.errors.UpstreamError: The storyboard model returned 1 scenes but the plan needs 4.
-INFO:     127.0.0.1:65212 - "POST /api/v1/video/projects/vid_19fef8642985da73512/stories/story_19fef876cdeecfd22ea/scenes HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:53667 - "POST /api/v1/video/projects/vid_19fef8642985da73512/select-story HTTP/1.1" 200 OK
-2026-08-11T12:09:44 INFO  [video.llm] scenes ok in 80.1s (28605 tokens, deployment gpt-5.5)
-2026-08-11T12:09:44 INFO  [video.storyboard] Story "Winter starts with a yes": audit found 1 blocking issue(s), running repair pass 1/3
-2026-08-11T12:10:14 INFO  [video.llm] scenes-repair-1 ok in 27.8s (24083 tokens, deployment gpt-5.5)
-2026-08-11T12:10:14 INFO  [video.jobs] Job job_19fef8b2ad2483dc949 (storyboard) succeeded.
-2026-08-11T12:10:41 INFO  [video.clips] Generating 4 clip(s) for project vid_19fef8642985da73512, 3 at a time.
-INFO:     127.0.0.1:56881 - "POST /api/v1/video/projects/vid_19fef8642985da73512/clips/generate-all HTTP/1.1" 202 Accepted
-2026-08-11T12:11:10 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
+"""Veo, via the Gemini API.
 
-2026-08-11T12:11:15 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/yeh3d3n4vua0
-2026-08-11T12:11:19 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
+Shape of the world:
 
-2026-08-11T12:11:21 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
+  - One generation returns one clip of 4, 6 or 8 seconds. That is the ceiling,
+    and it is the reason the whole segment plan exists.
+  - Generation is a long-running operation: POST returns an operation name, you
+    poll it until ``done``, then download the result from a URI that still needs
+    the API key on the request.
+  - ``extend`` continues a Veo-produced video by ~7s, up to 20 times. Not used
+    by the main pipeline — see ``extend_clip`` for why.
+"""
 
-2026-08-11T12:11:25 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/d7q4f7858kyp
-2026-08-11T12:11:27 INFO  [video.veo] Started veo-3.1-generate-preview generation (6s, 16:9): models/veo-3.1-generate-preview/operations/4imlyan40q2f
-2026-08-11T12:12:26 WARNING [video.clips] Scene 3 failed on attempt 1; retrying. Veo filtered the generation before it produced a clip (We encountered an issue with the audio for your prompt, which means we could not create your video. This can sometimes happen due to our safety filters or other processing issues. Please modify your request and try again. You have not been charged for this attempt.). Rewrite the scene prompt — usually it names a real person, a brand, or content the safety filter blocks.
-2026-08-11T12:12:34 WARNING [video.clips] Scene 2 failed on attempt 1; retrying. Veo filtered the generation before it produced a clip (We encountered an issue with the audio for your prompt, which means we could not create your video. This can sometimes happen due to our safety filters or other processing issues. Please modify your request and try again. You have not been charged for this attempt.). Rewrite the scene prompt — usually it names a real person, a brand, or content the safety filter blocks.
-2026-08-11T12:12:55 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
+from __future__ import annotations
 
-2026-08-11T12:12:58 INFO  [video.veo] Started veo-3.1-generate-preview generation (6s, 16:9): models/veo-3.1-generate-preview/operations/41149r1qpqpd
-2026-08-11T12:13:03 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
+import asyncio
+import base64
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Awaitable, Callable
 
-2026-08-11T12:13:07 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/tsrhnsvozfzh
-2026-08-11T12:13:12 INFO  [video.veo] Downloaded 8.0MB to scene-01.mp4
-2026-08-11T12:13:16 INFO  [video.clips] Scene 1 ready (8.00s).
-2026-08-11T12:13:42 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
+import httpx
 
-2026-08-11T12:13:45 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server response error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')).
-2026-08-11T12:13:46 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/x2jaovi9d78e
-2026-08-11T12:14:00 INFO  [video.veo] Downloaded 1.8MB to scene-03.mp4
-2026-08-11T12:14:02 INFO  [video.clips] Scene 3 ready (6.00s).
-INFO:     127.0.0.1:55352 - "POST /api/v1/video/projects/vid_19fef8642985da73512/clips/scene_19fef8c69183b6863fc/generate HTTP/1.1" 202 Accepted
-2026-08-11T12:14:58 WARNING [video.clips] Scene 4 failed on attempt 1; retrying. Veo filtered the generation before it produced a clip (We encountered an issue with the audio for your prompt, which means we could not create your video. This can sometimes happen due to our safety filters or other processing issues. Please modify your request and try again. You have not been charged for this attempt.). Rewrite the scene prompt — usually it names a real person, a brand, or content the safety filter blocks.
-2026-08-11T12:15:15 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
+from ..config import settings
+from ..domain.models import VeoAspectRatio
+from ..errors import Unavailable, UpstreamError
+from ..logging_setup import get_logger
+from ..storage import ensure_dir
 
-2026-08-11T12:15:19 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/60grrvb6ry9n
-2026-08-11T12:15:29 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
+log = get_logger("veo")
 
-2026-08-11T12:15:33 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/i26tz7v5584i
-2026-08-11T12:17:19 INFO  [video.veo] Downloaded 5.4MB to scene-02.mp4
-2026-08-11T12:17:23 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-2026-08-11T12:17:23 INFO  [video.veo] Downloaded 8.0MB to scene-04.mp4
-2026-08-11T12:17:25 INFO  [video.clips] Scene 2 ready (8.00s).
-2026-08-11T12:17:25 INFO  [video.jobs] Job job_19fef90f637c2d128d5 (clip) succeeded.
-2026-08-11T12:17:25 INFO  [video.clips] Scene 4 ready (8.00s).
-2026-08-11T12:17:25 INFO  [video.jobs] Job job_19fef8d4912d6bdf10c (clips) succeeded.
-INFO:     127.0.0.1:61960 - "POST /api/v1/video/projects/vid_19fef8642985da73512/audio/suggest HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:50618 - "POST /api/v1/video/projects/vid_19fef8642985da73512/render HTTP/1.1" 202 Accepted
-2026-08-11T12:18:21 INFO  [video.llm] audio-directions ok in 33.6s (11970 tokens, deployment gpt-5.5)
-2026-08-11T12:18:22 INFO  [video.jobs] Job job_19fef93c32d06c7da64 (audio) succeeded.
-2026-08-11T12:19:31 WARNING [video.render] Nothing to composite: 0 super(s), 0 lockup(s). The film will have no burnt-in copy and no brand mark. end_card.enabled=False mark=wordmark brand=indigo.
-2026-08-11T12:20:39 INFO  [video.render] Rendered project vid_19fef8642985da73512: 30.00s, 21.0MB from 4 clips.
-2026-08-11T12:20:39 INFO  [video.jobs] Job job_19fef94472a5a0cf3b1 (render) succeeded.
-INFO:     127.0.0.1:53810 - "GET /api/v1/video/media/projects/vid_19fef8642985da73512/output/final.mp4 HTTP/1.1" 401 Unauthorized
-2026-08-11T12:21:38 ERROR [asyncio] Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
-handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
-Traceback (most recent call last):
-  File "C:\Program Files\Python312\Lib\asyncio\events.py", line 88, in _run
-    self._context.run(self._callback, *self._args)
-  File "C:\Program Files\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
-    self._sock.shutdown(socket.SHUT_RDWR)
-ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
-INFO:     Shutting down
-INFO:     Waiting for connections to close. (CTRL+C to force quit)
+ProgressFn = Callable[[float, str], Awaitable[None] | None]
+
+
+@dataclass(slots=True)
+class InlineAsset:
+    mime_type: str
+    #: base64, without a ``data:`` prefix.
+    data: str
+
+    def to_payload(self) -> dict[str, str]:
+        """The ``generateContent`` spelling, for an ``inlineData`` part.
+
+        Used by the Gemini *image* model in ``imagegen``. Not accepted by Veo.
+        """
+        return {"mimeType": self.mime_type, "data": self.data}
+
+    def to_predict_payload(self) -> dict[str, str]:
+        """The ``:predictLongRunning`` spelling, for Veo.
+
+        Veo's predict endpoint takes ``bytesBase64Encoded``; the ``inlineData``
+        shape above belongs to ``generateContent`` and is rejected outright::
+
+            `inlineData` isn't supported by this model.
+
+        That message reads like the model refusing images, which is what sent
+        this the wrong way for two runs. It is refusing the *field name*. Every
+        image Veo receives — first frame, last frame, reference — goes through
+        here.
+        """
+        return {"mimeType": self.mime_type, "bytesBase64Encoded": self.data}
+
+
+@dataclass(slots=True)
+class GeneratedClip:
+    file: Path
+    bytes: int
+    operation: str
+    model: str
+
+
+def _require_key() -> str:
+    key = settings.google_key
+    if not key:
+        raise Unavailable(
+            "GEMINI_IMAGE_API_KEY is not set. Add it to server/.env "
+            "(see server/.env.example) and restart the server."
+        )
+    return key
+
+
+def _api_url(path: str) -> str:
+    return f"{settings.gemini_api_base.rstrip('/')}/{path.lstrip('/')}"
+
+
+def normalise_seconds(seconds: int) -> int:
+    """Veo accepts 4, 6 or 8. Anything else snaps down to a legal value."""
+    allowed = settings.allowed_clip_seconds
+    if seconds in allowed:
+        return seconds
+    below = [value for value in allowed if value <= seconds]
+    return max(below) if below else min(allowed)
+
+
+async def _report(callback: ProgressFn | None, fraction: float, message: str) -> None:
+    if callback is None:
+        return
+    result = callback(fraction, message)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+# ---------------------------------------------------------------------------
+# Start
+# ---------------------------------------------------------------------------
+
+
+async def start_generation(
+    *,
+    prompt: str,
+    seconds: int,
+    aspect_ratio: VeoAspectRatio,
+    negative_prompt: str | None = None,
+    model: str | None = None,
+    resolution: str | None = None,
+    first_frame: InlineAsset | None = None,
+    last_frame: InlineAsset | None = None,
+    #: Brand/style assets Veo conditions the whole clip on. Mutually exclusive
+    #: with `first_frame` in practice — a keyframe already fixes the pixels.
+    reference_images: list[InlineAsset] | None = None,
+    video: InlineAsset | None = None,
+) -> tuple[str, str]:
+    """Submit a generation. Returns ``(operation_name, model)``."""
+    key = _require_key()
+    target_model = model or settings.veo_model
+    duration = normalise_seconds(seconds)
+
+    instance: dict[str, Any] = {"prompt": prompt}
+    if first_frame:
+        instance["image"] = first_frame.to_predict_payload()
+    if last_frame:
+        instance["lastFrame"] = last_frame.to_predict_payload()
+    if video:
+        instance["video"] = video.to_predict_payload()
+    if reference_images:
+        instance["referenceImages"] = [
+            {"image": image.to_predict_payload(), "referenceType": "asset"}
+            for image in reference_images
+        ]
+
+    # Veo only supports 1080p for 8-second clips; shorter durations require 720p.
+    effective_resolution = resolution or settings.veo_resolution
+    if duration < 8 and effective_resolution == "1080p":
+        effective_resolution = "720p"
+
+    parameters: dict[str, Any] = {
+        "aspectRatio": aspect_ratio,
+        "resolution": effective_resolution,
+        "durationSeconds": duration,
+        "personGeneration": settings.veo_person_generation,
+    }
+    if negative_prompt and negative_prompt.strip():
+        parameters["negativePrompt"] = negative_prompt.strip()
+
+    async def _submit() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            return await client.post(
+                _api_url(f"models/{target_model}:predictLongRunning"),
+                headers={"x-goog-api-key": key, "content-type": "application/json"},
+                json={"instances": [instance], "parameters": parameters},
+            )
+
+    response = await _submit()
+
+    # `referenceImages` is a newer Veo capability and not every model or API
+    # version accepts it. Dropping the brand reference costs one less accurate
+    # frame; failing the request costs the whole film. Retry once without.
+    if response.status_code >= 400 and "referenceImages" in instance:
+        log.warning(
+            "Veo rejected the request (%s) with %d reference image(s) attached; retrying "
+            "without them. The aircraft may not read as IndiGo in this clip. %s",
+            response.status_code,
+            len(instance["referenceImages"]),
+            response.text[:300],
+        )
+        instance.pop("referenceImages")
+        response = await _submit()
+
+    # Same reasoning for the first frame, which is the route the brand livery
+    # actually travels. If this model rejects inline image bytes the way it
+    # rejects them under `referenceImages`, every clip would fail rather than
+    # merely lose its conditioning. Degrade to text-to-video and say so loudly —
+    # an unbranded film is recoverable, a failed one wastes the whole run.
+    if response.status_code >= 400 and "image" in instance:
+        log.error(
+            "Veo rejected the request (%s) with a first frame attached; retrying as "
+            "text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so "
+            "this clip will show whatever Veo invents. %s",
+            response.status_code,
+            response.text[:300],
+        )
+        instance.pop("image")
+        instance.pop("lastFrame", None)
+        response = await _submit()
+
+    if response.status_code >= 400:
+        log.error("Veo %s error body: %s", response.status_code, response.text[:1200])
+        raise UpstreamError(
+            f"Veo rejected the generation request ({response.status_code}).",
+            details=response.text[:800],
+        )
+
+    operation = response.json()
+    name = operation.get("name")
+    if not name:
+        raise UpstreamError("Veo accepted the request but returned no operation name.", details=operation)
+
+    log.info("Started %s generation (%ds, %s): %s", target_model, duration, aspect_ratio, name)
+    return name, target_model
+
+
+# ---------------------------------------------------------------------------
+# Poll
+# ---------------------------------------------------------------------------
+
+
+async def poll_operation(name: str, on_progress: ProgressFn | None = None) -> dict[str, Any]:
+    key = _require_key()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.veo_poll_timeout_seconds
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        while True:
+            if loop.time() > deadline:
+                raise UpstreamError(
+                    f"Veo did not finish within {int(settings.veo_poll_timeout_seconds)}s. "
+                    f"Operation {name} is still running — raise VEO_POLL_TIMEOUT_SECONDS if this "
+                    "is normal for your quota."
+                )
+
+            await asyncio.sleep(settings.veo_poll_interval_seconds)
+
+            response = await client.get(_api_url(name), headers={"x-goog-api-key": key})
+
+            if response.status_code >= 400:
+                # A transient 5xx while polling should not kill a generation
+                # that is probably fine; only 4xx is fatal.
+                if response.status_code >= 500:
+                    log.warning("Polling %s returned %s; retrying.", name, response.status_code)
+                    continue
+                raise UpstreamError(
+                    f"Veo polling failed ({response.status_code}).", details=response.text[:600]
+                )
+
+            operation = response.json()
+
+            if operation.get("error"):
+                error = operation["error"]
+                raise UpstreamError(
+                    f"Veo generation failed: {error.get('message', 'unknown error')}", details=error
+                )
+
+            metadata = operation.get("metadata") or {}
+            percent = metadata.get("progressPercent")
+            if isinstance(percent, (int, float)):
+                await _report(on_progress, min(0.95, percent / 100), f"Rendering… {round(percent)}%")
+            else:
+                state = metadata.get("state")
+                await _report(
+                    on_progress, 0.5, f"Veo {state.lower()}…" if state else "Rendering…"
+                )
+
+            if operation.get("done"):
+                return operation
+
+
+def _extract_video_uri(operation: dict[str, Any]) -> str:
+    result = (operation.get("response") or {}).get("generateVideoResponse") or {}
+    samples = result.get("generatedSamples") or []
+    uri = (samples[0].get("video") or {}).get("uri") if samples else None
+
+    if not uri:
+        filtered = result.get("raiMediaFilteredCount") or 0
+        if filtered:
+            reasons = "; ".join(result.get("raiMediaFilteredReasons") or []) or "no reason given"
+            raise UpstreamError(
+                f"Veo filtered the generation before it produced a clip ({reasons}). Rewrite the "
+                "scene prompt — usually it names a real person, a brand, or content the safety "
+                "filter blocks.",
+                details={"filtered": filtered, "reasons": reasons},
+            )
+        raise UpstreamError("Veo finished but returned no video.", details=operation.get("response"))
+
+    return uri
+
+
+# ---------------------------------------------------------------------------
+# Download
+# ---------------------------------------------------------------------------
+
+
+async def download_video(uri: str, destination: Path) -> int:
+    key = _require_key()
+    ensure_dir(destination.parent)
+
+    # The URI is on a Google host and still requires the API key.
+    async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
+        response = await client.get(uri, headers={"x-goog-api-key": key})
+
+    if response.status_code >= 400:
+        raise UpstreamError(
+            f"Downloading the generated clip failed ({response.status_code}).",
+            details=response.text[:400],
+        )
+
+    payload = response.content
+    if not payload:
+        raise UpstreamError("The generated clip downloaded as an empty file.")
+
+    destination.write_bytes(payload)
+    return len(payload)
+
+
+# ---------------------------------------------------------------------------
+# The whole round trip
+# ---------------------------------------------------------------------------
+
+
+async def generate_clip(
+    destination: Path,
+    *,
+    prompt: str,
+    seconds: int,
+    aspect_ratio: VeoAspectRatio,
+    negative_prompt: str | None = None,
+    model: str | None = None,
+    first_frame: InlineAsset | None = None,
+    reference_images: list[InlineAsset] | None = None,
+    on_progress: ProgressFn | None = None,
+) -> GeneratedClip:
+    await _report(on_progress, 0.05, "Submitting to Veo…")
+
+    operation, used_model = await start_generation(
+        prompt=prompt,
+        seconds=seconds,
+        aspect_ratio=aspect_ratio,
+        negative_prompt=negative_prompt,
+        model=model,
+        first_frame=first_frame,
+        reference_images=reference_images,
+    )
+
+    async def relay(fraction: float, message: str) -> None:
+        await _report(on_progress, 0.05 + fraction * 0.8, message)
+
+    finished = await poll_operation(operation, relay)
+
+    await _report(on_progress, 0.9, "Downloading clip…")
+    size = await download_video(_extract_video_uri(finished), destination)
+
+    await _report(on_progress, 1.0, "Clip ready.")
+    log.info("Downloaded %.1fMB to %s", size / 1_048_576, destination.name)
+
+    return GeneratedClip(file=destination, bytes=size, operation=operation, model=used_model)
+
+
+# ---------------------------------------------------------------------------
+# Extend
+# ---------------------------------------------------------------------------
+
+
+async def extend_clip(
+    source_mp4: Path,
+    prompt: str,
+    destination: Path,
+    *,
+    aspect_ratio: VeoAspectRatio = "16:9",
+    model: str | None = None,
+) -> GeneratedClip:
+    """Continue a Veo-produced clip by roughly ``VEO_EXTEND_SECONDS``.
+
+    Not used by the main pipeline: extension carries the previous shot's motion
+    forward, which is what you want for one continuous take and precisely what
+    you do not want for a cut sequence with distinct framings per beat. It also
+    serialises — twelve extensions is twelve round trips end to end, where
+    twelve independent segments run three at a time.
+
+    Kept because it is the right tool for a future "one continuous take" mode,
+    and because it is the only way past 8 seconds without a cut.
+    """
+    encoded = base64.b64encode(source_mp4.read_bytes()).decode("ascii")
+
+    operation, used_model = await start_generation(
+        prompt=prompt,
+        seconds=settings.veo_max_clip_seconds,
+        aspect_ratio=aspect_ratio,
+        model=model,
+        video=InlineAsset(mime_type="video/mp4", data=encoded),
+    )
+
+    finished = await poll_operation(operation)
+    size = await download_video(_extract_video_uri(finished), destination)
+    return GeneratedClip(file=destination, bytes=size, operation=operation, model=used_model)
