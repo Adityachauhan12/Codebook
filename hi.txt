@@ -1,49 +1,116 @@
-FROM node:22-bookworm-slim AS frontend-builder
-
-WORKDIR /build/frontend
-
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
-
-COPY frontend/ ./
-RUN npm run build
-
-
-FROM python:3.11-slim-bookworm AS runtime
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    STORAGE_DIR=/tmp/marketing-video \
-    VIDEO_STORAGE_DIR=/tmp/marketing-video
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        fontconfig \
-        fonts-dejavu-core \
-    && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
-    && ffprobe -version >/dev/null \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
-
-WORKDIR /app
-
-COPY backend/requirements.txt ./backend/
-RUN pip install --no-cache-dir -r backend/requirements.txt
-
-# This preserves all vendored backend content, including video skills and brand assets.
-COPY backend/ ./backend/
-COPY --from=frontend-builder /build/frontend/dist/ ./frontend/dist/
-
-RUN chmod +x /app/backend/entrypoint.sh \
-    && mkdir -p "$STORAGE_DIR" \
-    && chown -R appuser:appgroup /app "$STORAGE_DIR"
-
-WORKDIR /app/backend
-
-USER appuser
-
-EXPOSE 8000
-
-CMD ["sh", "/app/backend/entrypoint.sh"]
+Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable.
+Run docker/build-push-action@v5
+(node:28671) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+GitHub Actions runtime token ACs
+Docker info
+Proxy configuration
+Buildx version
+Builder info
+/usr/bin/docker buildx build --build-arg REGISTRY=*** --file Dockerfile --iidfile /home/lab37nonprod/actions-runner/_work/_temp/docker-actions-toolkit-8DyBh3/build-iidfile-f35cc07439.txt --secret id=GIT_AUTH_TOKEN,src=/home/lab37nonprod/actions-runner/_work/_temp/docker-actions-toolkit-8DyBh3/tmp-28671-WDCmwLXBgcNr --tag ***/marketing-platform:dev --metadata-file /home/lab37nonprod/actions-runner/_work/_temp/docker-actions-toolkit-8DyBh3/build-metadata-d32d016e33.json --push https://github.com/6E-Lab37/marketing-platform.git#f2c137b6a9d86708168b07abf673eaa9f1a6c0b0
+#0 building with "default" instance using docker driver
+#1 [internal] load git source https://github.com/6E-Lab37/marketing-platform.git#f2c137b6a9d86708168b07abf673eaa9f1a6c0b0
+#1 0.084 Initialized empty Git repository in /var/lib/docker/overlay2/opgcd5xkqrkz5n8i9rm7qvc5d/diff/
+#1 0.111 fatal: Not a valid object name f2c137b6a9d86708168b07abf673eaa9f1a6c0b0^{commit}
+#1 11.51 From https://github.com/6E-Lab37/marketing-platform
+#1 11.51  * branch            f2c137b6a9d86708168b07abf673eaa9f1a6c0b0 -> FETCH_HEAD
+#1 11.51  * [new tag]         v0.0.1     -> v0.0.1
+#1 11.51  * [new tag]         v0.0.2     -> v0.0.2
+#1 11.51  * [new tag]         v0.0.3     -> v0.0.3
+#1 11.51  * [new tag]         v0.0.4     -> v0.0.4
+#1 11.51  * [new tag]         v0.0.5     -> v0.0.5
+#1 11.51 f2c137b6a9d86708168b07abf673eaa9f1a6c0b0
+#1 DONE 12.2s
+#1 [internal] load git source https://github.com/6E-Lab37/marketing-platform.git#f2c137b6a9d86708168b07abf673eaa9f1a6c0b0
+#1 DONE 24.4s
+#2 [internal] load metadata for docker.io/library/node:22-bookworm-slim
+#2 DONE 0.9s
+#3 [internal] load metadata for docker.io/library/python:3.11-slim-bookworm
+#3 DONE 2.0s
+#4 [frontend-builder 1/6] FROM docker.io/library/node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+#4 DONE 0.0s
+#5 [frontend-builder 2/6] WORKDIR /build/frontend
+#5 CACHED
+#6 [frontend-builder 3/6] COPY frontend/package.json frontend/package-lock.json ./
+#6 CACHED
+#7 [runtime  1/10] FROM docker.io/library/python:3.11-slim-bookworm@sha256:d29f48a31a8b408ed19272ca1e7b10ebae13b240a27e862d3d4217c528e2e0c3
+#7 resolve docker.io/library/python:3.11-slim-bookworm@sha256:d29f48a31a8b408ed19272ca1e7b10ebae13b240a27e862d3d4217c528e2e0c3 0.1s done
+#7 sha256:d29f48a31a8b408ed19272ca1e7b10ebae13b240a27e862d3d4217c528e2e0c3 6.55kB / 6.55kB done
+#7 sha256:77923445c077d8eb971b14b2b114a1d9cd4a87edb4c75654820ca4832ee8cb15 1.75kB / 1.75kB done
+#7 sha256:f0c05afecbd16040caff4c000954567c7e3b56fc6c1f783fa10a55cba3ccfbfc 5.50kB / 5.50kB done
+#7 sha256:a818f21dc3b91f21ff6a387603a68f05631236d4ef4da78c62263192f17efc5f 0B / 3.52MB 0.2s
+#7 sha256:51dd2349a5f3cda316dcc78934383fdd473c905d1070f1c822e4011c39e23774 0B / 16.02MB 0.4s
+#7 sha256:87e3be58ade05b9abd82eedde89ebfca06a7d656332edb0991939c130f9e32bd 0B / 249B 0.4s
+#7 sha256:a818f21dc3b91f21ff6a387603a68f05631236d4ef4da78c62263192f17efc5f 3.52MB / 3.52MB 0.6s done
+#7 sha256:51dd2349a5f3cda316dcc78934383fdd473c905d1070f1c822e4011c39e23774 2.10MB / 16.02MB 0.6s
+#7 sha256:51dd2349a5f3cda316dcc78934383fdd473c905d1070f1c822e4011c39e23774 12.58MB / 16.02MB 0.8s
+#7 extracting sha256:a818f21dc3b91f21ff6a387603a68f05631236d4ef4da78c62263192f17efc5f
+#7 sha256:51dd2349a5f3cda316dcc78934383fdd473c905d1070f1c822e4011c39e23774 16.02MB / 16.02MB 0.8s
+#7 sha256:51dd2349a5f3cda316dcc78934383fdd473c905d1070f1c822e4011c39e23774 16.02MB / 16.02MB 1.0s done
+#7 sha256:87e3be58ade05b9abd82eedde89ebfca06a7d656332edb0991939c130f9e32bd 249B / 249B 0.9s done
+#7 extracting sha256:a818f21dc3b91f21ff6a387603a68f05631236d4ef4da78c62263192f17efc5f 0.5s done
+#7 extracting sha256:51dd2349a5f3cda316dcc78934383fdd473c905d1070f1c822e4011c39e23774
+#7 extracting sha256:51dd2349a5f3cda316dcc78934383fdd473c905d1070f1c822e4011c39e23774 1.2s done
+#7 extracting sha256:87e3be58ade05b9abd82eedde89ebfca06a7d656332edb0991939c130f9e32bd
+#7 extracting sha256:87e3be58ade05b9abd82eedde89ebfca06a7d656332edb0991939c130f9e32bd done
+#7 DONE 7.1s
+#8 [frontend-builder 4/6] RUN npm ci
+#8 ...
+#9 [runtime  2/10] RUN apt-get update     && apt-get install -y --no-install-recommends         ffmpeg         fontconfig         fonts-dejavu-core     && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext     && ffprobe -version >/dev/null     && rm -rf /var/lib/apt/lists/*
+#9 30.87 Ign:1 http://deb.debian.org/debian bookworm InRelease
+#9 30.87 Ign:2 http://deb.debian.org/debian bookworm-updates InRelease
+#9 30.87 Ign:3 http://deb.debian.org/debian-security bookworm-security InRelease
+#9 31.87 Ign:1 http://deb.debian.org/debian bookworm InRelease
+#9 31.87 Ign:2 http://deb.debian.org/debian bookworm-updates InRelease
+#9 31.87 Ign:3 http://deb.debian.org/debian-security bookworm-security InRelease
+#9 33.87 Ign:1 http://deb.debian.org/debian bookworm InRelease
+#9 33.87 Ign:2 http://deb.debian.org/debian bookworm-updates InRelease
+#9 33.87 Ign:3 http://deb.debian.org/debian-security bookworm-security InRelease
+#9 37.87 Err:1 http://deb.debian.org/debian bookworm InRelease
+#9 37.87   Could not connect to debian.map.fastlydns.net:80 (167.82.62.132), connection timed out Could not connect to debian.map.fastlydns.net:80 (167.82.58.132), connection timed out Unable to connect to deb.debian.org:http:
+#9 37.87 Err:2 http://deb.debian.org/debian bookworm-updates InRelease
+#9 37.87   Unable to connect to deb.debian.org:http:
+#9 37.87 Err:3 http://deb.debian.org/debian-security bookworm-security InRelease
+#9 37.87   Unable to connect to deb.debian.org:http:
+#9 37.87 Reading package lists...
+#9 37.88 W: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  Could not connect to debian.map.fastlydns.net:80 (167.82.62.132), connection timed out Could not connect to debian.map.fastlydns.net:80 (167.82.58.132), connection timed out Unable to connect to deb.debian.org:http:
+#9 37.88 W: Failed to fetch http://deb.debian.org/debian/dists/bookworm-updates/InRelease  Unable to connect to deb.debian.org:http:
+#9 37.88 W: Failed to fetch http://deb.debian.org/debian-security/dists/bookworm-security/InRelease  Unable to connect to deb.debian.org:http:
+#9 37.88 W: Some index files failed to download. They have been ignored, or old ones used instead.
+#9 37.90 Reading package lists...
+#9 37.91 Building dependency tree...
+#9 37.91 Reading state information...
+#9 37.91 E: Unable to locate package ffmpeg
+#9 37.91 E: Unable to locate package fontconfig
+#9 37.91 E: Unable to locate package fonts-dejavu-core
+#9 ERROR: process "/bin/sh -c apt-get update     && apt-get install -y --no-install-recommends         ffmpeg         fontconfig         fonts-dejavu-core     && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext     && ffprobe -version >/dev/null     && rm -rf /var/lib/apt/lists/*" did not complete successfully: exit code: 100
+#8 [frontend-builder 4/6] RUN npm ci
+#8 CANCELED
+------
+ > [runtime  2/10] RUN apt-get update     && apt-get install -y --no-install-recommends         ffmpeg         fontconfig         fonts-dejavu-core     && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext     && ffprobe -version >/dev/null     && rm -rf /var/lib/apt/lists/*:
+37.88 W: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  Could not connect to debian.map.fastlydns.net:80 (167.82.62.132), connection timed out Could not connect to debian.map.fastlydns.net:80 (167.82.58.132), connection timed out Unable to connect to deb.debian.org:http:
+37.88 W: Failed to fetch http://deb.debian.org/debian/dists/bookworm-updates/InRelease  Unable to connect to deb.debian.org:http:
+37.88 W: Failed to fetch http://deb.debian.org/debian-security/dists/bookworm-security/InRelease  Unable to connect to deb.debian.org:http:
+37.88 W: Some index files failed to download. They have been ignored, or old ones used instead.
+37.90 Reading package lists...
+37.91 Building dependency tree...
+37.91 Reading state information...
+37.91 E: Unable to locate package ffmpeg
+37.91 E: Unable to locate package fontconfig
+37.91 E: Unable to locate package fonts-dejavu-core
+------
+Dockerfile:19
+--------------------
+  18 |     
+  19 | >>> RUN apt-get update \
+  20 | >>>     && apt-get install -y --no-install-recommends \
+  21 | >>>         ffmpeg \
+  22 | >>>         fontconfig \
+  23 | >>>         fonts-dejavu-core \
+  24 | >>>     && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
+  25 | >>>     && ffprobe -version >/dev/null \
+  26 | >>>     && rm -rf /var/lib/apt/lists/*
+  27 |     
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c apt-get update     && apt-get install -y --no-install-recommends         ffmpeg         fontconfig         fonts-dejavu-core     && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext     && ffprobe -version >/dev/null     && rm -rf /var/lib/apt/lists/*" did not complete successfully: exit code: 100
+Error: buildx failed with: ERROR: failed to build: failed to solve: process "/bin/sh -c apt-get update     && apt-get install -y --no-install-recommends         ffmpeg         fontconfig         fonts-dejavu-core     && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext     && ffprobe -version >/dev/null     && rm -rf /var/lib/apt/lists/*" did not complete successfully: exit code: 100
