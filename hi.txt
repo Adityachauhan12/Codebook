@@ -1,147 +1,77 @@
-old file 
-from contextlib import contextmanager
-import logging
-import os
-import psycopg2
-from azure.identity import ClientSecretCredential
-from dotenv import load_dotenv
+new dockefile
+FROM node:22-bookworm-slim AS frontend-builder
 
-_logger = logging.getLogger(__name__)
+WORKDIR /build/frontend
 
-load_dotenv()
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
 
-_credential = ClientSecretCredential(
-    tenant_id=os.getenv("AZURE_TENANT_ID", ""),
-    client_id=os.getenv("AZURE_CLIENT_ID", ""),
-    client_secret=os.getenv("AZURE_CLIENT_SECRET", ""),
-)
+COPY frontend/ ./
+RUN npm run build
 
 
-def _get_token() -> str:
-    # Token is fetched fresh each call — DefaultAzureCredential caches and
-    # auto-refreshes it, so this is safe to call on every connection.
-    #token = _credential.get_token("https://ossrdbms-aad.database.windows.net/.default")
-    token = _credential.get_token("https://token.postgres.cosmos.azure.com/.default")
-    return token.token
+FROM python:3.11-slim-bookworm AS runtime
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    STORAGE_DIR=/tmp/marketing-video \
+    VIDEO_STORAGE_DIR=/tmp/marketing-video
 
-def _connect() -> psycopg2.extensions.connection:
-    return psycopg2.connect(
-        host=os.getenv("PGHOST"),
-        port=int(os.getenv("PGPORT", "5432")),
-        dbname=os.getenv("PGDATABASE"),
-        user=os.getenv("PGUSER"),
-        password=_get_token(),
-        sslmode="require",
-    )
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        fontconfig \
+        fonts-dejavu-core \
+    && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
+    && ffprobe -version >/dev/null \
+    && rm -rf /var/lib/apt/lists/*
 
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 
-@contextmanager
-def get_db():
-    conn = _connect()
-    try:
-        yield conn
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+WORKDIR /app
 
+COPY backend/requirements.txt ./backend/
+RUN pip install --no-cache-dir -r backend/requirements.txt
 
-def log_blocked_prompt(user_id: str, blocked_prompt: str, category: str, blocked_reason: str) -> None:
-    """Insert a blocked-prompt audit row. Swallows errors so it never blocks the main request path."""
-    try:
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO blocked_prompts (user_id, blocked_prompt, category, blocked_reason)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (user_id, blocked_prompt, category, blocked_reason),
-                )
-                conn.commit()
-    except Exception as exc:
-        _logger.error("log_blocked_prompt | failed | user=%s | category=%s | error=%s", user_id, category, exc)
+# This preserves all vendored backend content, including video skills and brand assets.
+COPY backend/ ./backend/
+COPY --from=frontend-builder /build/frontend/dist/ ./frontend/dist/
 
+RUN chmod +x /app/backend/entrypoint.sh \
+    && mkdir -p "$STORAGE_DIR" \
+    && chown -R appuser:appgroup /app "$STORAGE_DIR"
 
-new file
-from contextlib import contextmanager
-import logging
-import os
-import psycopg2
-from azure.identity import ClientSecretCredential
-from dotenv import load_dotenv
+WORKDIR /app/backend
 
-_logger = logging.getLogger(__name__)
+USER appuser
 
-load_dotenv()
+EXPOSE 8000
 
+old dockerfile
 
-def _is_keyvault_ref(value: str) -> bool:
-    return value.strip().startswith("@Microsoft.KeyVault(")
+FROM python:3.11-slim
 
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 
-_client_secret = os.getenv("AZURE_CLIENT_SECRET", "")
-if _is_keyvault_ref(_client_secret):
-    _logger.warning(
-        "AZURE_CLIENT_SECRET is a Key Vault reference — DB connections will fail locally. "
-        "Replace it with the actual secret value in your .env file."
-    )
-    _credential = None
-else:
-    _credential = ClientSecretCredential(
-        tenant_id=os.getenv("AZURE_TENANT_ID", ""),
-        client_id=os.getenv("AZURE_CLIENT_ID", ""),
-        client_secret=_client_secret,
-    )
+WORKDIR /app
 
+COPY backend/requirements.txt ./backend/
+RUN pip install --no-cache-dir -r backend/requirements.txt
 
-def _get_token() -> str:
-    if _credential is None:
-        raise RuntimeError(
-            "DB credential not initialised — AZURE_CLIENT_SECRET is a Key Vault reference. "
-            "Set the actual secret value in your local .env file."
-        )
-    token = _credential.get_token("https://token.postgres.cosmos.azure.com/.default")
-    return token.token
+COPY backend/ ./backend/
+COPY frontend/dist/ ./frontend/dist/
 
+# Keep the verification
+RUN ls -la frontend/dist/ && echo "Frontend dist copied successfully"
 
-def _connect() -> psycopg2.extensions.connection:
-    return psycopg2.connect(
-        host=os.getenv("PGHOST"),
-        port=int(os.getenv("PGPORT", "5432")),
-        dbname=os.getenv("PGDATABASE"),
-        user=os.getenv("PGUSER"),
-        password=_get_token(),
-        sslmode="require",
-    )
+RUN chmod +x /app/backend/entrypoint.sh
+RUN chown -R appuser:appgroup /app
 
+WORKDIR /app/backend
 
-@contextmanager
-def get_db():
-    conn = _connect()
-    try:
-        yield conn
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+USER appuser
 
+EXPOSE 8000
 
-def log_blocked_prompt(user_id: str, blocked_prompt: str, category: str, blocked_reason: str) -> None:
-    """Insert a blocked-prompt audit row. Swallows errors so it never blocks the main request path."""
-    try:
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO blocked_prompts (user_id, blocked_prompt, category, blocked_reason)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (user_id, blocked_prompt, category, blocked_reason),
-                )
-                conn.commit()
-    except Exception as exc:
-        _logger.error("log_blocked_prompt | failed | user=%s | category=%s | error=%s", user_id, category, exc)
+CMD ["sh", "/app/backend/entrypoint.sh"]
+CMD ["sh", "/app/backend/entrypoint.sh"]
