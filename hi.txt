@@ -1,9 +1,103 @@
-video/media_token.py — new HMAC signing module, tokens valid 10 min
+The backend confirms it: "Token has expired" → 401. The token is genuinely expired by the time the render finishes.
 
-video/routes/video.py — new GET /projects/{id}/render/token endpoint (requires valid Bearer, called right when render completes while session is still good)
+The real fix is not a frontend rebuild — it's on the backend. The media endpoint should use a short-lived signed token (like a one-time download token) that gets generated when the render completes, so the browser can fetch the video without needing a still-valid Azure AD JWT.
 
-video/routes/media.py — accepts ?token= as an alternative to Bearer header
+Here's the plan:
 
-video-api.ts — added getRenderToken
+Add a GET /api/v1/video/projects/{id}/render/token endpoint that generates a short-lived signed download token (valid 10 min) — called right when render status becomes ready
 
-VideoPage.tsx — FinalStep now uses useSignedMediaUrl which fetches the token first, then constructs a direct URL with ?token= — no blob fetch, no expired-session proble
+The media endpoint accepts either the Bearer token OR a valid download token query param
+
+Let me implement this:
+
+1 file read
+video.py
+Now I have everything I need. The cleanest fix with no frontend rebuild required: add a short-lived signed media token endpoint on the backend, and make the media route accept it as a query param.
+
+1 file read
+config.py
+Now I have everything. Here's the plan:
+
+Add a media_token module to the video package that signs/verifies short-lived HMAC tokens
+
+Add a GET /api/v1/video/projects/{id}/render/token endpoint (authenticated) that returns a 10-min token
+
+Update media.py to accept the token as a query param (no Bearer needed)
+
+Update VideoPage.tsx to fetch the token when render completes and use it directly in the <video src>
+
+Create the HMAC media token module for short-lived signed download tokens.
+
+media_token.py
++55
+-0
+
+Undo
+Now add the token-issue endpoint to video.py and update media.py to accept the token:
+
+Add the render token endpoint to video.py.
+
+video.py
++13
+-0
+
+Undo
+Now update media.py to accept the signed token as an alternative to Bearer auth:
+
+Rewrite media.py to accept either Bearer auth or a short-lived signed media token as a query param.
+
+media.py
++39
+-11
+
+Undo
+Now update VideoPage.tsx — when render status becomes ready, fetch a media token and use it directly in the <video src> instead of going through useAuthenticatedMediaUrl:
+
+Add useSignedMediaUrl hook that fetches a backend-issued short-lived token and appends it to the media URL, bypassing the expired Azure AD token problem.
+
+VideoPage.tsx
++52
+-0
+
+Undo
+Now update FinalStep to use useSignedMediaUrl instead of useAuthenticatedMediaUrl:
+
+Switch FinalStep to use useSignedMediaUrl so the final video uses a backend-issued token instead of the potentially-expired Azure AD token.
+
+VideoPage.tsx
++4
+-1
+
+Undo
+Now add getRenderToken to video-api.ts:
+
+Add getRenderToken to the videoApi client.
+
+video-api.ts
++3
+-0
+
+Undo
+Now fix the _require_owner helper in media.py — the current approach won't work cleanly with FastAPI's dependency injection. Let me simplify it:
+
+Rewrite media.py with a cleaner Bearer fallback that directly calls validate_token.
+
+media.py
++10
+-19
+
+Undo
+Now restart the backend — no frontend rebuild needed for the backend changes. The frontend changes (the new useSignedMediaUrl hook) do require a rebuild, but the backend fix alone will unblock you immediately because the token fetch happens while the session is still valid.
+
+To restart the backend:
+
+cd backend
+uvicorn main:app --reload --port 8000
+
+Copy
+Then rebuild the frontend when convenient:
+
+cd frontend
+npm run build
+
+Copy
