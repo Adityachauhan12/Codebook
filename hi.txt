@@ -1,52 +1,166 @@
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git branch
-  dev
-* dev-aditya
-  production
-
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>cd backend
-
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend>venv\Scripts\activate               
-
-(venv) C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend>py main.py
-Directory 'campaign_assets' ready
-Directory 'campaign_images' ready
-Directory 'campaign_logo' ready
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\main.py:203: DeprecationWarning: 
-        on_event is deprecated, use lifespan event handlers instead.
-
-        Read more about it in the
-        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
-        
   @app.on_event("startup")
-INFO:     Started server process [8]
+INFO:     Started server process [17952]
 INFO:     Waiting for application startup.
 --- Running startup connection checks ---
-2026-08-11T10:49:18 INFO  [utils.appinsights] App Insights initialised via azure-monitor-opentelemetry
-[test/db] OK — inserted: {'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 5, 19, 23, 269322, tzinfo=datetime.timezone.utc)}, all rows: [{'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 5, 19, 23, 269322, tzinfo=datetime.timezone.utc)}]
+2026-08-11T12:02:23 INFO  [utils.appinsights] App Insights initialised via azure-monitor-opentelemetry
+[test/db] OK — inserted: {'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 6, 32, 27, 207469, tzinfo=datetime.timezone.utc)}, all rows: [{'id': 1, 'val': 'ping', 'ts': datetime.datetime(2026, 8, 11, 6, 32, 27, 207469, tzinfo=datetime.timezone.utc)}]
 [test/blob] Created container 'test-connection'
 [test/blob] OK — uploaded and verified 'test.txt' at https://salab37marketingcampaign.blob.core.windows.net/test-connection/test.txt
-2026-08-11T10:49:32 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-2026-08-11T10:49:32 INFO  [utils.limiter] registered_apps table ready
-2026-08-11T10:49:40 INFO  [auth.azure_auth] Token cleanup: removed 0 expired revoked_tokens row(s)
+2026-08-11T12:02:34 INFO  [utils.limiter] registered_apps table ready
+2026-08-11T12:02:38 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
+2026-08-11T12:02:39 INFO  [auth.azure_auth] Token cleanup: removed 0 expired revoked_tokens row(s)
 --- Startup checks complete ---
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:60512 - "GET /api/config HTTP/1.1" 200 OK
-2026-08-11T11:03:54 INFO  [auth.azure_auth] Azure AD JWKS combined — 9 total key(s): ['fEtqrhKT1bXAGafSdQoN1vXTRpI', 'NqEBZVuOpstZ__5iZuWH3HPswcI', '1Nv3JExJrKNx1l7adICQ7Y_Atps', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'AahUf1bCXvx0JTRcXLrr0U4SluY', 'rRk1d-57BGZfsM4BUHrkx8cQbic', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', '6hXLaIYNSJ0o7zu09dMyI0ji3ug', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg']
-2026-08-11T11:03:54 INFO  [auth.azure_auth] Azure AD JWKS combined — 8 total key(s): ['fEtqrhKT1bXAGafSdQoN1vXTRpI', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'AahUf1bCXvx0JTRcXLrr0U4SluY', 'rRk1d-57BGZfsM4BUHrkx8cQbic', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', '6hXLaIYNSJ0o7zu09dMyI0ji3ug', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg']
-2026-08-11T11:03:54 INFO  [auth.azure_auth] Azure AD JWKS combined — 8 total key(s): ['fEtqrhKT1bXAGafSdQoN1vXTRpI', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'AahUf1bCXvx0JTRcXLrr0U4SluY', 'rRk1d-57BGZfsM4BUHrkx8cQbic', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', '6hXLaIYNSJ0o7zu09dMyI0ji3ug', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg']
-INFO:     127.0.0.1:62042 - "GET /api/v1/video/projects/vid_19feb620d53bc238b11 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62247 - "GET /api/v1/video/projects/vid_19feb620d53bc238b11/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62266 - "GET /api/v1/video/projects/vid_19feb620d53bc238b11 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62246 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57834 - "GET /api/v1/video/media/projects/vid_19feb620d53bc238b11/output/final.mp4 HTTP/1.1" 401 Unauthorized
-INFO:     127.0.0.1:57836 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54633 - "POST /api/v1/video/projects/vid_19feb620d53bc238b11/render HTTP/1.1" 202 Accepted
-2026-08-11T11:04:16 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-2026-08-11T11:07:51 INFO  [video.render] Rendered project vid_19feb620d53bc238b11: 30.00s, 24.4MB from 4 clips.
-2026-08-11T11:07:51 INFO  [video.jobs] Job job_19fef5048cf64d5b421 (render) succeeded.
-INFO:     127.0.0.1:56329 - "GET /api/v1/video/media/projects/vid_19feb620d53bc238b11/output/final.mp4 HTTP/1.1" 401 Unauthorized
-2026-08-11T11:07:51 ERROR [asyncio] Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+INFO:     127.0.0.1:61089 - "GET /api/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51908 - "GET /api/config HTTP/1.1" 200 OK
+2026-08-11T12:02:45 INFO  [auth.azure_auth] Azure AD JWKS combined — 9 total key(s): ['AahUf1bCXvx0JTRcXLrr0U4SluY', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'rRk1d-57BGZfsM4BUHrkx8cQbic', '1Nv3JExJrKNx1l7adICQ7Y_Atps', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', '6hXLaIYNSJ0o7zu09dMyI0ji3ug']
+2026-08-11T12:02:45 INFO  [auth.azure_auth] Azure AD JWKS combined — 9 total key(s): ['AahUf1bCXvx0JTRcXLrr0U4SluY', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'rRk1d-57BGZfsM4BUHrkx8cQbic', '1Nv3JExJrKNx1l7adICQ7Y_Atps', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', '6hXLaIYNSJ0o7zu09dMyI0ji3ug']
+2026-08-11T12:02:45 INFO  [auth.azure_auth] Azure AD JWKS combined — 8 total key(s): ['AahUf1bCXvx0JTRcXLrr0U4SluY', 'jvm_-TtaqTCRrkpnmePvwb75nWE', 'CT_gkL0nHfI4CmKZm4qTGdRkKdg', 'sa3RgZQ_nZNVheAokCVqxY_8Cr4', 'NqEBZVuOpstZ__5iZuWH3HPswcI', 'rRk1d-57BGZfsM4BUHrkx8cQbic', 'fEtqrhKT1bXAGafSdQoN1vXTRpI', '6hXLaIYNSJ0o7zu09dMyI0ji3ug']
+INFO:     127.0.0.1:54618 - "GET /api/v1/video/projects/vid_19fef79fab0c88c1fe4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54620 - "GET /api/v1/video/projects/vid_19fef79fab0c88c1fe4/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54619 - "GET /api/v1/video/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54640 - "GET /api/v1/video/projects/vid_19fef79fab0c88c1fe4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49785 - "GET /api/v1/video/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50227 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49728 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
+2026-08-11T12:03:01 INFO  [video.store] Created project vid_19fef8642985da73512 (30s, 4 segments)
+INFO:     127.0.0.1:52649 - "POST /api/v1/video/projects HTTP/1.1" 201 Created
+INFO:     127.0.0.1:61687 - "GET /api/v1/video/projects/vid_19fef8642985da73512/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61686 - "GET /api/v1/video/projects/vid_19fef8642985da73512 HTTP/1.1" 200 OK
+2026-08-11T12:03:14 INFO  [video.llm] chat ok in 10.5s (1760 tokens, deployment gpt-5.5)
+2026-08-11T12:03:14 INFO  [video.brief] Brief split: intent 893 chars (from 1067), 0 super(s), end card off, 0 unsupported.
+2026-08-11T12:03:14 WARNING [video.brief] The brief asks for an end card but the split returned enabled=false — the film will render with NO brand mark. Model returned keys: avoid, endCard, intent, music, supers.
+2026-08-11T12:04:17 INFO  [video.llm] treatments ok in 61.1s (26055 tokens, deployment gpt-5.5)
+2026-08-11T12:04:17 WARNING [video.storyboard] Discarded 1 invalid treatment(s) before selection.
+2026-08-11T12:04:18 INFO  [video.jobs] Job job_19fef86440e89b63368 (storyboard) succeeded.
+INFO:     127.0.0.1:63351 - "GET /api/v1/video/projects/vid_19fef8642985da73512 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63536 - "GET /api/v1/video/projects/vid_19fef8642985da73512/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63535 - "GET /api/v1/video/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64516 - "GET /api/v1/video/projects/vid_19fef8642985da73512 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61398 - "GET /api/v1/video/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64056 - "POST /api/v1/video/projects/vid_19fef8642985da73512/stories/story_19fef876cdeecfd22ea/scenes HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:64054 - "POST /api/v1/video/projects/vid_19fef8642985da73512/select-story HTTP/1.1" 200 OK
+2026-08-11T12:07:21 INFO  [video.llm] scenes ok in 63.6s (27017 tokens, deployment gpt-5.5)
+2026-08-11T12:07:21 ERROR [video.jobs] Job job_19fef893b8252290421 (storyboard) failed: The storyboard model returned 1 scenes but the plan needs 4.
+Traceback (most recent call last):
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\jobs.py", line 68, in runner
+    result = await work(context)
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\routes\video.py", line 352, in work
+    written, repair_passes = await generate_scenes(
+                             ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\storyboard.py", line 761, in generate_scenes
+    candidate = await _run_scene_pass(messages, story, plan, "scenes")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform\backend\video\services\storyboard.py", line 685, in _run_scene_pass
+    raise UpstreamError(
+video.errors.UpstreamError: The storyboard model returned 1 scenes but the plan needs 4.
+INFO:     127.0.0.1:65212 - "POST /api/v1/video/projects/vid_19fef8642985da73512/stories/story_19fef876cdeecfd22ea/scenes HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:53667 - "POST /api/v1/video/projects/vid_19fef8642985da73512/select-story HTTP/1.1" 200 OK
+2026-08-11T12:09:44 INFO  [video.llm] scenes ok in 80.1s (28605 tokens, deployment gpt-5.5)
+2026-08-11T12:09:44 INFO  [video.storyboard] Story "Winter starts with a yes": audit found 1 blocking issue(s), running repair pass 1/3
+2026-08-11T12:10:14 INFO  [video.llm] scenes-repair-1 ok in 27.8s (24083 tokens, deployment gpt-5.5)
+2026-08-11T12:10:14 INFO  [video.jobs] Job job_19fef8b2ad2483dc949 (storyboard) succeeded.
+2026-08-11T12:10:41 INFO  [video.clips] Generating 4 clip(s) for project vid_19fef8642985da73512, 3 at a time.
+INFO:     127.0.0.1:56881 - "POST /api/v1/video/projects/vid_19fef8642985da73512/clips/generate-all HTTP/1.1" 202 Accepted
+2026-08-11T12:11:10 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
+  "error": {
+    "code": 400,
+    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+2026-08-11T12:11:15 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/yeh3d3n4vua0
+2026-08-11T12:11:19 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
+  "error": {
+    "code": 400,
+    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+2026-08-11T12:11:21 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
+  "error": {
+    "code": 400,
+    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+2026-08-11T12:11:25 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/d7q4f7858kyp
+2026-08-11T12:11:27 INFO  [video.veo] Started veo-3.1-generate-preview generation (6s, 16:9): models/veo-3.1-generate-preview/operations/4imlyan40q2f
+2026-08-11T12:12:26 WARNING [video.clips] Scene 3 failed on attempt 1; retrying. Veo filtered the generation before it produced a clip (We encountered an issue with the audio for your prompt, which means we could not create your video. This can sometimes happen due to our safety filters or other processing issues. Please modify your request and try again. You have not been charged for this attempt.). Rewrite the scene prompt — usually it names a real person, a brand, or content the safety filter blocks.
+2026-08-11T12:12:34 WARNING [video.clips] Scene 2 failed on attempt 1; retrying. Veo filtered the generation before it produced a clip (We encountered an issue with the audio for your prompt, which means we could not create your video. This can sometimes happen due to our safety filters or other processing issues. Please modify your request and try again. You have not been charged for this attempt.). Rewrite the scene prompt — usually it names a real person, a brand, or content the safety filter blocks.
+2026-08-11T12:12:55 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
+  "error": {
+    "code": 400,
+    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+2026-08-11T12:12:58 INFO  [video.veo] Started veo-3.1-generate-preview generation (6s, 16:9): models/veo-3.1-generate-preview/operations/41149r1qpqpd
+2026-08-11T12:13:03 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
+  "error": {
+    "code": 400,
+    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+2026-08-11T12:13:07 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/tsrhnsvozfzh
+2026-08-11T12:13:12 INFO  [video.veo] Downloaded 8.0MB to scene-01.mp4
+2026-08-11T12:13:16 INFO  [video.clips] Scene 1 ready (8.00s).
+2026-08-11T12:13:42 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
+  "error": {
+    "code": 400,
+    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+2026-08-11T12:13:45 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server response error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')).
+2026-08-11T12:13:46 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/x2jaovi9d78e
+2026-08-11T12:14:00 INFO  [video.veo] Downloaded 1.8MB to scene-03.mp4
+2026-08-11T12:14:02 INFO  [video.clips] Scene 3 ready (6.00s).
+INFO:     127.0.0.1:55352 - "POST /api/v1/video/projects/vid_19fef8642985da73512/clips/scene_19fef8c69183b6863fc/generate HTTP/1.1" 202 Accepted
+2026-08-11T12:14:58 WARNING [video.clips] Scene 4 failed on attempt 1; retrying. Veo filtered the generation before it produced a clip (We encountered an issue with the audio for your prompt, which means we could not create your video. This can sometimes happen due to our safety filters or other processing issues. Please modify your request and try again. You have not been charged for this attempt.). Rewrite the scene prompt — usually it names a real person, a brand, or content the safety filter blocks.
+2026-08-11T12:15:15 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
+  "error": {
+    "code": 400,
+    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+2026-08-11T12:15:19 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/60grrvb6ry9n
+2026-08-11T12:15:29 ERROR [video.veo] Veo rejected the request (400) with a first frame attached; retrying as text-to-video. THE KEYFRAME IS HOW THE INDIGO LIVERY REACHES THE PICTURE, so this clip will show whatever Veo invents. {
+  "error": {
+    "code": 400,
+    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+2026-08-11T12:15:33 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 16:9): models/veo-3.1-generate-preview/operations/i26tz7v5584i
+2026-08-11T12:17:19 INFO  [video.veo] Downloaded 5.4MB to scene-02.mp4
+2026-08-11T12:17:23 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
+2026-08-11T12:17:23 INFO  [video.veo] Downloaded 8.0MB to scene-04.mp4
+2026-08-11T12:17:25 INFO  [video.clips] Scene 2 ready (8.00s).
+2026-08-11T12:17:25 INFO  [video.jobs] Job job_19fef90f637c2d128d5 (clip) succeeded.
+2026-08-11T12:17:25 INFO  [video.clips] Scene 4 ready (8.00s).
+2026-08-11T12:17:25 INFO  [video.jobs] Job job_19fef8d4912d6bdf10c (clips) succeeded.
+INFO:     127.0.0.1:61960 - "POST /api/v1/video/projects/vid_19fef8642985da73512/audio/suggest HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:50618 - "POST /api/v1/video/projects/vid_19fef8642985da73512/render HTTP/1.1" 202 Accepted
+2026-08-11T12:18:21 INFO  [video.llm] audio-directions ok in 33.6s (11970 tokens, deployment gpt-5.5)
+2026-08-11T12:18:22 INFO  [video.jobs] Job job_19fef93c32d06c7da64 (audio) succeeded.
+2026-08-11T12:19:31 WARNING [video.render] Nothing to composite: 0 super(s), 0 lockup(s). The film will have no burnt-in copy and no brand mark. end_card.enabled=False mark=wordmark brand=indigo.
+2026-08-11T12:20:39 INFO  [video.render] Rendered project vid_19fef8642985da73512: 30.00s, 21.0MB from 4 clips.
+2026-08-11T12:20:39 INFO  [video.jobs] Job job_19fef94472a5a0cf3b1 (render) succeeded.
+INFO:     127.0.0.1:53810 - "GET /api/v1/video/media/projects/vid_19fef8642985da73512/output/final.mp4 HTTP/1.1" 401 Unauthorized
+2026-08-11T12:21:38 ERROR [asyncio] Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
 handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
 Traceback (most recent call last):
   File "C:\Program Files\Python312\Lib\asyncio\events.py", line 88, in _run
@@ -54,108 +168,5 @@ Traceback (most recent call last):
   File "C:\Program Files\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
     self._sock.shutdown(socket.SHUT_RDWR)
 ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
-INFO:     127.0.0.1:52404 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56409 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63697 - "GET /api/config HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63842 - "GET /api/v1/video/projects/vid_19feb620d53bc238b11 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63847 - "GET /api/v1/video/projects/vid_19feb620d53bc238b11/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63699 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63845 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52005 - "GET /api/v1/video/projects/vid_19feb620d53bc238b11 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52346 - "GET /api/v1/video/plan?seconds=30&style=cinematic HTTP/1.1" 200 OK
-INFO:     127.0.0.1:55497 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-2026-08-11T11:10:29 INFO  [video.store] Created project vid_19fef562b0daa5259f7 (30s, 4 segments)
-INFO:     127.0.0.1:51100 - "POST /api/v1/video/projects HTTP/1.1" 201 Created
-INFO:     127.0.0.1:53982 - "GET /api/v1/video/projects/vid_19fef562b0daa5259f7 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53984 - "GET /api/v1/video/projects/vid_19fef562b0daa5259f7/events HTTP/1.1" 200 OK
-2026-08-11T11:10:43 INFO  [video.llm] chat ok in 10.9s (1748 tokens, deployment gpt-5.5)
-2026-08-11T11:10:43 INFO  [video.brief] Brief split: intent 1001 chars (from 1067), 0 super(s), end card off, 0 unsupported.
-2026-08-11T11:10:43 WARNING [video.brief] The brief asks for an end card but the split returned enabled=false — the film will render with NO brand mark. Model returned keys: avoid, endCard, intent, music, supers.
-2026-08-11T11:11:50 INFO  [video.llm] treatments ok in 64.1s (26465 tokens, deployment gpt-5.5)
-2026-08-11T11:11:50 WARNING [video.storyboard] Discarded 1 invalid treatment(s) before selection.
-2026-08-11T11:11:51 INFO  [video.jobs] Job job_19fef562c73915af667 (storyboard) succeeded.
-INFO:     127.0.0.1:52642 - "POST /api/v1/video/projects/vid_19fef562b0daa5259f7/select-story HTTP/1.1" 200 OK
-INFO:     127.0.0.1:56547 - "POST /api/v1/video/projects/vid_19fef562b0daa5259f7/select-story HTTP/1.1" 200 OK
-INFO:     127.0.0.1:64809 - "POST /api/v1/video/projects/vid_19fef562b0daa5259f7/stories/story_19fef576639300f94f7/scenes HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:64807 - "POST /api/v1/video/projects/vid_19fef562b0daa5259f7/select-story HTTP/1.1" 200 OK
-2026-08-11T11:13:13 INFO  [video.llm] scenes ok in 54.2s (27675 tokens, deployment gpt-5.5)
-2026-08-11T11:13:13 INFO  [video.jobs] Job job_19fef57d1a1a2cab38f (storyboard) succeeded.
-2026-08-11T11:13:41 INFO  [video.clips] Generating 4 clip(s) for project vid_19fef562b0daa5259f7, 3 at a time.
-INFO:     127.0.0.1:55798 - "POST /api/v1/video/projects/vid_19fef562b0daa5259f7/clips/generate-all HTTP/1.1" 202 Accepted
-2026-08-11T11:13:46 WARNING [video.veo] Veo rejected the request (400) with 3 reference image(s) attached; retrying without them. The aircraft may not read as IndiGo in this clip. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
-
-2026-08-11T11:13:50 WARNING [video.veo] Veo rejected the request (400) with 3 reference image(s) attached; retrying without them. The aircraft may not read as IndiGo in this clip. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
-
-2026-08-11T11:13:51 WARNING [video.veo] Veo rejected the request (400) with 3 reference image(s) attached; retrying without them. The aircraft may not read as IndiGo in this clip. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
-
-2026-08-11T11:13:52 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 9:16): models/veo-3.1-generate-preview/operations/j96bfapio3rg
-2026-08-11T11:13:55 INFO  [video.veo] Started veo-3.1-generate-preview generation (6s, 9:16): models/veo-3.1-generate-preview/operations/vxm5nhyyo2cr
-2026-08-11T11:13:57 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 9:16): models/veo-3.1-generate-preview/operations/py4abc9zal9r
-2026-08-11T11:15:08 INFO  [video.veo] Downloaded 2.2MB to scene-03.mp4
-2026-08-11T11:15:12 INFO  [video.clips] Scene 3 ready (6.00s).
-2026-08-11T11:15:15 WARNING [video.veo] Veo rejected the request (400) with 3 reference image(s) attached; retrying without them. The aircraft may not read as IndiGo in this clip. {
-  "error": {
-    "code": 400,
-    "message": "`inlineData` isn't supported by this model. Please remove it or refer to the Gemini API documentation for supported usage.",
-    "status": "INVALID_ARGUMENT"
-  }
-}
-
-2026-08-11T11:15:19 INFO  [video.veo] Started veo-3.1-generate-preview generation (8s, 9:16): models/veo-3.1-generate-preview/operations/78gfe8m8i2ot
-2026-08-11T11:15:45 INFO  [video.veo] Downloaded 9.4MB to scene-02.mp4
-2026-08-11T11:15:48 INFO  [video.clips] Scene 2 ready (8.00s).
-2026-08-11T11:16:01 INFO  [video.veo] Downloaded 11.1MB to scene-01.mp4
-2026-08-11T11:16:07 INFO  [video.clips] Scene 1 ready (8.00s).
-2026-08-11T11:17:08 INFO  [video.veo] Downloaded 7.7MB to scene-04.mp4
-2026-08-11T11:17:13 INFO  [video.clips] Scene 4 ready (8.00s).
-2026-08-11T11:17:13 INFO  [video.jobs] Job job_19fef5917941ae053ba (clips) succeeded.
-INFO:     127.0.0.1:50278 - "POST /api/v1/video/projects/vid_19fef562b0daa5259f7/audio/suggest HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:63578 - "POST /api/v1/video/projects/vid_19fef562b0daa5259f7/render HTTP/1.1" 202 Accepted
-2026-08-11T11:17:53 INFO  [video.llm] audio-directions ok in 24.8s (11430 tokens, deployment gpt-5.5)
-2026-08-11T11:17:54 INFO  [video.jobs] Job job_19fef5c8ac4468099ac (audio) succeeded.
-2026-08-11T11:19:17 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='westus-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'westus-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-2026-08-11T11:19:44 WARNING [video.render] Nothing to composite: 0 super(s), 0 lockup(s). The film will have no burnt-in copy and no brand mark. end_card.enabled=False mark=wordmark brand=indigo.
-2026-08-11T11:21:36 INFO  [video.render] Rendered project vid_19fef562b0daa5259f7: 30.00s, 27.9MB from 4 clips.
-2026-08-11T11:21:36 INFO  [video.jobs] Job job_19fef5c9ac7b702dd30 (render) succeeded.
-INFO:     127.0.0.1:57742 - "GET /api/v1/video/media/projects/vid_19fef562b0daa5259f7/output/final.mp4 HTTP/1.1" 401 Unauthorized
-2026-08-11T11:21:36 ERROR [asyncio] Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
-handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
-Traceback (most recent call last):
-  File "C:\Program Files\Python312\Lib\asyncio\events.py", line 88, in _run
-    self._context.run(self._callback, *self._args)
-  File "C:\Program Files\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
-    self._sock.shutdown(socket.SHUT_RDWR)
-ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
-2026-08-11T11:42:17 WARNING [auth.azure_auth] _is_token_revoked check failed: could not translate host name "c-marketingcampaign-cosmospostgresql-np.osfanktnh2k3ye.postgres.cosmos.azure.com" to address: Name or service not known
-
-2026-08-11T11:42:17 WARNING [auth.azure_auth] _sync_user failed for oid=9b8c13e0-c1e0-407d-9470-990a980aa9d6: could not translate host name "c-marketingcampaign-cosmospostgresql-np.osfanktnh2k3ye.postgres.cosmos.azure.com" to address: Name or service not known
-
-INFO:     127.0.0.1:58335 - "GET /api/v1/video/projects/vid_19fef562b0daa5259f7/events HTTP/1.1" 200 OK
-2026-08-11T11:42:18 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='centralindia-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'centralindia-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-2026-08-11T11:42:19 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server request error: HTTPSConnection(host='centralindia-0.in.applicationinsights.azure.com', port=443): Failed to resolve 'centralindia-0.in.applicationinsights.azure.com' ([Errno 11001] getaddrinfo failed).
-INFO:     127.0.0.1:50214 - "GET /api/config HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60244 - "GET /api/v1/video/projects/vid_19fef562b0daa5259f7 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60248 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59685 - "GET /api/v1/video/projects/vid_19fef562b0daa5259f7/events HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62760 - "GET /api/v1/video/projects/vid_19fef562b0daa5259f7 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62127 - "GET /api/v1/video/media/projects/vid_19fef562b0daa5259f7/output/final.mp4 HTTP/1.1" 401 Unauthorized
-INFO:     127.0.0.1:55846 - "GET /api/v1/video/health HTTP/1.1" 200 OK
-2026-08-11T11:43:13 WARNING [azure.monitor.opentelemetry.exporter.export._base] Retrying due to server response error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')).
+INFO:     Shutting down
+INFO:     Waiting for connections to close. (CTRL+C to force quit)
