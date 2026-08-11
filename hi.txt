@@ -1,30 +1,49 @@
-Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable.
-Run docker/build-push-action@v5
-(node:28671) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
-(Use `node --trace-deprecation ...` to show where the warning was created)
-GitHub Actions runtime token ACs
-Docker info
-37.88 W: Failed to fetch http://deb.debian.org/debian-security/dists/bookworm-security/InRelease  Unable to connect to deb.debian.org:http:
-37.88 W: Some index files failed to download. They have been ignored, or old ones used instead.
-37.90 Reading package lists...
-37.91 Building dependency tree...
-37.91 Reading state information...
-37.91 E: Unable to locate package ffmpeg
-37.91 E: Unable to locate package fontconfig
-37.91 E: Unable to locate package fonts-dejavu-core
-------
-Dockerfile:19
---------------------
-  18 |     
-  19 | >>> RUN apt-get update \
-  20 | >>>     && apt-get install -y --no-install-recommends \
-  21 | >>>         ffmpeg \
-  22 | >>>         fontconfig \
-  23 | >>>         fonts-dejavu-core \
-  24 | >>>     && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
-  25 | >>>     && ffprobe -version >/dev/null \
-  26 | >>>     && rm -rf /var/lib/apt/lists/*
-  27 |     
---------------------
-ERROR: failed to build: failed to solve: process "/bin/sh -c apt-get update     && apt-get install -y --no-install-recommends         ffmpeg         fontconfig         fonts-dejavu-core     && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext     && ffprobe -version >/dev/null     && rm -rf /var/lib/apt/lists/*" did not complete successfully: exit code: 100
-Error: buildx failed with: ERROR: failed to build: failed to solve: process "/bin/sh -c apt-get update     && apt-get install -y --no-install-recommends         ffmpeg         fontconfig         fonts-dejavu-core     && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext     && ffprobe -version >/dev/null     && rm -rf /var/lib/apt/lists/*" did not complete successfully: exit code: 100
+FROM node:22-bookworm-slim AS frontend-builder
+
+WORKDIR /build/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+
+FROM python:3.11-slim-bookworm AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    STORAGE_DIR=/tmp/marketing-video \
+    VIDEO_STORAGE_DIR=/tmp/marketing-video
+
+RUN apt-get update --fix-missing \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        fontconfig \
+        fonts-dejavu-core \
+    && ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
+    && ffprobe -version >/dev/null \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+WORKDIR /app
+
+COPY backend/requirements.txt ./backend/
+RUN pip install --no-cache-dir -r backend/requirements.txt
+
+# This preserves all vendored backend content, including video skills and brand assets.
+COPY backend/ ./backend/
+COPY --from=frontend-builder /build/frontend/dist/ ./frontend/dist/
+
+RUN chmod +x /app/backend/entrypoint.sh \
+    && mkdir -p "$STORAGE_DIR" \
+    && chown -R appuser:appgroup /app "$STORAGE_DIR"
+
+WORKDIR /app/backend
+
+USER appuser
+
+EXPOSE 8000
+
+CMD ["sh", "/app/backend/entrypoint.sh"]
