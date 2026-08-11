@@ -1,120 +1,55 @@
-Looking at your logs, the render job succeeded but the final GET request returned 401 Unauthorized :
+"""Short-lived HMAC tokens for unauthenticated media downloads.
 
-GET /api/v1/video/media/projects/vid_.../output/final.mp4  →  401 Unauthorized
+A render can take 20+ minutes. By the time it finishes the Azure AD ID token
+the browser holds may have expired, causing the media fetch to 401. Rather
+than forcing a re-login for a completed render, the frontend requests a
+short-lived signed token immediately after the render job succeeds (while the
+session is still valid) and uses that token as a query-param on the media URL.
 
-Copy
-The video was rendered successfully — it's a auth token issue when fetching the media. Let me check the media serving code.
+Token format (URL-safe base64):  <expiry_unix_int>.<project_id>.<hmac_sha256>
+"""
 
-1 directory listed
-backend
-2 files read
-media.py
-owner.py
-The issue is clear. The media route has dependencies=[Depends(require_video_owner)] at the router level, which requires a Bearer token. But the frontend is fetching the video URL directly (e.g. via <video src="..."> or window.open(...)) — browsers don't attach Authorization headers for direct media URL requests .
+from __future__ import annotations
 
-Let me check how the frontend is requesting the video:
+import hashlib
+import hmac
+import os
+import time
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 
-Searched for "final.mp4" in
-marketing-platform
-0 results found
-Searched for "video player" in
-marketing-platform
-69 results found
-2 files read
-VideoPage.tsx
-video-api.ts
-Now let me check the apiClient to understand how auth tokens are attached:
+_TOKEN_TTL = 600  # 10 minutes
 
-Searched for "apiClient" in
-services
-1 result found
-1 file read
-apiClient.ts
-The frontend code is actually correct — fetchVideoMedia uses apiFetch which attaches the Bearer token. The 401 is happening because the token has expired by the time the render finishes .
 
-Here's the full picture:
+def _secret() -> bytes:
+    key = os.getenv("MEDIA_TOKEN_SECRET") or os.getenv("AZURE_CLIENT_SECRET") or ""
+    if not key:
+        raise RuntimeError("No secret available for media token signing")
+    return key.encode()
 
-Timeline of the problem:
-Render job started at 13:31:15
 
-Render completed at 13:37:41 — 6+ minutes later
+def _sign(payload: str) -> str:
+    return hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
 
-Media GET at 13:37:41 → 401
 
-The Azure AD token expired during the long render. When useAuthenticatedMediaUrl fires after the render completes, _authToken in apiClient.ts is stale/expired, so the backend's require_video_owner rejects it.
+def issue(project_id: str) -> str:
+    """Return a signed token valid for _TOKEN_TTL seconds."""
+    expiry = int(time.time()) + _TOKEN_TTL
+    payload = f"{expiry}.{project_id}"
+    sig = _sign(payload)
+    raw = f"{payload}.{sig}"
+    return urlsafe_b64encode(raw.encode()).decode()
 
-The frontend already handles this case gracefully — it shows the "Your session expired while this was rendering" message. But the video doesn't auto-play.
 
-The fix — after the render job succeeds, trigger a silent token refresh before fetching the media. The best place is in useAuthenticatedMediaUrl — it already catches 401 and SessionExpiredError, but it doesn't attempt a refresh first.
-
-The _onUnauthorized handler in apiClient.ts already handles token refresh on 401 — so apiFetch inside fetchVideoMedia will automatically retry with a fresh token if _onUnauthorized is registered and returns true.
-
-The question is: is _onUnauthorized set up in your app? Let me check:
-
-Searched for "setUnauthorizedHandler" in
-src
-0 results found
-Find where setUnauthorizedHandler and setAuthToken are called to understand token refresh setup
-
-shell
-
-Completed
-findstr /r /s "setUnauthorizedHandler\|setAuthToken\|onUnauthorized" "*.ts" "*.tsx"
-Find token refresh setup across frontend source files
-
-shell
-
-Completed
-grep -r "setUnauthorizedHandler\|setAuthToken\|onUnauthorized" --include="*.ts" --include="*.tsx" .
-Find where auth token and unauthorized handler are set up
-
-shell
-
-Completed
-findstr /s /m "setUnauthorizedHandler" *.ts *.tsx 2>nul & findstr /s /m "setAuthToken" *.ts *.tsx 2>nul
-App.tsx
-services\apiClient.ts
-App.tsx
-services\ai.ts
-services\apiClient.ts
-1 file read
-App.tsx
-The token renewal infrastructure is all there and correct. The real issue is a race condition timing problem :
-
-The renew interval fires every 10 minutes , but MSAL's cached ID token expires after ~1 hour . The render took ~6 minutes, but if the token was already 55+ minutes old when the render started, it expired during the render and the 10-minute renewal interval hadn't fired yet.
-
-The fix is to proactively renew the token when the render job completes — right before useAuthenticatedMediaUrl tries to fetch the media. The cleanest place is in VideoPage.tsx inside FinalStep, where render.status transitions to "ready".
-
-1 file read
-App.tsx
-Now I have the full picture. Here's the exact root cause and fix:
-
-Root cause: The renew interval in AuthenticatedApp fires every 10 minutes, but MSAL ID tokens live ~1 hour. If the token was minted at minute 0 and the render finishes at minute 62, the token is expired and the 10-minute renewal hasn't caught it yet. The handle401 in App does call acquireTokenSilent on 401 and returns true to retry — but apiFetch only retries the original fetch, not the blob conversion . fetchVideoMedia calls response.blob() on the retried response, which should work...
-
-Actually looking more carefully at apiFetch: when it gets a 401, calls _onUnauthorized(), gets true, retries — this should work. The real issue is likely that acquireTokenSilent is failing silently because the refresh token itself has expired (AAD default is 24h for single-page apps), causing handle401 to return false and throw SessionExpiredError, which useAuthenticatedMediaUrl catches and shows the error message.
-
-The fix: reduce the renewal interval from 10 minutes to 45 minutes (well within the 1-hour token lifetime), so the token is always fresh when a long render completes.
-
-Add forceRefresh:true so MSAL always fetches a fresh token from AAD rather than returning a cached one that may be near expiry, and increase interval to 45 minutes to stay well within the 1-hour token lifetime.
-
-App.tsx
-+3
--3
-
-Undo
-Now also add forceRefresh: true to the handle401 silent renewal in App, so it doesn't return a cached expired token when retrying after a 401:
-
-Force a fresh token from AAD on 401 so the retry in apiFetch uses a valid token, not a cached expired one.
-
-App.tsx
-+2
--1
-
-Undo
-Two changes made to App.tsx:
-
-handle401 now uses forceRefresh: true — when a 401 hits, MSAL goes to AAD for a genuinely fresh token instead of potentially returning the same cached expired one. This is what makes the apiFetch retry actually succeed.
-
-Background renewal interval changed from 10 min → 45 min with forceRefresh: true — the old 10-minute interval was calling acquireTokenSilent without forceRefresh, so MSAL just returned the same cached token every time without actually renewing it. 45 minutes with forceRefresh ensures the stored token is always fresh and never more than 45 minutes old, well within the 1-hour AAD ID token lifetime.
-
-The video not showing was caused by the token being expired at the moment useAuthenticatedMediaUrl fired after the render completed. With these changes, either the background renewal keeps the token fresh, or the 401 handler forces a real refresh and the media fetch retries successfully.
+def verify(token: str, project_id: str) -> bool:
+    """Return True iff the token is valid, unexpired, and bound to project_id."""
+    try:
+        raw = urlsafe_b64decode(token.encode() + b"==").decode()
+        expiry_str, pid, sig = raw.split(".", 2)
+        if pid != project_id:
+            return False
+        if int(expiry_str) < int(time.time()):
+            return False
+        payload = f"{expiry_str}.{pid}"
+        return hmac.compare_digest(_sign(payload), sig)
+    except Exception:
+        return False
