@@ -1,89 +1,11 @@
-name: 'Dev CI Pipeline'
-on:
-  push:
-    branches:
-      - dev
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git push
+To https://github.com/6E-Lab37/marketing-platform.git
+ ! [rejected]        dev-aditya -> dev-aditya (fetch first)
+error: failed to push some refs to 'https://github.com/6E-Lab37/marketing-platform.git'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
 
-jobs:
-  DEV_CI:
-    name: 'Dev CI Pipeline'
-    runs-on: [self-hosted, self-hosted-nonprod]
-    environment: non-prod
-    defaults:
-      run:
-        shell: bash
-    steps:
-      # No `lfs: true` here. git-lfs is not installed on this runner, and the
-      # build no longer needs it — nothing large is vendored into the repo.
-      - name: 'Checkout GitHub Action'
-        uses: actions/checkout@v4
-
-      - name: 'Free Disk Space'
-        run: |
-          docker system prune -af --volumes
-          df -h
-          free -h || true
-
-      # `npm ci` dies here with "Exit handler never called!" — npm reporting that
-      # its own process went away. It did this inside BuildKit too, so the first
-      # theory (it was competing with `pip install` for memory) was wrong: it
-      # fails with the whole machine to itself. The cause is still unknown, so
-      # this step prints npm's own debug log and is explicitly allowed to fail.
-      #
-      # The image does not depend on it. `frontend/dist` is committed, and the
-      # verify step below is what actually gates the build — so a broken npm
-      # costs a stale bundle, not a red pipeline.
-      - name: 'Build frontend (best effort)'
-        continue-on-error: true
-        run: |
-          docker run --rm \
-            -v "$PWD/frontend":/build \
-            -w /build \
-            -e NPM_CONFIG_AUDIT=false \
-            -e NPM_CONFIG_FUND=false \
-            -e NPM_CONFIG_UPDATE_NOTIFIER=false \
-            node:22-bookworm-slim \
-            sh -c 'set -e
-                   node --version; npm --version; df -h /build; free -m || true
-                   npm ci || { echo "===== npm debug log ====="; cat /root/.npm/_logs/*-debug-0.log || true; exit 1; }
-                   npm run build'
-
-      # This is the real gate. Either the step above refreshed the bundle, or the
-      # committed one stands in — but there must be a bundle.
-      - name: 'Verify frontend bundle'
-        run: |
-          test -f frontend/dist/index.html || {
-            echo "No frontend/dist/index.html — the CI build failed and none is committed."
-            exit 1
-          }
-          ls -la frontend/dist
-          echo "Bundle date: $(date -r frontend/dist/index.html)"
-
-      - name: 'Docker Login'
-        uses: azure/docker-login@v1
-        with:
-          login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-
-      - name: 'Build and Push Image'
-        uses: docker/build-push-action@v5
-        with:
-          # Without this, build-push-action defaults to the *git* context and
-          # re-clones from GitHub, ignoring the checkout entirely — so the
-          # frontend built above would be invisible, and any file not yet pushed
-          # would simply not exist for the build. See `.dockerignore` for what
-          # this sends.
-          context: .
-          push: true
-          tags: ${{ secrets.REGISTRY_LOGIN_SERVER }}/marketing-platform:dev
-          file: Dockerfile
-          build-args: |
-            REGISTRY=${{ secrets.REGISTRY_LOGIN_SERVER }}
-
-
-
-
-git add .github/workflows/dev.yaml
-git commit -m "Make frontend build non-blocking; dump npm debug log"
-git push
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>
