@@ -1,38 +1,128 @@
+.git
+.github
+.DS_Store
+**/.env
+**/.env.*
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.vite
+**/node_modules
+frontend/dist
+backend/.venv
+backend/venv
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git fetch
-remote: Enumerating objects: 167, done.
-remote: Counting objects: 100% (126/126), done.
-remote: Compressing objects: 100% (67/67), done.
-remote: Total 82 (delta 26), reused 46 (delta 10), pack-reused 0 (from 0)
-Unpacking objects: 100% (82/82), 520.32 KiB | 737.00 KiB/s, done.
-From https://github.com/6E-Lab37/marketing-platform
-   7c20713..37b6a8a  dev-aditya            -> origin/dev-aditya
-   664898e..2b11226  dev                   -> origin/dev
-   2996d7b..5985b9a  dev_bluchip2          -> origin/dev_bluchip2
- * [new branch]      dev_docker_fix        -> origin/dev_docker_fix
-   82e71cf..ea60526  dev_ibc_apis          -> origin/dev_ibc_apis
- * [new branch]      dev_refactor_editor   -> origin/dev_refactor_editor
- * [new branch]      fix-for-ffmpeg-docker -> origin/fix-for-ffmpeg-docker
- + 2d1d1c0...259c8e0 sandbox               -> origin/sandbox  (forced update)
- * [new branch]      sandbox_old           -> origin/sandbox_old
-   259c8e0..8ea77cb  uat                   -> origin/uat
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git log --oneline HEAD..origin/dev-aditya
-37b6a8a (origin/dev-aditya) Merge branch 'dev' into dev-aditya
-913ad26 Merge pull request #246 from 6E-Lab37/dev_docker_fix
-8fc7e33 (origin/dev_docker_fix) added install git-lfs step
-38b799e Merge pull request #245 from 6E-Lab37/dev_docker_fix
-cd590bb added lfs after checkout
-570b610 Merge pull request #244 from 6E-Lab37/dev_docker_fix
-250af3c Dockerfile fix for ffmpeg
-3f12de9 Update dev.yaml
-f3729c4 Update Dev CI Pipeline configuration
-fbead7d Merge pull request #243 from 6E-Lab37/fix-for-ffmpeg-docker
-567812b (origin/fix-for-ffmpeg-docker) updated docker
-c88ed20 Merge pull request #242 from 6E-Lab37/fix-for-ffmpeg-docker
-41acef3 updated dockerfile
-af6d92f updated for ffmpeg local
-ad583cc Create test.txt
-d099f6b Merge pull request #241 from 6E-Lab37/fix-for-ffmpeg-docker
-cdfe020 Refactor Dockerfile to use Python and simplify build
-:
+name: 'Dev CI Pipeline'
+on:
+  push:
+    branches:
+      - dev 
+
+jobs:
+  DEV_CI:
+    name: 'Dev CI Pipeline'
+    runs-on: [self-hosted, self-hosted-nonprod]
+    environment: non-prod
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 'Checkout GitHub Action'
+        uses: actions/checkout@v4
+      - name: 'Free Disk Space'
+        run: |
+          docker system prune -af --volumes
+          df -h
+      - name: 'Docker Login'
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: 'Build and Push Image'
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ${{ secrets.REGISTRY_LOGIN_SERVER }}/marketing-platform:dev  # Use the tag directly
+          file: Dockerfile
+          build-args: |
+            REGISTRY=${{ secrets.REGISTRY_LOGIN_SERVER }}
+
+
+
+
+
+
+
+
+FROM node:22-bookworm-slim AS frontend-builder
+
+WORKDIR /build/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+
+FROM python:3.11-slim-bookworm AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    STORAGE_DIR=/tmp/marketing-video \
+    VIDEO_STORAGE_DIR=/tmp/marketing-video \
+    BRAND_FONT_PATH=/app/backend/video/brand/assets/fonts/DejaVuSans.ttf
+
+# ffmpeg arrives as a static binary rather than from apt. The self-hosted runner
+# sits inside the corporate network and cannot reach deb.debian.org, and
+# `apt-get update` only *warns* when it fails to fetch its lists — it still
+# exits 0, so the `&&` chain walked on and died at `apt-get install` instead,
+# reporting "Unable to locate package ffmpeg". Docker Hub is reachable (the base
+# images pull fine), so take the binaries from there.
+#
+# These are statically linked: no shared libraries to install, and the build
+# carries drawtext, which is what puts the supers on the picture.
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg  /usr/local/bin/ffmpeg
+COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/ffprobe
+
+RUN ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
+    && ffprobe -version >/dev/null
+
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+WORKDIR /app
+
+COPY backend/requirements.txt ./backend/
+RUN pip install --no-cache-dir -r backend/requirements.txt
+
+# This preserves all vendored backend content, including video skills and brand assets.
+COPY backend/ ./backend/
+COPY --from=frontend-builder /build/frontend/dist/ ./frontend/dist/
+
+# `fonts-dejavu-core` used to come from apt too, and drawtext needs a real font
+# file — without one the lockup still composites (it is a PNG overlay) but every
+# burnt-in super silently renders as nothing. Say so at build time rather than
+# letting it be discovered in a finished film.
+RUN if [ -f "$BRAND_FONT_PATH" ]; then \
+        echo "Brand font found: $BRAND_FONT_PATH"; \
+    else \
+        echo "WARNING: no font at $BRAND_FONT_PATH — supers and end-card text will NOT render."; \
+        echo "         Commit a .ttf to backend/video/brand/assets/fonts/ to fix this."; \
+    fi
+
+# The build context can come off a Windows checkout, where a CRLF entrypoint
+# hands "\r" to sh and kills the container on boot with "bad interpreter".
+RUN sed -i 's/\r$//' /app/backend/entrypoint.sh \
+    && chmod +x /app/backend/entrypoint.sh \
+    && mkdir -p "$STORAGE_DIR" \
+    && chown -R appuser:appgroup /app "$STORAGE_DIR"
+
+WORKDIR /app/backend
+
+USER appuser
+
+EXPOSE 8000
+
+CMD ["sh", "/app/backend/entrypoint.sh"]
