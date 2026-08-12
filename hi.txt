@@ -1,12 +1,2 @@
-
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git log --oneline -1 -- backend/video/
-2095d2e Updated Dockerfile and added font
-
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git status -sb
-## dev-aditya...origin/dev-aditya
-M  .dockerignore
-A  .gitattributes
-M  .github/workflows/dev.yaml
-M  Dockerfile
-
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>
+git commit -m "Build frontend in CI; use checkout context; static ffmpeg"
+git push
