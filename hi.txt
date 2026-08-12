@@ -1,2 +1,14 @@
-Error: File was unable to be removed Error: EACCES: permission denied, rmdir '/home/lab37nonprod/actions-runner/_work/marketing-platform/marketing-platform/frontend/node_modules/@asamuzakjp'
-Error: File was unable to be removed Error: EACCES: permission denied, rmdir '/home/lab37nonprod/actions-runner/_work/marketing-platform/marketing-platform/frontend/node_modules/@asamuzakjp'
+What's happening
+The frontend build step mounts the workspace into a container that runs as root:
+
+
+docker run --rm -v "$PWD/frontend":/build ... node:22-bookworm-slim
+npm ci therefore writes frontend/node_modules/** owned by uid 0 onto the runner's filesystem. The runner user lab37nonprod can't rmdir a root-owned directory.
+
+actions/checkout@v4 begins every job with git clean -ffdx on the pre-existing workspace — before it fetches anything. So it hits @asamuzakjp and dies. That's why your successful reverts still fail: reverting removes the step that created the root-owned files, but the files are still sitting in _work/marketing-platform/marketing-platform/frontend/node_modules. Every run, on every commit, trips over them at step one. (node_modules is only in .dockerignore, not .gitignore — though -x would clean it either way.)
+
+Immediate unblock
+On the runner:
+
+
+sudo rm -rf /home/lab37nonprod/actions-runner/_work/marketing-platform/marketing-platform/frontend/node_modules
