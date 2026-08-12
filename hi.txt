@@ -1,12 +1,8 @@
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git add .
-warning: in the working copy of 'Dockerfile', CRLF will be replaced by LF the next time Git touches it
+git add Dockerfile .dockerignore .github/workflows/dev.yaml
+git diff --cached --stat
+git commit -m "Build frontend in CI; use checkout context; static ffmpeg"
+git push
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git reset 
-Unstaged changes after reset:
-M       .dockerignore
-M       .github/workflows/dev.yaml
-M       Dockerfile
 
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git diff --cached --stat
-
-C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>
+git log --oneline -1 -- backend/video/
+git status -sb
