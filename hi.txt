@@ -1,70 +1,42 @@
-FROM python:3.11-slim
+name: 'Dev CI Pipeline'
+on:
+  push:
+    branches:
+      - dev 
 
-# --------------------------------------------------
-# Install precompiled FFmpeg
-# No apt-get required
-# --------------------------------------------------
-
-COPY docker/ffmpeg.tar.xz /tmp/ffmpeg.tar.xz
-
-RUN mkdir -p /opt/ffmpeg \
-    && python -c "import tarfile; tarfile.open('/tmp/ffmpeg.tar.xz', 'r:xz').extractall('/opt/ffmpeg')" \
-    && FFMPEG_PATH=$(find /opt/ffmpeg -type f -name ffmpeg | head -n 1) \
-    && FFPROBE_PATH=$(find /opt/ffmpeg -type f -name ffprobe | head -n 1) \
-    && test -n "$FFMPEG_PATH" \
-    && test -n "$FFPROBE_PATH" \
-    && chmod +x "$FFMPEG_PATH" "$FFPROBE_PATH" \
-    && ln -sf "$FFMPEG_PATH" /usr/local/bin/ffmpeg \
-    && ln -sf "$FFPROBE_PATH" /usr/local/bin/ffprobe \
-    && rm -f /tmp/ffmpeg.tar.xz \
-    && ffmpeg -version \
-    && ffprobe -version
-
-# --------------------------------------------------
-# Create application user
-# --------------------------------------------------
-
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
-
-WORKDIR /app
-
-# --------------------------------------------------
-# Python dependencies
-# --------------------------------------------------
-
-COPY backend/requirements.txt ./backend/
-
-RUN pip install --no-cache-dir -r backend/requirements.txt
-
-# --------------------------------------------------
-# Application files
-# --------------------------------------------------
-
-COPY backend/ ./backend/
-COPY frontend/dist/ ./frontend/dist/
-
-# Keep the verification
-RUN ls -la frontend/dist/ \
-    && echo "Frontend dist copied successfully"
-
-# --------------------------------------------------
-# Permissions
-# --------------------------------------------------
-
-RUN chmod +x /app/backend/entrypoint.sh \
-    && chown -R appuser:appgroup /app
-
-# --------------------------------------------------
-# Run application
-# --------------------------------------------------
-
-WORKDIR /app/backend
-
-USER appuser
+jobs:
+  DEV_CI:
+    name: 'Dev CI Pipeline'
+    runs-on: [self-hosted, self-hosted-nonprod]
+    environment: non-prod
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 'Checkout GitHub Action'
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: 'Free Disk Space'
+        run: |
+          docker system prune -af --volumes
+          df -h
+      - name: 'Docker Login'
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: 'Build and Push Image'
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ${{ secrets.REGISTRY_LOGIN_SERVER }}/marketing-platform:dev  # Use the tag directly
+          file: Dockerfile
+          build-args: |
+            REGISTRY=${{ secrets.REGISTRY_LOGIN_SERVER }}
 
 
-Build and Push Image
-buildx failed with: ERROR: failed to build: failed to solve: process "/bin/sh -c mkdir -p /opt/ffmpeg     && python -c \"import tarfile; tarfile.open('/tmp/ffmpeg.tar.xz', 'r:xz').extractall('/opt/ffmpeg')\"     && FFMPEG_PATH=$(find /opt/ffmpeg -type f -name ffmpeg | head -n 1)     && FFPROBE_PATH=$(find /opt/ffmpeg -type f -name ffprobe | head -n 1)     && test -n \"$FFMPEG_PATH\"     && test -n \"$FFPROBE_PATH\"     && chmod +x \"$FFMPEG_PATH\" \"$FFPROBE_PATH\"     && ln -sf \"$FFMPEG_PATH\" /usr/local/bin/ffmpeg     && ln -sf \"$FFPROBE_PATH\" /usr/local/bin/ffprobe     && rm -f /tmp/ffmpeg.tar.xz     && ffmpeg -version     && ffprobe -version" did not complete successfully: exit code: 1
-EXPOSE 8000
 
-CMD ["sh", "/app/backend/entrypoint.sh"]
+Checkout GitHub Action
+Unable to locate executable file: git-lfs. Please verify either the file path exists or the file can be found within a directory specified by the PATH environment variable. Also check the file mode to verify the file is executable.
