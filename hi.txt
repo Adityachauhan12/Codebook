@@ -1,78 +1,28 @@
-FROM python:3.11-slim-bookworm AS runtime
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    STORAGE_DIR=/tmp/marketing-video \
-    VIDEO_STORAGE_DIR=/tmp/marketing-video \
-    BRAND_FONT_PATH=/app/backend/video/brand/assets/fonts/DejaVuSans.ttf
-
-# ffmpeg arrives as a static binary copied out of a published image.
-#
-# Two earlier approaches failed on this runner and neither can be made to work:
-#   * `apt-get install ffmpeg` — the runner sits inside the corporate network
-#     and cannot reach deb.debian.org. Worse, `apt-get update` only *warns* when
-#     it fails to fetch its lists and still exits 0, so the failure surfaced at
-#     `apt-get install` as "Unable to locate package ffmpeg".
-#   * a vendored `docker/ffmpeg.tar.xz` — a ~100MB binary in git, which has to
-#     come through Git LFS, which BuildKit's git context does not resolve. The
-#     build received the LFS pointer file and `tarfile.open()` rejected it.
-#
-# Docker Hub is reachable — every base image here pulls fine — so the binaries
-# come from there. They are statically linked, so there is nothing to install
-# alongside them, and the build carries drawtext, which is what puts the supers
-# on the picture.
-COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg  /usr/local/bin/ffmpeg
-COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/ffprobe
-
-RUN ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext \
-    && ffprobe -version >/dev/null
-
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
-
-WORKDIR /app
-
-# --------------------------------------------------
-# Python dependencies
-# --------------------------------------------------
-
-COPY backend/requirements.txt ./backend/
-
-RUN pip install --no-cache-dir -r backend/requirements.txt
-
-# The frontend is built by a workflow step before this runs, not by a stage in
-# here. `npm ci` inside BuildKit died with "Exit handler never called!" — npm
-# reporting that its own process went away — because BuildKit runs stages in
-# parallel and it was competing with `pip install` for the runner's memory.
-# Building it outside gives it the whole machine and keeps this image simple.
-# The trade: `frontend/dist/` must exist in the build context beforehand.
-COPY backend/ ./backend/
-COPY frontend/dist/ ./frontend/dist/
-
-RUN test -f frontend/dist/index.html \
-    || { echo "frontend/dist/index.html missing — run the frontend build step first."; exit 1; }
-
-# drawtext needs a real font file. Without one the end-card lockup still
-# composites (it is a PNG overlay) but every burnt-in super silently renders as
-# nothing — say so at build time rather than letting it be found in a film.
-RUN if [ -f "$BRAND_FONT_PATH" ]; then \
-        echo "Brand font found: $BRAND_FONT_PATH"; \
-    else \
-        echo "WARNING: no font at $BRAND_FONT_PATH — supers and end-card text will NOT render."; \
-        echo "         Commit a .ttf to backend/video/brand/assets/fonts/ to fix this."; \
-    fi
-
-# The build context can come off a Windows checkout, where a CRLF entrypoint
-# hands "\r" to sh and kills the container on boot with "bad interpreter".
-RUN sed -i 's/\r$//' /app/backend/entrypoint.sh \
-    && chmod +x /app/backend/entrypoint.sh \
-    && mkdir -p "$STORAGE_DIR" \
-    && chown -R appuser:appgroup /app "$STORAGE_DIR"
-
-WORKDIR /app/backend
-
-USER appuser
-
-EXPOSE 8000
-
-CMD ["sh", "/app/backend/entrypoint.sh"]
-
+4m 14s
+Run docker run --rm \
+Unable to find image 'node:22-bookworm-slim' locally
+22-bookworm-slim: Pulling from library/node
+039e6f9f9752: Pulling fs layer
+5404bc2cc13c: Pulling fs layer
+555d35074583: Pulling fs layer
+8f99eb9866f3: Pulling fs layer
+c0ed9f2d0e0e: Pulling fs layer
+8f99eb9866f3: Waiting
+c0ed9f2d0e0e: Waiting
+5404bc2cc13c: Verifying Checksum
+5404bc2cc13c: Download complete
+039e6f9f9752: Verifying Checksum
+039e6f9f9752: Download complete
+8f99eb9866f3: Verifying Checksum
+8f99eb9866f3: Download complete
+555d35074583: Verifying Checksum
+555d35074583: Download complete
+c0ed9f2d0e0e: Verifying Checksum
+c0ed9f2d0e0e: Download complete
+039e6f9f9752: Pull complete
+5404bc2cc13c: Pull complete
+555d35074583: Pull complete
+8f99eb9866f3: Pull complete
+c0ed9f2d0e0e: Pull complete
+Digest: sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+Status: Downloaded newer image for node:22-bookworm-slim
