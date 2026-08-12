@@ -1,13 +1,45 @@
+# NOTE: this file only started taking effect when the workflow switched to
+# `context: .`. Before that the build used BuildKit's *git* context, which reads
+# .dockerignore from the repo — and this file was never committed, so every
+# pattern here was silently inert.
+#
+# That matters for one line in particular. The previous version listed
+# `frontend/dist`, which is now exactly what has to reach the image: the
+# frontend is built by a workflow step and copied in. Excluding it would fail
+# the `COPY frontend/dist/` outright. Do not add it back.
+
 .git
 .github
-.DS_Store
-**/.env
-**/.env.*
+.gitattributes
+
+# Reinstalled in the image, or already compiled into frontend/dist.
+**/node_modules
+**/.vite
+frontend/src
+frontend/public
+frontend/index.html
+frontend/*.json
+frontend/*.ts
+frontend/*.md
+
+# Dead weight: main.py serves frontend/dist, never backend/build.
+backend/build
+
 **/__pycache__
 **/*.py[cod]
 **/.pytest_cache
-**/.vite
-**/node_modules
-frontend/dist
-backend/.venv
-backend/venv
+**/.mypy_cache
+**/.venv
+**/venv
+
+# Secrets never belong in an image layer.
+**/.env
+**/.env.*
+!**/.env.example
+
+**/.DS_Store
+*.md
+
+# Loose scratch copy at the repo root; the ones the pipeline uses live under
+# backend/video/brand/assets/references/.
+plane_images
