@@ -62,6 +62,9 @@ WORKDIR /app/backend
 
 USER appuser
 
+
+Build and Push Image
+buildx failed with: ERROR: failed to build: failed to solve: process "/bin/sh -c mkdir -p /opt/ffmpeg     && python -c \"import tarfile; tarfile.open('/tmp/ffmpeg.tar.xz', 'r:xz').extractall('/opt/ffmpeg')\"     && FFMPEG_PATH=$(find /opt/ffmpeg -type f -name ffmpeg | head -n 1)     && FFPROBE_PATH=$(find /opt/ffmpeg -type f -name ffprobe | head -n 1)     && test -n \"$FFMPEG_PATH\"     && test -n \"$FFPROBE_PATH\"     && chmod +x \"$FFMPEG_PATH\" \"$FFPROBE_PATH\"     && ln -sf \"$FFMPEG_PATH\" /usr/local/bin/ffmpeg     && ln -sf \"$FFPROBE_PATH\" /usr/local/bin/ffprobe     && rm -f /tmp/ffmpeg.tar.xz     && ffmpeg -version     && ffprobe -version" did not complete successfully: exit code: 1
 EXPOSE 8000
 
 CMD ["sh", "/app/backend/entrypoint.sh"]
