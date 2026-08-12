@@ -1,2 +1,38 @@
-git fetch
-git log --oneline HEAD..origin/dev-aditya
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git fetch
+remote: Enumerating objects: 167, done.
+remote: Counting objects: 100% (126/126), done.
+remote: Compressing objects: 100% (67/67), done.
+remote: Total 82 (delta 26), reused 46 (delta 10), pack-reused 0 (from 0)
+Unpacking objects: 100% (82/82), 520.32 KiB | 737.00 KiB/s, done.
+From https://github.com/6E-Lab37/marketing-platform
+   7c20713..37b6a8a  dev-aditya            -> origin/dev-aditya
+   664898e..2b11226  dev                   -> origin/dev
+   2996d7b..5985b9a  dev_bluchip2          -> origin/dev_bluchip2
+ * [new branch]      dev_docker_fix        -> origin/dev_docker_fix
+   82e71cf..ea60526  dev_ibc_apis          -> origin/dev_ibc_apis
+ * [new branch]      dev_refactor_editor   -> origin/dev_refactor_editor
+ * [new branch]      fix-for-ffmpeg-docker -> origin/fix-for-ffmpeg-docker
+ + 2d1d1c0...259c8e0 sandbox               -> origin/sandbox  (forced update)
+ * [new branch]      sandbox_old           -> origin/sandbox_old
+   259c8e0..8ea77cb  uat                   -> origin/uat
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git log --oneline HEAD..origin/dev-aditya
+37b6a8a (origin/dev-aditya) Merge branch 'dev' into dev-aditya
+913ad26 Merge pull request #246 from 6E-Lab37/dev_docker_fix
+8fc7e33 (origin/dev_docker_fix) added install git-lfs step
+38b799e Merge pull request #245 from 6E-Lab37/dev_docker_fix
+cd590bb added lfs after checkout
+570b610 Merge pull request #244 from 6E-Lab37/dev_docker_fix
+250af3c Dockerfile fix for ffmpeg
+3f12de9 Update dev.yaml
+f3729c4 Update Dev CI Pipeline configuration
+fbead7d Merge pull request #243 from 6E-Lab37/fix-for-ffmpeg-docker
+567812b (origin/fix-for-ffmpeg-docker) updated docker
+c88ed20 Merge pull request #242 from 6E-Lab37/fix-for-ffmpeg-docker
+41acef3 updated dockerfile
+af6d92f updated for ffmpeg local
+ad583cc Create test.txt
+d099f6b Merge pull request #241 from 6E-Lab37/fix-for-ffmpeg-docker
+cdfe020 Refactor Dockerfile to use Python and simplify build
+:
