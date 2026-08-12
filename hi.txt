@@ -1,11 +1,12 @@
-# Shell scripts run inside the Linux container. A CRLF checkout on Windows makes
-# `sh entrypoint.sh` pass "\r" to python and uvicorn, so the container starts,
-# fails every migration and dies on an invalid port. Force LF regardless of platform.
-*.sh text eol=lf
-entrypoint.sh text eol=lf
-Dockerfile text eol=lf
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git add .
+warning: in the working copy of 'Dockerfile', CRLF will be replaced by LF the next time Git touches it
 
-# A CRLF .dockerignore leaves a trailing "\r" on every pattern, which can stop
-# them matching — and a silently inert ignore file means node_modules and .git
-# get uploaded as build context.
-.dockerignore text eol=lf
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git reset 
+Unstaged changes after reset:
+M       .dockerignore
+M       .github/workflows/dev.yaml
+M       Dockerfile
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>git diff --cached --stat
+
+C:\Users\aditya.chauhan2\OneDrive - InterGlobe Aviation Limited\Desktop\marketing platform\marketing-platform>
