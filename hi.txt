@@ -1,14 +1,428 @@
-What's happening
-The frontend build step mounts the workspace into a container that runs as root:
+STAGE 1 — Inventory: "what is in this repo?"
+Step 1 — Discovery: walk the folder and read everything once
+What it does: finds every file and reads each one exactly once.
+
+How: overhaul/discovery.py walks the directory tree. For each file it does one read_bytes() and that single read serves three purposes:
+
+SHA-256 hash of the bytes → content_hash
+Is there a \x00 byte in the first 8 KB? → it's binary, stop here
+Decode to text → hand it to line counting
+Three details that look small and aren't:
+
+Directories are sorted before walking. If you walk in whatever order the OS gives you, two runs can produce differently-ordered JSON, and then you can't diff two scans. Sorting makes the output byte-identical every time.
+Symlinks are skipped, not followed. A symlink can point outside the repo, or point at its own parent and loop forever. Either one breaks reproducibility.
+An unreadable file becomes a record with status: "error", not a silently missing entry. That's principle P1: you always know the file was seen.
+For fare.py you get: bytes: 448, content_hash: sha256:.... Nothing clever yet — but the hash is what M2 will later use to skip files that haven't changed.
+
+Step 2 — Language detection and line counting
+What it does: decides "this is Python" and splits 18 lines into code / comment / blank.
+
+How language is decided — two attempts, in order:
+
+Extension. .py is in the Python plugin's extensions set → confidence: confident, evidence: "extension .py".
+If no extension matches, look at the first line for a shebang. #!/usr/bin/env python → confidence: guessed, evidence quotes the actual line.
+Why bother with #2? Old repos are full of executables with no extension. It found 6 real Python files in roundup that extension matching missed, including frontends/roundup.cgi.
+
+How lines are counted — overhaul/inventory/lines.py walks the lines one at a time carrying one piece of state: "am I currently inside a block comment?"
 
 
-docker run --rm -v "$PWD/frontend":/build ... node:22-bookworm-slim
-npm ci therefore writes frontend/node_modules/** owned by uid 0 onto the runner's filesystem. The runner user lab37nonprod can't rmdir a root-owned directory.
+for each line:
+    strip whitespace
+    if inside a block comment  → comment++, check if it closes here
+    elif line is empty         → blank++
+    elif line starts a block   → comment++, remember what closes it
+    elif line starts with "#"  → comment++
+    else                       → code++
+The tokens (#, """) come from the language plugin, not from this file. That's what makes adding a language a matter of writing one small plugin.
 
-actions/checkout@v4 begins every job with git clean -ffdx on the pre-existing workspace — before it fetches anything. So it hits @asamuzakjp and dies. That's why your successful reverts still fail: reverting removes the step that created the root-owned files, but the files are still sitting in _work/marketing-platform/marketing-platform/frontend/node_modules. Every run, on every commit, trips over them at step one. (node_modules is only in .dockerignore, not .gitignore — though -x would clean it either way.)
+Result for fare.py: 18 total = 13 code + 1 comment + 4 blank, and crucially method: "lexical".
 
-Immediate unblock
-On the runner:
+That method field is the honesty. This is a text scan, not a parse — a # inside a string counts as a comment. Rather than pretend it's exact, the field tells you what kind of number it is.
+
+The key idea appearing for the first time: the tool never gives you a number without telling you how sure it is and where it came from. confidence + evidence + method are on almost everything.
+
+Step 3 — Manifests: what does this repo say it depends on?
+What it does: finds pyproject.toml, package.json, setup.py, requirements.txt and 5 more formats, anywhere in the tree, and reads out the dependency names.
+
+How: overhaul/inventory/manifests.py picks a parser per filename — tomllib, json, configparser, ElementTree, and for setup.py, Python's ast.
+
+The one rule that matters here: parse, never execute.
+
+django-oscar's setup.py runs npm install when executed. If the tool imported it to read install_requires, scanning that repo would spawn npm on your build server, from source you don't control. So setup.py is read as a syntax tree and the literal values are pulled out of it.
+
+The price of that: if a value is computed at runtime (roundup builds its script list with glob()), the tool genuinely cannot read it. It reports the manifest with confidence: "guessed" and evidence saying what it found instead — it does not invent a plausible list.
+
+Two findings that changed the design:
+
+Recursive, not root-only. documenso has 17 package.json files. Looking only at the root finds one and misses the monorepo.
+flask's [dependency-groups] (the new PEP 735 form) took it from 35 declarations to 57. Formats keep being added; missing one silently understates the repo.
+Step 4 — Test detection
+What it does: sets is_test: true/false plus a test_reason on every file.
+
+How — overhaul/inventory/testfiles.py, two rules in a fixed order:
+
+Directory rule — is any folder in the path called tests, spec, __tests__…? Matched case-insensitively (a .NET Tests/ is still a test dir). Result: test_reason: "dir:tests".
+Filename rule — does the name match test_*, *_test, *.spec.*, *Test? Matched case-SENSITIVELY, on purpose: *Test compared case-insensitively also matches latest.py, contest.py and greatest.py.
+Two more deliberate choices:
+
+The filename rule only applies to files a language plugin claims. httpie ships httpie.spec.txt — an RPM spec file — which *.spec.* would happily call a test. The directory rule still applies to everything, which is how commons-lang's 365 Java tests get found even though nothing parses Java.
+Tests are labelled, never deleted. A test importing your fare engine is real evidence the fare engine matters, so tests stay in the graph. They get excluded from scoring later.
+Why both rules exist: flask's 69 test files are found 100% by directory, 0% by filename. documenso's are found entirely by filename. Ship one rule and you miss half the ecosystems.
+
+Step 5 — Git history
+What it does: for each file, how much has it changed recently — in 12, 24 and 36-month windows.
+
+How — overhaul/inventory/githistory.py runs git log --numstat once, over the widest window, and filters the narrower windows out of that result in memory. Three windows, one subprocess.
+
+The output is parsed with \x1e and \x1f as separators — control characters that cannot appear in a filename, a SHA, a date or an email. Commas and pipes can.
+
+Three things here are non-obvious, and each was measured:
+
+(a) The window is anchored to HEAD's commit date, not to today's date.
+httpie's last commit is 21 months old. Anchored to the wall clock, "last 12 months of churn" for httpie is zero for every file — technically true and completely useless. Anchored to HEAD, you get the last 12 months of actual development. It also makes the output deterministic: the clock would move the window between two runs on either side of a month boundary.
+
+(b) A shallow clone's oldest commit is a lie, and is excluded.
+When you git clone --depth=N (which is what CI does by default), the oldest commit in your copy has no parent. Git therefore renders it as a root commit that adds the entire tree.
+
+Measured on commons-lang: that one commit reports 533 changed files — exactly the number of files in the tree. The next real commit touches two. Counted, every file in the repo gets a fake commit and its entire body as "lines added". httpie's docs/README.md reads +2,677 instead of its true +79.
+
+So the tool reads .git/shallow, gets the graft SHAs, and excludes those commits. documenso has two graft SHAs, so it's a list, not a single value.
+
+(c) shallow and incomplete are different claims.
+A shallow clone with four years of history covers a 36-month window completely. Calling it incomplete would throw away good numbers. So completeness is decided per window by asking whether the graft point falls inside that window. flask's actual output:
 
 
-sudo rm -rf /home/lab37nonprod/actions-runner/_work/marketing-platform/marketing-platform/frontend/node_modules
+shallow: true
+windows_complete: {"12": true, "24": true, "36": true}
+reason: "shallow clone, but the graft point predates every configured window,
+         so all 3 windows are covered"
+Temporal coupling comes from the same pass: for each commit, take the files changed together and count pairs. Two files that keep changing together are coupled. Honest result: the top pairs in every repo are locale files, changelogs and CI workflows. The numbers are right; the signal isn't the one anyone wants. That's recorded as a known limitation rather than papered over.
+
+Step 5b — Entry points: how does this application get started?
+What it does: finds the ways in — console scripts, __main__.py, manage.py, wsgi.py, npm bin, Dockerfile CMD, Procfile.
+
+How — overhaul/inventory/entrypoints.py reads each declared source and then tries to resolve the declaration to a real file. flask.cli:main → does src/flask/cli.py exist? Yes → status: "resolved".
+
+Three states, kept separate (this is principle P3):
+
+resolves to one file → resolved
+resolves to no file → unresolved
+resolves to two files → ambiguous — we know the entry point exists, we can't say which file
+Collapsing those into one flag would make both unfilterable.
+
+The weak signal is quarantined. if __name__ == "__main__": means someone can run this file. That's not the same as "this is how the app starts". roundup has 30 of those guards and 2 real entry points — a 15:1 ratio. So the guard ships at confidence: guessed, sorted to the bottom of the report, in its own tier.
+
+The guard detection itself was verified exactly: 30 claimed, 30 eligible, 0 false positives, 0 missed.
+
+And a false positive the corpus caught that the tests didn't: flask's tests/test_apps/helloworld/wsgi.py was being reported as a confident WSGI entry point. It's a fixture. Test files are now excluded from every entry-point source.
+
+STAGE 2 — Code graph: "how does this fit together?"
+Steps 6–7 — Parsing and complexity
+What it does: turns source text into a list of named things with line numbers and a complexity score each.
+
+Why tree-sitter and not a real compiler
+A real analyser (mypy, tsc) needs the project to build: dependencies installed, env vars set, a database reachable. Old repos routinely don't build on a fresh machine — dead internal mirrors, missing config. A tool that needs a successful build fails on exactly the repos this tool exists for.
+
+tree-sitter parses text. It doesn't need anything to work. And it recovers from broken syntax instead of throwing — it returns a tree with error nodes inside it, so you still get the parts it could read.
+
+Proof of the point: roundup has a file mixing tabs and spaces that CPython's own ast refuses to parse. tree-sitter reads it and returns all seven definitions.
+
+How definitions are found
+overhaul/graph/definitions.py walks the parse tree carrying two pieces of state: the scope (the names you're nested inside) and what kind of body you're in.
+
+
+walk(node, scope, inside):
+    for each NAMED child:
+        is this child a definition?   ← the plugin's node-type map says
+        if yes:
+            name = scope joined with "." + this name
+            kind = "method" if it's a function directly inside a class/object,
+                   else "function" / "class"
+            record name, kind, start line, end line, decorators
+            recurse with scope + this name
+        if no:
+            recurse with the same scope
+On fare.py this produces exactly:
+
+
+price       function  lines 6–13   ccn 5
+Engine      class     lines 16–18  ccn 1
+Engine.run  method    lines 17–18  ccn 1
+run is a method, not a function, because the walk knew it was inside a class. Engine.run is qualified, because the scope was carried down.
+
+The subtle bug in that walk: if not child.is_named: continue. tree-sitter names the lambda keyword token the same thing as the lambda expression. Without that check, every lambda gets reported twice.
+
+Decorators are captured here, with arguments stripped: @app.route('/pay', methods=['GET']) is stored as app.route. That single field is what steps 11 and 12 later use to find endpoints without re-walking the world.
+
+Verified against CPython: 1,092 Python files across four repos re-parsed with ast — every name, every kind, every line number identical, plus 1,331 decorated definitions with zero disagreements.
+
+How complexity is counted
+Cyclomatic complexity (CCN) is: 1, plus one for every decision point. A decision point is anywhere the code can go two ways.
+
+overhaul/graph/complexity.py walks a function's subtree and counts nodes whose type is in the plugin's decision_nodes set. Watch it on price:
+
+
+def price(passenger, route):              # start at 1
+    total = 100
+    if passenger.is_child:                # +1  → 2
+        total = total * 0.5
+    for leg in route.legs:                # +1  → 3
+        if leg.is_international           # +1  → 4
+           and leg.hours > 6:             # +1  → 5   ← the `and` is a branch
+            total += 40
+    return clean(total)
+The tool reports ccn: 5. That matches by hand.
+
+and counts because McCabe's definition says a boolean operator is a branch, and radon (the standard Python tool) counts it too. In JS this is gated on the operator: a + b and a && b are both binary_expression in the grammar, so the plugin declares which operators count.
+
+The invariant that makes this auditable: every decision node is owned by exactly one thing — the nearest enclosing definition, or the module. So:
+
+
+sum(each definition's ccn - 1) + (module_ccn - 1) == the file's total decision nodes
+That equation is checkable by hand, and it's what let step 14 re-derive 10,508 per-function CCNs against an independent McCabe counter with 0 mismatches.
+
+module_ccn exists because code outside functions still branches. 38 corpus files branch at module level and define no functions at all — including roundup/scripts/weekly-report, which only shebang detection found in the first place. Without module_ccn they'd read as complexity zero.
+
+Step 8 — JS/TS, and the JSX correction
+Two problems appear the moment you leave Python.
+
+Problem 1: in JS the name is not on the function.
+
+
+function Card() {}              // 865 of these in the corpus
+const Card = () => {}           // 4,902 of these
+In the second, the parse tree has an arrow function with no name at all — the name is on the variable_declarator that holds it. Handle only the first form and you miss 85% of JS/TS definitions.
+
+So the plugin declares binder_nodes — node types that can hold a function and lend it their name. The engine checks: does this binder's value happen to be a function? Then the name belongs to it.
+
+The line that had to be drawn: 2,726 JS binders hold a call that takes a function argument — things like const x = useMemo(() => ...). Treating those as definitions would catch 158 real memo()/forwardRef() components and invent thousands of wrong ones. So a binder counts only when its value is directly a function.
+
+Problem 2: JSX makes normal components look insanely complex.
+
+
+return (
+  <div>
+    {isLoading && <Spinner/>}          // `&&` → looks like a decision
+    {error ? <Err/> : <Ok/>}           // ternary → looks like a decision
+  </div>
+);
+That's ordinary markup, and a naive counter reads it as branching logic. excalidraw's App.render has 40 of these.
+
+The rule:
+
+Walk up from each decision node. Stop at the nearest enclosing function. If you crossed a JSX node before hitting that boundary, it's a jsx_branch, not ccn.
+
+Implemented as one flag carried down the descent: entering a JSX node sets it, entering any function clears it.
+
+The function boundary is the important half. A callback written inside markup opens a new scope:
+
+
+{items.map(i => { if (i.urgent) return <Alert/>; })}
+That if is real application logic and stays in ccn. Result: App.render scores ccn 9 with 40 jsx_branches held out — and the 40 are still reported, just in a separate field, never as zero.
+
+Worth knowing: the thing people expect to be the problem, {items.map(...)}, was never a problem. It's a call_expression, not a decision node. The real rule is the ancestor walk.
+
+Step 9a — Import edges: the tier you can verify
+What it does: turns from .util import clean into an edge app/fare.py → app/util.py.
+
+How — two phases, in overhaul/graph/imports.py:
+
+Phase 1: extraction. The plugin says which node types carry imports and what shape each one is — not a plain node map, because imports have no common shape:
+
+
+import a.b as c                # one shape
+from .util import clean        # another
+from __future__ import x       # its OWN node type in the grammar
+export * from './x'            # republishes rather than uses
+require('./x')                 # an ordinary call that means something
+Each shape gets a handler. The engine dispatches without knowing any language.
+
+Phase 2: resolution. Turn the text into a path.
+
+
+"from .util import clean"  in  app/fare.py
+  → level 1 (one dot) → start from app/
+  → "util" → probe app/util.py       ✓ exists in the scan
+  → EDGE: app/fare.py → app/util.py, resolution "exact"
+And import os:
+
+
+  → "os" → app/os.py? no. os.py at root? no. Not a declared dependency.
+  → NO EDGE, reason: "not_in_repo"
+Which is exactly what the tool reported: imports: 2, edges: 1, no_edge_reasons: {"not_in_repo": 1}.
+
+The rule that governs everything here: resolution never guesses. A specifier either names a file in this repo or it doesn't. When it doesn't, the reason is recorded — not_in_repo, external_package, missing_file, bare_specifier, unparsed_target, self_import — and those reasons are what make the coverage number legible instead of a mystery.
+
+Two bugs 39 unit tests missed and CPython's ast caught:
+
+child is module is always False in py-tree-sitter — it builds a fresh Node object on every attribute access. So the module name was being collected as one of the names it binds, on 1,034 of 1,291 files. Fixed by comparing byte spans instead.
+from __future__ import x is its own node type, so it was completely invisible.
+After both, extraction agrees with ast on 6,105 imports across 1,291 files, exactly.
+
+The node set is settled before any edge is drawn. excalidraw does import "./Excalifont.woff2" 230 times. That resolves perfectly — it's a real file. But a font is not a code node, and edges to it would have put a .woff2 above every module in the ranking. So an edge target must already be a node; 321 such edges were dropped and counted as unparsed_target.
+
+The 310 tests were green when this was found. It took running the invariant — every edge endpoint must appear in the nodes list — against the real corpus.
+
+Step 9b-i — The workspace map: where @documenso/lib lives
+In a monorepo, most imports look like this:
+
+
+import { x } from '@documenso/lib'    // internal! another package in this repo
+import { y } from 'react'             // external
+The filesystem can't tell those apart. Before this step, documenso had 11,904 undifferentiated bare_specifier imports — 78% of all its imports.
+
+Two declared conventions carry the answer — overhaul/graph/workspace.py:
+
+A package.json's own name field is what other packages import it by. Step 3 already found all 17 of them.
+tsconfig.json's compilerOptions.paths, resolved against baseUrl and the directory of the tsconfig that declares it. paths wins over package names, because that's TypeScript's own precedence order.
+Two findings from this step:
+
+A regex destroyed two of documenso's four tsconfigs. The alias "@/*": ["./*"] contains the characters /*. A block-comment regex reads that as a comment opening and deletes everything up to the next */ — which "**/*.ts" in the include array helpfully provides. Half the file, gone. It's a string-aware scanner now.
+
+It was only caught because unreadable names the files it couldn't parse. The alias count alone looked perfectly plausible.
+
+baseUrl alone is a whole resolution mechanism. commerce declares no package name and no aliases, and writes import { getCart } from 'lib/shopify'. Honouring baseUrl took it from 18% to 57% resolved. Skipping it made a Next.js app look like it imported packages nobody had installed.
+
+No builtin-module list is hardcoded, in either ecosystem. sys.stdlib_module_names was rejected because the target repo may run a different Python version than the scanner. Same for Node. Only the unambiguous node: prefix is treated as stdlib — so an unprefixed fs stays bare_specifier, deliberately.
+
+Step 9b-ii — Bare names: the tier you cannot verify
+An import isn't the only evidence of a dependency. fare.py calls clean(total) on line 13 — the name is used there. Can we connect uses to definitions?
+
+Sometimes. And the tool is loud about which times.
+
+overhaul/graph/references.py does two passes. Pass one parses every file, resolves its imports, and collects two things: what names this file defines, and what names it uses. Pass two resolves the uses, in a strict order:
+
+
+for each bare name used in a file:
+  1. does this file define it?          → LOCAL, no edge (it explained itself)
+  2. did an import bind this name?      → EXACT edge (the source text said so)
+  3. is it in the global symbol table?  → AMBIGUOUS edge, weight 1/N
+  4. otherwise                          → UNRESOLVED, counted, no edge
+On fare.py: 14 names used → 1 local (price), 1 exact (clean, via the import), 12 unresolved (os, total, passenger, route, leg…). The clean reference reinforces the edge the import already made — same edge, count: 2, sources ["import", "reference"], still exact.
+
+The first honest attempt produced 47,994 edges and was mostly garbage
+Four rules took it to 18,199. Every one was found by reading output, not by a test:
+
+1. Only top-level definitions go in the symbol table. A nested definition can't be imported by name — from x import Database.commit isn't a thing in any of these languages. Including nested ones multiplied django-oscar's ambiguous edges by six, and made documenso's object-literal key recipient the target of 1,928 edges.
+
+2. The table is keyed per language family. roundup's Python LOCALE_DIRS.append(...) was drawing an edge to website/www/_static/jquery.js, because jQuery defines an append. Nothing in Python can import a name from a .js file.
+
+3. An import binds its names even when it resolves to nothing. import { FieldType } from '@documenso/prisma/client' tells you FieldType comes from outside this repo. So a same-named local definition is definitively not it. Without this rule, 827 FieldType references were being guessed at.
+
+4. Only undotted names consult the table. In x.parse(), the name after the dot identifies nothing by itself — you'd need to know the type of x, which needs a build, which is the thing tree-sitter was chosen to avoid. Every wrong edge in the audit had this shape: SSL.Context, _client.main(), COLOR_PALETTE.red.
+
+What made all four visible was one diagnostic: most_ambiguous_names, which lists names with the worst uses-to-definitions ratio. Seeing recipient — 1 definition, 1,928 references is what started each fix. That stat exists purely for principle P2, and it earned its place four times.
+
+What's still wrong, stated plainly: documenso's meta reaches 42 route files at 1/42 each, because every React Router route exports one. Fixing that needs real scope analysis, which isn't in M1. It's measured, not denied.
+
+And names_unresolved being the majority (59–79% in every repo) is not a failure — those are local variables, parameters, stdlib functions, methods on third-party objects. It's reported so the graph's coverage is legible.
+
+Step 10 — PageRank, run twice
+What it does: scores every file by how much other code depends on it.
+
+How — PageRank is one idea: importance flows along edges, and a file is important if important files point at it. overhaul/graph/rank.py does it by repeated averaging:
+
+
+start: every file has an equal score (1/N)
+repeat up to 200 times:
+    every file gives its score away, split among the files it points at
+    each file's new score = 15% baseline + 85% of what it received
+    stop when the total change is under 1e-12
+Two design choices inside that:
+
+Edges point from user → definition. fare.py imports util.py, so importance flows to util.py. That's why util.py ranks 100.0 in the demo and fare.py ranks 0.0 — the file everything depends on is the one that matters.
+Outgoing weight is normalised per source. Every file has exactly one file's worth of importance to give away, however many things it references. Without that, a module that mentions forty things hands out forty times the endorsement of one that mentions one, and you'd be measuring verbosity, not dependence.
+The two runs — and why this is the best idea in M1
+Run it once on all edges → pagerank.
+Run it again on only the exact tier → pagerank_strict.
+The percentile gap between them → rank_delta.
+
+That turns "how confident are we in this score?" from a made-up label into a derived measurement. Delta ≤ 5 → confident. Above → ambiguous.
+
+Look at what it catches. roundup's top-ranked file is test/test_indexer.py:
+
+
+percentile:        100.0     ← #1 in the full run
+percentile_strict:   0.0     ← nowhere in the strict run
+rank_delta:        100.0
+confidence:        "ambiguous"
+The cause: class db: on line 62 of that test file. roundup's schema files use a bare db everywhere. So 87 inbound edges carrying 809 units of guessed weight land on a test file because of a two-letter name.
+
+Name-based resolution simply cannot fix that. What the dual run does is tell the reader, in the same row as the number, that the number is a guess. That's the whole philosophy in one field.
+
+Repo-wide: 34% of roundup's files are ranked ambiguously, against 6% of documenso's. Old Python with few resolvable imports is exactly where this graph is weakest — and the tool says so per repo, with a number, rather than as a general caveat.
+
+Written out by hand rather than calling networkx so the arithmetic stays auditable — then checked against networkx and found to agree to 5e-09, which is exactly the 8-decimal rounding the artifact publishes.
+
+Barrel files are also detected here: files whose outgoing edges are mostly re-exports (export * from './x'). They hold no logic but accumulate rank, because everything using anything they republish points at them. 3 of excalidraw's top 10 are barrels. Removing the re-export edges moves some file 94 percentile points. Measured, reported, deliberately not mitigated — the point of step 10 was to find out whether it mattered.
+
+Step 11 — Framework adapters
+What it does: knows that @app.route('/pay') means an HTTP endpoint.
+
+The architectural rule, and it's structural not documentary: an adapter gets a Context holding the repo, the file records and the declared dependencies — and no graph. No nodes, no edges, no ranking. It therefore cannot alter the graph, even by accident. Not a promise in a comment; the object simply doesn't contain them.
+
+Why: every edge in graph.json traces to a line of source. Framework detection is pattern matching and always will be. Mixing heuristic edges into a graph whose entire claim is traceability would cost the graph that claim.
+
+Confirmed empirically: every graph.json after step 11 is byte-identical to step 10's.
+
+How the Flask adapter works — overhaul/frameworks/flask.py:
+
+
+for each Python file:
+    does its recorded decorator list contain a *.route / *.get / *.post?   ← cheap filter
+    re-parse it, and check: does this file actually IMPORT flask?          ← the gate
+    if both: walk to the decorator node and pull out the path argument
+             and the methods=[...] keyword (default GET)
+Three rules, each of which was a false positive first:
+
+The file must import the framework. httpie has no web framework at all and was reporting @mock.patch('httpie.core.program') as PATCH httpie.core.program. roundup's own @Routing.route and documenso's Hono app.get() were being credited to Flask and Express.
+Test files excluded. The Flask repo's own test suite defines 288 toy routes.
+Files are selected by imports, never by filename. A urls.py rule sounds obvious and is wrong: django-oscar declares its routes in apps.py and its models in abstract_models.py. The filename rule found the demo site and missed the entire library — 0 real routes against 197.
+And one parsing fix: class UserAddressAdmin(admin.ModelAdmin) was being reported as a database table, because the class header was substring-tested instead of having its base classes read from the parse tree. That alone was 98 of django-oscar's 163 "models".
+
+The best outcome of this step is the two repos that now detect nothing. roundup and httpie were both producing confident-looking Flask boundaries before the import gate went in. Reporting nothing is the correct answer for a repo whose framework no adapter covers.
+
+Step 12 — External services and queues
+What it does: finds where the code talks to the outside world.
+
+How — overhaul/boundaries.py has a small, fixed, written-down dictionary: package name → what it means. stripe → external/stripe. smtplib → external/smtp. celery → queue/celery. Step 9's resolver is asked whether a specifier resolves inside the repo, rather than re-implemented.
+
+Everything from an import is marked guessed, and the reasoning is honest: an import means the service is reachable from this file. It does not mean a call happens on any path that runs. A module can import boto3 and use it in one branch that never fires in production.
+
+The one confident case is a declaration, not an inference: @shared_task doesn't make a queue reachable, it states that this function is a Celery worker. There's nothing else it could be. And it still requires the file to import Celery.
+
+Matching is on the whole top-level name. requests_mock is not requests. And an import that resolves inside the repository is never a service — roundup vendors its own cgi.py.
+
+The most important result here is what is absent. commerce talks to Shopify over plain fetch() and shows zero external boundaries. excalidraw likewise. No pattern covers them.
+
+That's why scan.md prints its completeness caveat in the first six lines of that section, above any finding. A reader who takes that list as an inventory of how the system reaches the outside world will be wrong, and the report says so before they can make the mistake.
+
+Step 13 — Skeletons
+What it does: compresses every file to signatures only. Here's fare.py, all 18 lines of it:
+
+
+def price(passenger, route):
+class Engine:
+    def run(self, req):
+How — overhaul/graph/skeletons.py walks the definitions and keeps everything up to the body, plus the first docstring line, plus decorators.
+
+Two shapes, chosen by kind rather than language:
+
+A function or class has a body of statements — the signature is the part worth keeping.
+A type, interface or enum has no body of statements. The declaration IS the content, so it's kept whole, up to a 10-line budget, then truncated visibly.
+Without that second rule, M2 would have to go back to the source file for every type — which is precisely the thing skeletons exist to avoid. 71 of excalidraw's 668 files hit the budget and say so in the output.
+
+Decorators are kept on purpose. A skeleton that drops @app.route('/pay') hides the single line saying a function is an endpoint — and steps 11 and 12 both read exactly that line.
+
+Result: 80–95% smaller. roundup/mailgw.py is 83,212 bytes of source → 6,136 bytes of skeleton (93%). Note that number was re-measured in step 14; the spec had carried 5,103 from an older prototype, and the honest thing was to publish the new number and say the old one is superseded.
+
+A parsed file that defines nothing gets an empty skeleton, not omission. 110 of excalidraw's files are like that — config files, mostly. "Parsed and empty" is a different fact from "never parsed."
+
+Step 14 — The audit
+No new features. That was the point. It asked one question of everything steps 1–13 produced: are these numbers true?
+
+103 independent re-derivations, 0 mismatches. File counts from os.walk and stat. Definitions and imports from CPython's ast. Churn for the three busiest files per repo from the git binary directly. PageRank from networkx. Nothing in that harness imports an overhaul module to compute a value.
+10,508 per-function CCNs re-checked, 0 mismatches — but only after the checker was made to encode the plugin's actual rule. The first version disagreed on 348 functions, and chasing why is what found a real limitation: CCN doesn't count a comprehension's for. An independent McCabe reads 1–2 higher on 225 functions. Definitional, recorded, deferred.
+Cross-artifact invariants on all eight repos: every graph node is a parsed file; every edge endpoint is a node; every skeleton corresponds to a parsed file; every boundary names a real non-test file with evidence; no unsupported file carries definitions; no not_computed field is emitted as a zero.
+All 22 artifacts byte-identical across runs.
+One documentation error found and fixed, and three new limitations added — all three found by reading output as a sceptic, not by any test.
