@@ -1,85 +1,115 @@
 #!/usr/bin/env python3
 """
-Standalone helper -- run this BEFORE trying run_scan.py if you have an Azure
-OpenAI base URL + key but don't know the deployment name or API version.
-
-Azure OpenAI resources expose a "list my deployments" endpoint that works
-with just the key you already have (no extra Azure login needed). This
-script tries a handful of known API-version strings against that endpoint
-until one works, then prints every deployment you have access to.
+Command-line entry point for the whole pipeline: point it at a folder or a
+zip file, and it produces a report. This exists so the core pipeline can be
+run and tested before the web upload page / dashboard exist.
 
 Usage:
-    python3 discover_azure.py https://your-resource-name.openai.azure.com your-api-key
+    export GROQ_API_KEY=gsk_...
+    python3 run_scan.py /path/to/repo_or_zip.zip
 """
 
 import json
+import os
 import sys
-import urllib.error
-import urllib.request
+import tempfile
+import time
+from dataclasses import asdict
 
-# Tried newest-first. Azure OpenAI's list-deployments endpoint has accepted
-# any of these at various points -- we just need ONE that this resource accepts.
-CANDIDATE_API_VERSIONS = [
-    "2024-10-21",
-    "2024-08-01-preview",
-    "2024-06-01",
-    "2024-02-01",
-    "2023-05-15",
-    "2023-03-15-preview",
-]
+sys.path.insert(0, os.path.dirname(__file__))
 
 
-def try_list_deployments(base_url: str, api_key: str, api_version: str):
-    base_url = base_url.rstrip("/")
-    url = f"{base_url}/openai/deployments?api-version={api_version}"
-    req = urllib.request.Request(url, headers={"api-key": api_key})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode())
+def _load_dotenv():
+    """Tiny .env loader so we don't need an extra dependency for this."""
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
+
+
+_load_dotenv()
+
+from app.intake import extract_zip, scan_and_filter
+from app.ai_analyze import analyze_files, facts_to_dicts
+from app.grouping import group_files
+from app.report import build_report, report_to_markdown
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("Usage: python3 discover_azure.py <base_url> <api_key>")
+    if len(sys.argv) != 2:
+        print("Usage: python3 run_scan.py <path-to-repo-folder-or-zip>")
         sys.exit(1)
 
-    base_url, api_key = sys.argv[1], sys.argv[2]
+    input_path = sys.argv[1]
+    repo_name = os.path.basename(input_path.rstrip("/")).replace(".zip", "")
 
-    for version in CANDIDATE_API_VERSIONS:
-        print(f"Trying API version {version} ...", end=" ")
-        try:
-            data = try_list_deployments(base_url, api_key, version)
-        except urllib.error.HTTPError as e:
-            print(f"failed ({e.code})")
-            continue
-        except Exception as e:  # noqa: BLE001
-            print(f"failed ({e})")
-            continue
+    print(f"=== Scanning: {input_path} ===\n")
 
-        deployments = data.get("data", [])
-        print("SUCCESS")
-        print()
-        print(f"This API version works: {version}")
-        print(f"Put this in your .env: AZURE_OPENAI_API_VERSION={version}")
-        print()
-        if not deployments:
-            print("No deployments found on this resource -- ask whoever gave you "
-                  "the key whether any model is actually deployed here.")
-            return
+    if input_path.lower().endswith(".zip"):
+        print("[1/5] Unzipping...")
+        tmp_dir = tempfile.mkdtemp(prefix="scan_")
+        root_dir = extract_zip(input_path, tmp_dir)
+    else:
+        root_dir = input_path
 
-        print(f"Found {len(deployments)} deployment(s) on this resource:")
-        for d in deployments:
-            print(f"  - deployment name: {d.get('id')}   (underlying model: {d.get('model')})")
-        print()
-        print("Use one of the 'deployment name' values above as AZURE_OPENAI_DEPLOYMENT.")
-        return
+    print("[2/5] Finding real source code, ignoring generated/vendor junk...")
+    intake_result = scan_and_filter(root_dir)
+    print(f"      kept {len(intake_result.kept_files)} of {intake_result.total_files_seen} files "
+          f"({intake_result.ignored_count} ignored)")
 
-    print()
-    print("None of the common API versions worked. This usually means either:")
-    print("  - the key or base URL is wrong, or")
-    print("  - this Azure resource has disabled the plain API-key access this")
-    print("    script relies on, and needs Azure AD login instead.")
-    print("In that case, go back to whoever gave you the key and ask for the")
-    print("deployment name and API version directly.")
+    print("[3/5] Sending files to AI for analysis (this is the slow step)...")
+    t0 = time.time()
+
+    def on_progress(done, total):
+        print(f"      batch {done}/{total} done", end="\r")
+
+    file_facts = analyze_files(intake_result.kept_files, progress_callback=on_progress)
+    print(f"\n      done in {time.time() - t0:.0f}s")
+
+    # Save raw results to disk as soon as we have them -- this step costs real
+    # API time/money, so a crash later (report formatting, disk write, etc.)
+    # should never mean redoing this call from scratch.
+    facts_backup_path = f"facts_{repo_name}.json"
+    with open(facts_backup_path, "w", encoding="utf-8") as f:
+        json.dump(facts_to_dicts(file_facts), f, indent=2)
+
+    print("[4/5] Grouping files into features...")
+    groups = group_files(file_facts, None)
+    print(f"      found {len(groups)} groups")
+
+    print("[5/5] Asking AI to summarize each feature...")
+    t0 = time.time()
+
+    def on_group_progress(done, total):
+        print(f"      feature {done}/{total} done", end="\r")
+
+    reports = build_report(groups, progress_callback=on_group_progress)
+    print(f"\n      done in {time.time() - t0:.0f}s")
+
+    # Same reasoning: back this up before touching markdown formatting or
+    # writing to disk, both of which have already broken once (encoding bug).
+    reports_backup_path = f"reports_{repo_name}.json"
+    with open(reports_backup_path, "w", encoding="utf-8") as f:
+        json.dump([asdict(r) for r in reports], f, indent=2)
+
+    intake_stats = {
+        "total_files_seen": intake_result.total_files_seen,
+        "ignored_count": intake_result.ignored_count,
+        "kept_count": len(intake_result.kept_files),
+    }
+    markdown = report_to_markdown(reports, repo_name, intake_stats)
+
+    out_path = f"report_{repo_name}.md"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(markdown)
+
+    print(f"\n=== Done. Report written to {out_path} ===")
 
 
 if __name__ == "__main__":
