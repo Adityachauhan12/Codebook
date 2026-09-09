@@ -1,116 +1,154 @@
-#!/usr/bin/env python3
 """
-Command-line entry point for the whole pipeline: point it at a folder or a
-zip file, and it produces a report. This exists so the core pipeline can be
-run and tested before the web upload page / dashboard exist.
+Step 3: send real source files to the AI and get back structured notes
+about each one. Works the same way regardless of what language the file
+is written in -- the questions we ask are language-neutral.
 
-Usage:
-    export GROQ_API_KEY=gsk_...
-    python3 run_scan.py /path/to/repo_or_zip.zip
+To keep the number of API calls sane on a repo with 1000+ small files,
+files are packed into batches (by total character count) and analyzed
+several at a time in one call, rather than one call per file.
 """
 
-import json
-import os
-import sys
-import tempfile
-import time
-from dataclasses import asdict
+from dataclasses import dataclass, asdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-sys.path.insert(0, os.path.dirname(__file__))
+from .ai_client import chat_json
 
+# This app is currently configured for a free-tier Groq account with an
+# 8,000-tokens-PER-MINUTE budget shared across every request. Small batches
+# and one request at a time keep us under that ceiling instead of tripping
+# it on every call. Raise these once running against a paid tier / higher
+# rate limit.
+MAX_BATCH_CHARS = 8_000
+MAX_WORKERS = 1
 
-def _load_dotenv():
-    """Tiny .env loader so we don't need an extra dependency for this."""
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    if not os.path.exists(env_path):
-        return
-    with open(env_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+SYSTEM_PROMPT = """You are analyzing files from an old business application, one \
+batch of files at a time. You do not know what language or framework each file \
+uses in advance -- figure it out from the content.
 
+For EACH file in the batch, answer these four questions:
+1. starts_action: does this file get triggered directly by something outside \
+the app -- a web request, a button click, a scheduled job, a queue message? \
+(true/false)
+2. talks_to_external: does this file directly read or write a database, call \
+another service over the network, or read/write a file? (true/false)
+3. rule_pile: does this file contain a large set of hardcoded conditions, \
+keyword checks, or lookup rules that look like someone's rough guess at human \
+judgement (as opposed to simple, obviously-correct logic like basic CRUD or \
+validation)? (true/false)
+4. summary: one plain-English sentence describing what this file does.
 
-_load_dotenv()
+Respond with ONLY a JSON array, one object per file, in this exact shape:
+[{"file": "<relative path as given>", "starts_action": true, \
+"talks_to_external": false, "rule_pile": false, "summary": "..."}]
 
-from app.intake import extract_zip, scan_and_filter
-from app.ai_analyze import analyze_files, facts_to_dicts
-from app.grouping import group_files
-from app.report import build_report, report_to_markdown
-
-
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: python3 run_scan.py <path-to-repo-folder-or-zip>")
-        sys.exit(1)
-
-    input_path = sys.argv[1]
-    repo_name = os.path.basename(input_path.rstrip("/")).replace(".zip", "")
-
-    print(f"=== Scanning: {input_path} ===\n")
-
-    if input_path.lower().endswith(".zip"):
-        print("[1/5] Unzipping...")
-        tmp_dir = tempfile.mkdtemp(prefix="scan_")
-        root_dir = extract_zip(input_path, tmp_dir)
-    else:
-        root_dir = input_path
-
-    print("[2/5] Finding real source code, ignoring generated/vendor junk...")
-    intake_result = scan_and_filter(root_dir)
-    print(f"      kept {len(intake_result.kept_files)} of {intake_result.total_files_seen} files "
-          f"({intake_result.ignored_count} ignored)")
-
-    print("[3/5] Sending files to AI for analysis (this is the slow step)...")
-    t0 = time.time()
-
-    def on_progress(done, total):
-        print(f"      batch {done}/{total} done", end="\r")
-
-    file_facts = analyze_files(intake_result.kept_files, progress_callback=on_progress)
-    print(f"\n      done in {time.time() - t0:.0f}s")
-
-    # Save raw results to disk as soon as we have them -- this step costs real
-    # API time/money, so a crash later (report formatting, disk write, etc.)
-    # should never mean redoing this call from scratch.
-    facts_backup_path = f"facts_{repo_name}.json"
-    with open(facts_backup_path, "w", encoding="utf-8") as f:
-        json.dump(facts_to_dicts(file_facts), f, indent=2)
-
-    print("[4/5] Grouping files into features...")
-    groups = group_files(file_facts, None)
-    print(f"      found {len(groups)} groups")
-
-    print("[5/5] Asking AI to summarize each feature...")
-    t0 = time.time()
-
-    def on_group_progress(done, total):
-        print(f"      feature {done}/{total} done", end="\r")
-
-    reports = build_report(groups, progress_callback=on_group_progress)
-    print(f"\n      done in {time.time() - t0:.0f}s")
-
-    # Same reasoning: back this up before touching markdown formatting or
-    # writing to disk, both of which have already broken once (encoding bug).
-    reports_backup_path = f"reports_{repo_name}.json"
-    with open(reports_backup_path, "w", encoding="utf-8") as f:
-        json.dump([asdict(r) for r in reports], f, indent=2)
-
-    intake_stats = {
-        "total_files_seen": intake_result.total_files_seen,
-        "ignored_count": intake_result.ignored_count,
-        "kept_count": len(intake_result.kept_files),
-    }
-    markdown = report_to_markdown(reports, repo_name, intake_stats)
-
-    out_path = f"report_{repo_name}.md"
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(markdown)
-
-    print(f"\n=== Done. Report written to {out_path} ===")
+No prose outside the JSON array."""
 
 
-if __name__ == "__main__":
-    main()
+@dataclass
+class FileFacts:
+    file: str
+    starts_action: bool
+    talks_to_external: bool
+    rule_pile: bool
+    summary: str
+
+
+def _make_batches(kept_files, read_content_fn):
+    """Group files into batches under MAX_BATCH_CHARS. A single very large
+    file becomes its own batch rather than being dropped."""
+    batches = []
+    current_batch = []
+    current_chars = 0
+
+    for entry in kept_files:
+        content = read_content_fn(entry)
+        content_len = len(content)
+
+        if current_batch and current_chars + content_len > MAX_BATCH_CHARS:
+            batches.append(current_batch)
+            current_batch = []
+            current_chars = 0
+
+        current_batch.append((entry, content))
+        current_chars += content_len
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
+
+def _read_file_text(entry) -> str:
+    try:
+        with open(entry.absolute_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _build_user_prompt(batch) -> str:
+    parts = []
+    for entry, content in batch:
+        parts.append(f"--- FILE: {entry.relative_path} ---\n{content}\n")
+    return "\n".join(parts)
+
+
+def _max_tokens_for_batch(batch) -> int:
+    """A batch with many small files needs proportionally more room for the
+    AI's answer -- one JSON object per file, roughly 80-100 tokens each.
+    Without this, a batch bundling 20-30 tiny files (common in repos full of
+    small interface/model files) gets its answer cut off mid-file, which
+    breaks JSON parsing entirely."""
+    per_file_budget = 120
+    fixed_overhead = 300
+    return max(1200, fixed_overhead + per_file_budget * len(batch))
+
+
+def _analyze_batch(batch, on_error):
+    prompt = _build_user_prompt(batch)
+    try:
+        raw_list = chat_json(SYSTEM_PROMPT, prompt, max_tokens=_max_tokens_for_batch(batch))
+        return [FileFacts(**item) for item in raw_list]
+    except Exception as exc:  # noqa: BLE001 - we want to keep going on any failure
+        on_error(exc, [entry.relative_path for entry, _ in batch])
+        return [
+            FileFacts(
+                file=entry.relative_path,
+                starts_action=False,
+                talks_to_external=False,
+                rule_pile=False,
+                summary="(AI analysis failed for this file, see log)",
+            )
+            for entry, _ in batch
+        ]
+
+
+def analyze_files(kept_files, progress_callback=None, error_callback=None):
+    """Runs Step 3 over every kept file. Returns a list[FileFacts].
+
+    progress_callback(done_batches, total_batches) is called after each batch.
+    error_callback(exception, list_of_filenames) is called if a batch fails.
+    """
+    batches = _make_batches(kept_files, _read_file_text)
+
+    all_facts = []
+    done = 0
+
+    def _noop_error(exc, filenames):
+        print(f"  [warning] batch failed ({exc}): {filenames}")
+
+    error_callback = error_callback or _noop_error
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = {pool.submit(_analyze_batch, b, error_callback): b for b in batches}
+        for future in as_completed(futures):
+            all_facts.extend(future.result())
+            done += 1
+            if progress_callback:
+                progress_callback(done, len(batches))
+
+    return all_facts
+
+
+def facts_to_dicts(facts):
+    return [asdict(f) for f in facts]
