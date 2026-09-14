@@ -1,119 +1,43 @@
-"""Command-line entry point.
+export default function HealthBar({ health }) {
+  if (!health) return null
 
-    python run_cli.py --list
-    python run_cli.py --repo "target\\My_Repo"
-    python run_cli.py --all
-    python run_cli.py --check
+  const backends = Object.entries(health.backends || {})
+  const installed = backends.filter(([, s]) => s.available).map(([name]) => name)
+  const active = health.knowledge_backend
+  const activeInstalled = installed.includes(active)
 
-Useful when you want to run the pipeline without starting the web UI - for
-example overnight across every repository in target/.
-"""
-from __future__ import annotations
+  return (
+    <div className={`banner ${health.ok ? 'ok' : 'warn'}`}>
+      <div className="health-row">
+        <span className="pill">
+          {health.dry_run
+            ? 'DRY RUN — offline stub, no API calls'
+            : health.api_key_configured
+              ? 'API key loaded'
+              : 'API key not set'}
+        </span>
 
-import argparse
-import sys
-from pathlib import Path
+        <span className="pill">
+          Code reader: <strong>{active}</strong>
+          {!activeInstalled && active !== 'builtin' && ' (not installed → builtin fallback)'}
+        </span>
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+        <span className="pill dim" title={health.azure_endpoint || ''}>
+          {health.provider_detail}
+        </span>
 
-from app.config import settings              # noqa: E402
-from app.knowledge.backends import probe_all  # noqa: E402
-from app.pipeline import Pipeline, discover_repos  # noqa: E402
+        <span className="pill dim">
+          OSS agents found: {installed.length ? installed.join(', ') : 'none'}
+        </span>
+      </div>
 
+      {!health.ok && <p className="health-detail">{health.detail}</p>}
 
-def check() -> int:
-    print("Agentic Codebase Analyzer - environment check\n")
-    ok, detail = settings.ready()
-    print(f"  Provider       : {settings.llm_provider}")
-    if settings.is_azure:
-        print(f"    endpoint     : {settings.azure_endpoint or '(NOT SET)'}")
-        print(f"    deployment   : {settings.azure_deployment or '(NOT SET)'}")
-        print(f"    api version  : {settings.azure_api_version}")
-        print(f"    api style    : "
-              f"{'Responses' if settings.azure_use_responses_api else 'Chat Completions'}")
-        print(f"    api key      : "
-              f"{'OK' if not settings.azure_key_is_placeholder else 'NOT SET'}")
-    else:
-        print(f"    api key      : "
-              f"{'OK' if not settings.anthropic_key_is_placeholder else 'NOT SET'}")
-    print(f"  Dry run        : {settings.dry_run}")
-    print(f"  Knowledge agent: {settings.knowledge_backend}")
-    print(f"  Models         : deep={settings.deep_model}  worker={settings.worker_model}")
-    print(f"  Target dir     : {settings.target_dir}")
-    print(f"  Reports dir    : {settings.reports_dir}\n")
-
-    print("  Open-source code-reading agents detected on this machine:")
-    for name, status in probe_all().items():
-        mark = "yes" if status.available else "no "
-        version = f" - {status.version}" if status.version else ""
-        print(f"    [{mark}] {name:<10}{version}")
-        if not status.available:
-            print(f"           {status.detail}")
-
-    print()
-    repos = discover_repos()
-    print(f"  Repositories in target/: {len(repos)}")
-    for repo in repos:
-        print(f"    - {repo['name']}")
-
-    print()
-    print(f"  Status: {detail}")
-    return 0 if ok else 1
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Analyse a codebase for agentic convertibility.")
-    parser.add_argument("--repo", help="Path to a repository to analyse")
-    parser.add_argument("--all", action="store_true", help="Analyse every repo in target/")
-    parser.add_argument("--list", action="store_true", help="List repositories in target/")
-    parser.add_argument("--check", action="store_true", help="Check environment and exit")
-    args = parser.parse_args()
-
-    if args.check:
-        return check()
-
-    if args.list:
-        for repo in discover_repos():
-            print(f"{repo['name']}\t{repo['path']}")
-        return 0
-
-    ok, detail = settings.ready()
-    if not ok:
-        print(f"\nCannot start: {detail}\n")
-        return 1
-
-    pipeline = Pipeline()
-    targets: list[Path] = []
-    if args.all:
-        targets = [Path(r["path"]) for r in discover_repos()]
-    elif args.repo:
-        targets = [Path(args.repo)]
-    else:
-        parser.print_help()
-        return 1
-
-    if not targets:
-        print("Nothing to analyse. Put a repository folder inside target/.")
-        return 1
-
-    failures = 0
-    for repo_path in targets:
-        if not repo_path.exists():
-            print(f"SKIP (not found): {repo_path}")
-            failures += 1
-            continue
-        print(f"\n{'=' * 70}\n  {repo_path.name}\n{'=' * 70}")
-        record = pipeline.execute(repo_path, on_event=lambda m: print(f"  {m}"))
-        print(f"\n  -> {record.status}")
-        if record.status == "completed":
-            directory = Path(settings.reports_dir) / record.repo_name / record.run_id
-            print(f"  -> reports in {directory}")
-        else:
-            print(f"  -> error: {record.error}")
-            failures += 1
-
-    return 1 if failures else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+      {!activeInstalled && active !== 'builtin' && (
+        <p className="health-detail">
+          {backends.find(([n]) => n === active)?.[1]?.detail}
+        </p>
+      )}
+    </div>
+  )
+}
