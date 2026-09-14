@@ -1,224 +1,165 @@
-"""LLM access layer.
-
-One job: given a system prompt, a user prompt and a JSON schema, return a dict
-that validates against that schema - reliably, with retries, caching and a
-no-API-key offline mode.
-
-The vendor lives in providers.py. Everything above this layer (the three
-agents) only calls `LLMClient.json()` and `LLMClient.text()`, so switching
-between Azure OpenAI and Anthropic changes one line in .env and nothing else.
-"""
+"""Central configuration, loaded from the .env file at the project root."""
 from __future__ import annotations
 
-import hashlib
-import json
-import logging
-import re
-import threading
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
-from ..config import settings
-from .providers import Provider, ProviderError, get_provider
+from dotenv import load_dotenv
 
-log = logging.getLogger(__name__)
+# backend/app/config.py -> backend/app -> backend -> <project root>
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-LLMError = ProviderError  # agents catch one error type regardless of vendor
+load_dotenv(PROJECT_ROOT / ".env")
+
+PLACEHOLDER_MARKERS = ("paste-your", "your-key-here", "<your", "changeme", "xxxx")
+
+
+def _str(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
+def _int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _is_placeholder(value: str) -> bool:
+    if not value:
+        return True
+    lowered = value.lower()
+    return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
 
 
 @dataclass
-class Usage:
-    """Running token tally for a whole pipeline run."""
+class Settings:
+    # --- which vendor serves the models -----------------------------------
+    llm_provider: str = field(default_factory=lambda: _str("LLM_PROVIDER", "azure").lower())
 
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_tokens: int = 0
-    calls: int = 0
-    cached_calls: int = 0
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # --- Azure OpenAI ------------------------------------------------------
+    azure_endpoint: str = field(
+        default_factory=lambda: _str("AZURE_OPENAI_ENDPOINT").rstrip("/")
+    )
+    azure_api_key: str = field(default_factory=lambda: _str("AZURE_OPENAI_API_KEY"))
+    azure_deployment: str = field(
+        default_factory=lambda: _str("AZURE_OPENAI_DEPLOYMENT", "gpt-5.3-codex")
+    )
+    azure_api_version: str = field(
+        default_factory=lambda: _str("AZURE_OPENAI_API_VERSION", "2025-04-01")
+    )
+    azure_use_responses_api: bool = field(
+        default_factory=lambda: _bool("AZURE_USE_RESPONSES_API", True)
+    )
+    # Optional second deployment for the cheap high-volume reading pass. Most
+    # Azure resources have one deployment, so this defaults to the same one.
+    azure_worker_deployment: str = field(
+        default_factory=lambda: _str("AZURE_OPENAI_WORKER_DEPLOYMENT")
+    )
 
-    def add(self, usage: dict[str, int]) -> None:
-        with self._lock:
-            self.calls += 1
-            self.input_tokens += usage.get("input_tokens", 0)
-            self.output_tokens += usage.get("output_tokens", 0)
-            self.cache_read_tokens += usage.get("cache_read_tokens", 0)
+    # --- Anthropic (alternative provider) ---------------------------------
+    anthropic_api_key: str = field(default_factory=lambda: _str("ANTHROPIC_API_KEY"))
+    anthropic_deep_model: str = field(
+        default_factory=lambda: _str("DEEP_MODEL", "claude-opus-5")
+    )
+    anthropic_worker_model: str = field(
+        default_factory=lambda: _str("WORKER_MODEL", "claude-sonnet-5")
+    )
 
-    def hit_cache(self) -> None:
-        with self._lock:
-            self.cached_calls += 1
+    # --- reasoning effort --------------------------------------------------
+    deep_effort: str = field(default_factory=lambda: _str("DEEP_EFFORT", "high"))
+    worker_effort: str = field(default_factory=lambda: _str("WORKER_EFFORT", "medium"))
 
-    def as_dict(self) -> dict[str, int]:
-        with self._lock:
-            return {
-                "calls": self.calls,
-                "cached_calls": self.cached_calls,
-                "input_tokens": self.input_tokens,
-                "output_tokens": self.output_tokens,
-                "cache_read_tokens": self.cache_read_tokens,
-            }
+    # --- knowledge stage: which open-source coding agent reads the code ---
+    knowledge_backend: str = field(
+        default_factory=lambda: _str("KNOWLEDGE_BACKEND", "aider").lower()
+    )
+    knowledge_task_timeout: int = field(
+        default_factory=lambda: _int("KNOWLEDGE_TASK_TIMEOUT", 1800)
+    )
+    max_modules: int = field(default_factory=lambda: _int("MAX_MODULES", 0))
 
+    # --- pipeline tuning ---------------------------------------------------
+    max_concurrency: int = field(default_factory=lambda: _int("MAX_CONCURRENCY", 4))
+    module_char_budget: int = field(default_factory=lambda: _int("MODULE_CHAR_BUDGET", 110_000))
+    max_files_per_module: int = field(default_factory=lambda: _int("MAX_FILES_PER_MODULE", 40))
+    llm_cache: bool = field(default_factory=lambda: _bool("LLM_CACHE", True))
+    dry_run: bool = field(default_factory=lambda: _bool("DRY_RUN", False))
 
-# --------------------------------------------------------------------------
-# JSON recovery - structured outputs make this rare, but never assume
-# --------------------------------------------------------------------------
+    target_dir: Path = field(
+        default_factory=lambda: PROJECT_ROOT / _str("TARGET_DIR", "target")
+    )
+    reports_dir: Path = field(
+        default_factory=lambda: PROJECT_ROOT / _str("REPORTS_DIR", "reports")
+    )
 
-_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+    # -- derived -----------------------------------------------------------
 
+    @property
+    def cache_dir(self) -> Path:
+        return self.reports_dir / "_llm_cache"
 
-def extract_json(text: str) -> dict[str, Any]:
-    """Pull the first JSON object out of a model response."""
-    text = (text or "").strip()
-    if not text:
-        raise LLMError("model returned an empty response")
+    @property
+    def is_azure(self) -> bool:
+        return self.llm_provider in ("azure", "azure_openai")
 
-    for candidate in (text, *(m.group(1).strip() for m in _FENCE.finditer(text))):
+    @property
+    def azure_key_is_placeholder(self) -> bool:
+        return _is_placeholder(self.azure_api_key)
+
+    @property
+    def anthropic_key_is_placeholder(self) -> bool:
+        return _is_placeholder(self.anthropic_api_key)
+
+    @property
+    def key_is_placeholder(self) -> bool:
+        """Is the key for the *selected* provider missing?"""
+        if self.is_azure:
+            return self.azure_key_is_placeholder
+        return self.anthropic_key_is_placeholder
+
+    @property
+    def deep_model(self) -> str:
+        """Model id for synthesis / BRD / convertibility."""
+        return self.azure_deployment if self.is_azure else self.anthropic_deep_model
+
+    @property
+    def worker_model(self) -> str:
+        """Model id for the high-volume pass."""
+        if self.is_azure:
+            return self.azure_worker_deployment or self.azure_deployment
+        return self.anthropic_worker_model
+
+    @property
+    def knowledge_model(self) -> str:
+        """What the external OSS coding agent should use."""
+        return self.worker_model
+
+    @property
+    def api_key(self) -> str:
+        return self.azure_api_key if self.is_azure else self.anthropic_api_key
+
+    def ready(self) -> tuple[bool, str]:
+        """Can the pipeline actually call a model right now?"""
+        if self.dry_run:
+            return True, "DRY_RUN=1 - running with the offline stub model, no API calls."
+
+        from .llm.providers import get_provider  # local import: avoids a cycle
+
         try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    # Last resort: brace matching from the first '{'.
-    start = text.find("{")
-    if start != -1:
-        depth, in_string, escaped = 0, False, False
-        for index, char in enumerate(text[start:], start):
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-            elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(text[start : index + 1])
-                    except json.JSONDecodeError:
-                        break
-    raise LLMError(f"could not parse JSON from model response: {text[:400]}")
+            return get_provider().check()
+        except Exception as exc:
+            return False, str(exc)
 
 
-# --------------------------------------------------------------------------
-# Disk cache
-# --------------------------------------------------------------------------
-
-
-class DiskCache:
-    """Content-addressed cache so re-running a repo costs nothing for unchanged parts."""
-
-    def __init__(self, directory: Path, enabled: bool = True):
-        self.dir = directory
-        self.enabled = enabled
-        if self.enabled:
-            self.dir.mkdir(parents=True, exist_ok=True)
-
-    @staticmethod
-    def key(*parts: str) -> str:
-        digest = hashlib.sha256()
-        for part in parts:
-            digest.update(part.encode("utf-8", "replace"))
-            digest.update(b"\x00")
-        return digest.hexdigest()[:40]
-
-    def get(self, key: str) -> dict[str, Any] | None:
-        if not self.enabled:
-            return None
-        path = self.dir / f"{key}.json"
-        if not path.exists():
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-
-    def put(self, key: str, value: dict[str, Any]) -> None:
-        if not self.enabled:
-            return
-        try:
-            (self.dir / f"{key}.json").write_text(
-                json.dumps(value, ensure_ascii=False), encoding="utf-8"
-            )
-        except OSError as exc:  # cache failures must never break a run
-            log.warning("could not write cache entry: %s", exc)
-
-
-# --------------------------------------------------------------------------
-# Client
-# --------------------------------------------------------------------------
-
-
-class LLMClient:
-    def __init__(self, usage: Usage | None = None, provider: Provider | None = None):
-        self.usage = usage or Usage()
-        self.cache = DiskCache(settings.cache_dir, settings.llm_cache)
-        self.provider = provider or get_provider()
-
-    def json(
-        self,
-        *,
-        system: str,
-        prompt: str,
-        schema: dict[str, Any],
-        deep: bool = False,
-        max_tokens: int = 32000,
-        label: str = "call",
-    ) -> dict[str, Any]:
-        """Ask for a response that conforms to `schema` and return it as a dict."""
-        model = settings.deep_model if deep else settings.worker_model
-        effort = settings.deep_effort if deep else settings.worker_effort
-        schema_text = json.dumps(schema, sort_keys=True)
-
-        cache_key = DiskCache.key(
-            self.provider.name, model, effort, system, prompt, schema_text, "json"
-        )
-        hit = self.cache.get(cache_key)
-        if hit is not None:
-            self.usage.hit_cache()
-            log.info("[%s] cache hit", label)
-            return hit
-
-        text, usage = self.provider.complete(
-            system=system, prompt=prompt, schema=schema, model=model,
-            effort=effort, max_tokens=max_tokens, label=label,
-        )
-        self.usage.add(usage)
-
-        result = extract_json(text)
-        self.cache.put(cache_key, result)
-        return result
-
-    def text(
-        self,
-        *,
-        system: str,
-        prompt: str,
-        deep: bool = False,
-        max_tokens: int = 32000,
-        label: str = "call",
-    ) -> str:
-        model = settings.deep_model if deep else settings.worker_model
-        effort = settings.deep_effort if deep else settings.worker_effort
-
-        cache_key = DiskCache.key(self.provider.name, model, effort, system, prompt, "text")
-        hit = self.cache.get(cache_key)
-        if hit is not None:
-            self.usage.hit_cache()
-            return hit.get("text", "")
-
-        text, usage = self.provider.complete(
-            system=system, prompt=prompt, schema=None, model=model,
-            effort=effort, max_tokens=max_tokens, label=label,
-        )
-        self.usage.add(usage)
-        self.cache.put(cache_key, {"text": text})
-        return text
+settings = Settings()
