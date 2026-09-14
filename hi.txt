@@ -1,43 +1,115 @@
-export default function HealthBar({ health }) {
-  if (!health) return null
+# ===========================================================================
+#  STEP THAT NEEDS YOUR CREDENTIALS
+#  Copy this file to  .env  and fill in the Azure block below.
+#      Windows:  copy .env.example .env
+# ===========================================================================
 
-  const backends = Object.entries(health.backends || {})
-  const installed = backends.filter(([, s]) => s.available).map(([name]) => name)
-  const active = health.knowledge_backend
-  const activeInstalled = installed.includes(active)
+# Which vendor serves the models:  azure  |  anthropic
+LLM_PROVIDER=azure
 
-  return (
-    <div className={`banner ${health.ok ? 'ok' : 'warn'}`}>
-      <div className="health-row">
-        <span className="pill">
-          {health.dry_run
-            ? 'DRY RUN — offline stub, no API calls'
-            : health.api_key_configured
-              ? 'API key loaded'
-              : 'API key not set'}
-        </span>
 
-        <span className="pill">
-          Code reader: <strong>{active}</strong>
-          {!activeInstalled && active !== 'builtin' && ' (not installed → builtin fallback)'}
-        </span>
+# ===========================================================================
+#  AZURE OPENAI  -  fill these four in
+# ===========================================================================
 
-        <span className="pill dim" title={health.azure_endpoint || ''}>
-          {health.provider_detail}
-        </span>
+# The full resource URL, e.g. https://my-resource.openai.azure.com
+# Find it in Azure AI Foundry > your resource > Overview ("Endpoint").
+# No trailing slash, no /openai path segment.
+AZURE_OPENAI_ENDPOINT=
 
-        <span className="pill dim">
-          OSS agents found: {installed.length ? installed.join(', ') : 'none'}
-        </span>
-      </div>
+# Azure AI Foundry > your resource > Keys and Endpoint > KEY 1
+AZURE_OPENAI_API_KEY=
 
-      {!health.ok && <p className="health-detail">{health.detail}</p>}
+# The DEPLOYMENT NAME you chose in Azure, not the model name. Check under
+# Azure AI Foundry > Deployments. These are often different.
+AZURE_OPENAI_DEPLOYMENT=gpt-5.3-codex
 
-      {!activeInstalled && active !== 'builtin' && (
-        <p className="health-detail">
-          {backends.find(([n]) => n === active)?.[1]?.detail}
-        </p>
-      )}
-    </div>
-  )
-}
+AZURE_OPENAI_API_VERSION=2025-04-01
+
+# Your deployment supports the Responses API. If a call ever fails with an
+# unknown-route error, set this to false to use Chat Completions instead.
+AZURE_USE_RESPONSES_API=true
+
+# Optional: a cheaper/faster second deployment for the high-volume reading
+# pass. Leave blank to use AZURE_OPENAI_DEPLOYMENT for everything.
+AZURE_OPENAI_WORKER_DEPLOYMENT=
+
+
+# ===========================================================================
+#  ANTHROPIC  -  only used when LLM_PROVIDER=anthropic. Ignore otherwise.
+# ===========================================================================
+ANTHROPIC_API_KEY=
+DEEP_MODEL=claude-opus-5
+WORKER_MODEL=claude-sonnet-5
+
+
+# ===========================================================================
+#  REASONING EFFORT
+#  Mapped to your provider's own scale.  low | medium | high | xhigh | max
+# ===========================================================================
+# Synthesis, BRD and convertibility - the passes whose quality you feel.
+DEEP_EFFORT=high
+# The high-volume per-module reading pass.
+WORKER_EFFORT=medium
+
+
+# ===========================================================================
+#  KNOWLEDGE STAGE - which open-source coding agent reads the codebase
+# ===========================================================================
+# We do not implement code comprehension ourselves. An external OSS agent
+# explores the repo with its own tools and writes structured JSON back to us.
+#
+#   aider      (default for Azure)  pip install aider-chat
+#              Uses LiteLLM, so Azure works from environment variables alone -
+#              nothing else to configure. Also has the best repo map.
+#   opencode                        npm install -g opencode-ai
+#              Lightest install, but its Azure provider may need setup in
+#              OpenCode's own config file.
+#   openhands                       pip install openhands-ai  (+ Docker Desktop)
+#   continue                        npm install -g @continuedev/cli
+#              Needs the Azure provider declared in ~/.continue/config.yaml
+#   builtin    no external tool; our own fallback reader
+#
+KNOWLEDGE_BACKEND=aider
+
+# Seconds allowed for one module-reading task before it is abandoned.
+KNOWLEDGE_TASK_TIMEOUT=1800
+
+# Cap modules analysed per run (0 = no cap). Set to 3 for a first smoke test
+# on a large repo, confirm the reports look right, then set back to 0.
+MAX_MODULES=0
+
+# --- Escape hatches -------------------------------------------------------
+# If a tool changes its CLI flags, override the whole command here instead of
+# editing Python. Placeholders: {exe} {model} {prompt} {prompt_file} {repo} {out}
+# AIDER_CMD={exe} --model {model} --message-file {prompt_file} --yes-always
+# OPENCODE_CMD={exe} run --model {model} {prompt}
+# OPENHANDS_CMD={exe} headless -f {prompt_file}
+# CONTINUE_CMD={exe} -p {prompt}
+
+
+# ===========================================================================
+#  PIPELINE TUNING
+# ===========================================================================
+# How many modules are read in parallel. Lower this if Azure rate-limits you.
+MAX_CONCURRENCY=4
+# Character budget for one module's code bundle (~4 chars per token).
+MODULE_CHAR_BUDGET=110000
+# Max files bundled per module before it is split into several modules.
+MAX_FILES_PER_MODULE=40
+# Cache responses on disk so re-runs are cheap. 1 = on, 0 = off.
+LLM_CACHE=1
+
+
+# ===========================================================================
+#  OFFLINE MODE
+#  Set to 1 to run the WHOLE pipeline with a stub model and no credentials -
+#  proves the plumbing and the UI work before you spend anything. Reports
+#  will be obviously fake.
+# ===========================================================================
+DRY_RUN=0
+
+
+# Where repos are read from and reports are written to (relative to this file)
+TARGET_DIR=target
+REPORTS_DIR=reports
