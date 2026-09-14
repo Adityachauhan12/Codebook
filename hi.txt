@@ -1,325 +1,170 @@
-"""Adapters for the open-source coding agents that do the actual code reading.
-
-Each adapter knows three things: how to check the tool is installed, how to
-build one non-interactive command, and which environment variables the tool
-needs for model access.
-
-A note on prompt delivery. These prompts are large (schema + file list), and
-Windows caps a command line at ~8,191 characters. So every adapter writes the
-prompt to a file and passes either the tool's native task-file flag or a short
-pointer prompt. Never pass the full prompt as an argument.
-
-If a tool changes its flags between versions, override the command in .env
-rather than editing this file - see `<TOOL>_CMD` below.
-"""
+"""FastAPI service behind the React console."""
 from __future__ import annotations
 
-import os
-import shlex
+import logging
+import threading
 from pathlib import Path
+from typing import Any
 
-from ..config import settings
-from .base import (
-    BackendError,
-    BackendStatus,
-    KnowledgeBackend,
-    KnowledgeTask,
-    probe_version,
-    resolve_executable,
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
+
+from .config import settings
+from .knowledge.backends import probe_all
+from .pipeline import STAGES, Pipeline, RunStore, discover_repos
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s",
 )
 
+app = FastAPI(title="Agentic Codebase Analyzer", version="1.0.0")
 
-def _litellm_env() -> dict[str, str]:
-    """Credentials for tools built on LiteLLM (Aider, OpenHands).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    LiteLLM reads Azure config from AZURE_API_KEY / AZURE_API_BASE /
-    AZURE_API_VERSION and addresses the deployment as `azure/<deployment>`.
-    We pass these explicitly rather than relying on each tool's own config
-    file, so there is exactly one place to put credentials: the project .env.
-    """
-    env: dict[str, str] = {}
+store = RunStore()
+pipeline = Pipeline(store)
+
+# run_id -> thread, so a second start request on the same run is rejected
+_active: dict[str, threading.Thread] = {}
+_active_lock = threading.Lock()
+
+
+class StartRunRequest(BaseModel):
+    repo_path: str
+    run_id: str | None = None
+
+
+@app.get("/api/health")
+def health() -> dict[str, Any]:
+    ok, detail = settings.ready()
+    backends = {
+        name: {
+            "available": status.available,
+            "detail": status.detail,
+            "executable": status.executable,
+            "version": status.version,
+        }
+        for name, status in probe_all().items()
+    }
+    provider_detail = settings.llm_provider
     if settings.is_azure:
-        if not settings.azure_key_is_placeholder:
-            env["AZURE_API_KEY"] = settings.azure_api_key
-            env["AZURE_OPENAI_API_KEY"] = settings.azure_api_key
-        env["AZURE_API_BASE"] = settings.azure_endpoint
-        env["AZURE_OPENAI_ENDPOINT"] = settings.azure_endpoint
-        env["AZURE_API_VERSION"] = settings.azure_api_version
-    elif not settings.anthropic_key_is_placeholder:
-        env["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
-    return env
-
-
-def _model_ref() -> str:
-    """How the OSS agent should name the model on its command line."""
-    if settings.is_azure:
-        # LiteLLM/Aider convention: the deployment name, not the model name.
-        return f"azure/{settings.knowledge_model}"
-    return f"anthropic/{settings.knowledge_model}"
-
-
-def _write_prompt_file(task: KnowledgeTask) -> Path:
-    prompt_path = task.output_file.parent / f"{task.task_id}.prompt.md"
-    prompt_path.parent.mkdir(parents=True, exist_ok=True)
-    prompt_path.write_text(task.render_prompt(), encoding="utf-8")
-    return prompt_path
-
-
-def _pointer_prompt(prompt_path: Path) -> str:
-    return (
-        f"Read the file at {prompt_path.as_posix()} and carry out the instructions "
-        f"in it exactly. It is a read-only analysis task that ends by writing one "
-        f"JSON file. Do not modify any other file."
-    )
-
-
-def _override_command(env_key: str, **placeholders: str) -> list[str] | None:
-    """Let .env replace a whole command line, e.g. when a tool changes its flags."""
-    template = os.getenv(env_key, "").strip()
-    if not template:
-        return None
-    parts = shlex.split(template, posix=(os.name != "nt"))
-    return [p.format(**placeholders) for p in parts]
-
-
-# --------------------------------------------------------------------------
-# OpenCode - default. Lightest install, first-class non-interactive `run`.
-# --------------------------------------------------------------------------
-
-
-class OpenCodeBackend(KnowledgeBackend):
-    name = "opencode"
-    docs_url = "https://opencode.ai  (install: npm i -g opencode-ai)"
-
-    def check(self) -> BackendStatus:
-        exe = resolve_executable("opencode", "opencode.cmd", "opencode.exe")
-        if not exe:
-            return BackendStatus(
-                False,
-                "OpenCode not found on PATH. Install with:  npm install -g opencode-ai",
-            )
-        return BackendStatus(True, "ready", exe, probe_version(exe, "--version"))
-
-    def build_command(self, repo_path: Path, task: KnowledgeTask) -> list[str]:
-        status = self.check()
-        if not status.available:
-            raise BackendError(status.detail)
-        prompt_file = _write_prompt_file(task)
-        model = _model_ref()
-
-        override = _override_command(
-            "OPENCODE_CMD",
-            exe=status.executable,
-            model=model,
-            prompt=_pointer_prompt(prompt_file),
-            prompt_file=prompt_file.as_posix(),
-            repo=repo_path.as_posix(),
-            out=task.output_file.as_posix(),
-        )
-        if override:
-            return override
-
-        return [status.executable, "run", "--model", model, _pointer_prompt(prompt_file)]
-
-    def environment(self) -> dict[str, str]:
-        env = _litellm_env()
-        if settings.is_azure:
-            # OpenCode's Azure provider is configured through its own config
-            # file rather than env vars alone. These help, but if OpenCode
-            # cannot reach Azure on your machine, switch to KNOWLEDGE_BACKEND=aider
-            # - LiteLLM's Azure support is purely env-var driven and needs no setup.
-            env["AZURE_RESOURCE_NAME"] = _azure_resource_name()
-            env["OPENAI_API_KEY"] = settings.azure_api_key
-            env["OPENAI_BASE_URL"] = settings.azure_endpoint
-        return env
-
-
-def _azure_resource_name() -> str:
-    """Extract `myresource` from https://myresource.openai.azure.com"""
-    endpoint = settings.azure_endpoint.replace("https://", "").replace("http://", "")
-    return endpoint.split(".")[0] if endpoint else ""
-
-
-# --------------------------------------------------------------------------
-# Aider - strongest repo map (tree-sitter); pip install, very Windows friendly.
-# --------------------------------------------------------------------------
-
-
-class AiderBackend(KnowledgeBackend):
-    name = "aider"
-    docs_url = "https://aider.chat  (install: pip install aider-install && aider-install)"
-
-    def check(self) -> BackendStatus:
-        exe = resolve_executable("aider", "aider.exe", "aider.cmd")
-        if not exe:
-            return BackendStatus(
-                False, "Aider not found on PATH. Install with:  python -m pip install aider-chat"
-            )
-        return BackendStatus(True, "ready", exe, probe_version(exe, "--version"))
-
-    def build_command(self, repo_path: Path, task: KnowledgeTask) -> list[str]:
-        status = self.check()
-        if not status.available:
-            raise BackendError(status.detail)
-        prompt_file = _write_prompt_file(task)
-        model = _model_ref()
-
-        override = _override_command(
-            "AIDER_CMD",
-            exe=status.executable,
-            model=model,
-            prompt=_pointer_prompt(prompt_file),
-            prompt_file=prompt_file.as_posix(),
-            repo=repo_path.as_posix(),
-            out=task.output_file.as_posix(),
-        )
-        if override:
-            return override
-
-        return [
-            status.executable,
-            "--model", model,
-            "--message-file", str(prompt_file),
-            "--yes-always",          # non-interactive
-            "--no-auto-commits",     # never touch the target repo's history
-            "--no-gitignore",
-            "--no-check-update",
-            "--no-show-model-warnings",
-            "--map-tokens", "4096",  # aider's repo map is the reason to use it
-        ]
-
-    def environment(self) -> dict[str, str]:
-        env = _litellm_env()
-        env["AIDER_ANALYTICS"] = "false"
-        return env
-
-
-# --------------------------------------------------------------------------
-# OpenHands - heaviest, most autonomous. Needs Docker Desktop on Windows.
-# --------------------------------------------------------------------------
-
-
-class OpenHandsBackend(KnowledgeBackend):
-    name = "openhands"
-    docs_url = "https://docs.all-hands.dev  (install: pip install openhands-ai)"
-
-    def check(self) -> BackendStatus:
-        exe = resolve_executable("openhands", "openhands.exe", "openhands.cmd")
-        if exe:
-            return BackendStatus(True, "ready", exe, probe_version(exe, "--version"))
-        # Fall back to the module entry point if the console script is absent.
-        import importlib.util
-
-        if importlib.util.find_spec("openhands") is not None:
-            import sys
-
-            return BackendStatus(True, "ready (module entry point)", sys.executable, None)
-        return BackendStatus(
-            False,
-            "OpenHands not found. Install with:  python -m pip install openhands-ai "
-            "(Docker Desktop must also be running for its sandbox).",
+        provider_detail = (
+            f"Azure OpenAI · {settings.azure_deployment} · "
+            f"{'Responses' if settings.azure_use_responses_api else 'Chat'} API "
+            f"· {settings.azure_api_version}"
         )
 
-    def build_command(self, repo_path: Path, task: KnowledgeTask) -> list[str]:
-        status = self.check()
-        if not status.available:
-            raise BackendError(status.detail)
-        prompt_file = _write_prompt_file(task)
+    return {
+        "ok": ok,
+        "detail": detail,
+        "api_key_configured": not settings.key_is_placeholder,
+        "dry_run": settings.dry_run,
+        "provider": settings.llm_provider,
+        "provider_detail": provider_detail,
+        "azure_endpoint": settings.azure_endpoint if settings.is_azure else None,
+        "knowledge_backend": settings.knowledge_backend,
+        "knowledge_model": settings.knowledge_model,
+        "deep_model": settings.deep_model,
+        "worker_model": settings.worker_model,
+        "backends": backends,
+        "target_dir": str(settings.target_dir),
+        "reports_dir": str(settings.reports_dir),
+        "stages": [{"key": k, "label": l} for k, l in STAGES],
+    }
 
-        override = _override_command(
-            "OPENHANDS_CMD",
-            exe=status.executable,
-            model=settings.knowledge_model,
-            prompt=_pointer_prompt(prompt_file),
-            prompt_file=prompt_file.as_posix(),
-            repo=repo_path.as_posix(),
-            out=task.output_file.as_posix(),
+
+@app.get("/api/repos")
+def repos() -> dict[str, Any]:
+    return {"repos": discover_repos()}
+
+
+@app.get("/api/runs")
+def runs() -> dict[str, Any]:
+    return {"runs": store.list_runs()}
+
+
+@app.post("/api/runs")
+def start_run(request: StartRunRequest) -> dict[str, Any]:
+    repo_path = Path(request.repo_path)
+    if not repo_path.exists() or not repo_path.is_dir():
+        raise HTTPException(404, f"Repository not found: {request.repo_path}")
+
+    ok, detail = settings.ready()
+    if not ok:
+        raise HTTPException(400, detail)
+
+    run_id = request.run_id or pipeline.new_run_id()
+
+    with _active_lock:
+        if run_id in _active and _active[run_id].is_alive():
+            raise HTTPException(409, f"Run {run_id} is already in progress")
+
+        thread = threading.Thread(
+            target=pipeline.execute,
+            kwargs={"repo_path": repo_path, "run_id": run_id},
+            daemon=True,
+            name=f"run-{run_id}",
         )
-        if override:
-            return override
+        _active[run_id] = thread
+        thread.start()
 
-        if status.detail.startswith("ready (module"):
-            return [status.executable, "-m", "openhands.core.main", "-f", str(prompt_file)]
-        return [status.executable, "headless", "-f", str(prompt_file)]
-
-    def environment(self) -> dict[str, str]:
-        env = _litellm_env()
-        env["LLM_MODEL"] = _model_ref()
-        env["LLM_API_KEY"] = settings.api_key
-        if settings.is_azure:
-            env["LLM_BASE_URL"] = settings.azure_endpoint
-            env["LLM_API_VERSION"] = settings.azure_api_version
-        env["WORKSPACE_BASE"] = str(settings.target_dir)
-        env["LOG_ALL_EVENTS"] = "false"
-        return env
+    return {"run_id": run_id, "repo_name": repo_path.name, "status": "running"}
 
 
-# --------------------------------------------------------------------------
-# Continue CLI - headless mode of the Continue project.
-# --------------------------------------------------------------------------
+@app.get("/api/runs/{repo_name}/{run_id}")
+def get_run(repo_name: str, run_id: str) -> dict[str, Any]:
+    record = store.load(repo_name, run_id)
+    if record is None:
+        raise HTTPException(404, "Run not found")
+    return record.to_dict()
 
 
-class ContinueBackend(KnowledgeBackend):
-    name = "continue"
-    docs_url = "https://continue.dev  (install: npm i -g @continuedev/cli)"
-
-    def check(self) -> BackendStatus:
-        exe = resolve_executable("cn", "cn.cmd", "continue", "continue.cmd")
-        if not exe:
-            return BackendStatus(
-                False, "Continue CLI not found. Install with:  npm install -g @continuedev/cli"
-            )
-        return BackendStatus(True, "ready", exe, probe_version(exe, "--version"))
-
-    def build_command(self, repo_path: Path, task: KnowledgeTask) -> list[str]:
-        status = self.check()
-        if not status.available:
-            raise BackendError(status.detail)
-        prompt_file = _write_prompt_file(task)
-
-        override = _override_command(
-            "CONTINUE_CMD",
-            exe=status.executable,
-            model=settings.knowledge_model,
-            prompt=_pointer_prompt(prompt_file),
-            prompt_file=prompt_file.as_posix(),
-            repo=repo_path.as_posix(),
-            out=task.output_file.as_posix(),
-        )
-        if override:
-            return override
-
-        return [status.executable, "-p", _pointer_prompt(prompt_file)]
-
-    def environment(self) -> dict[str, str]:
-        # Continue reads its model config from ~/.continue/config.yaml. Env vars
-        # alone are not enough for Azure - configure the provider there, or use
-        # KNOWLEDGE_BACKEND=aider instead.
-        return _litellm_env()
+@app.get("/api/runs/{repo_name}/{run_id}/artifacts/{name}", response_class=PlainTextResponse)
+def get_artifact(repo_name: str, run_id: str, name: str) -> str:
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(400, "Invalid artifact name")
+    content = store.read_artifact(repo_name, run_id, name)
+    if content is None:
+        raise HTTPException(404, f"Artifact not found: {name}")
+    return content
 
 
-# --------------------------------------------------------------------------
-# Registry
-# --------------------------------------------------------------------------
+@app.get("/api/portfolio")
+def portfolio() -> dict[str, Any]:
+    """Cross-repository view - the reason this is a platform and not a script."""
+    summary: list[dict[str, Any]] = []
+    for run in store.list_runs():
+        if run.get("status") != "completed":
+            continue
+        conv = store.read_artifact(run["repo_name"], run["run_id"], "convertibility.json")
+        readiness, candidates = None, 0
+        if conv:
+            import json
 
-BACKENDS: dict[str, type[KnowledgeBackend]] = {
-    "opencode": OpenCodeBackend,
-    "aider": AiderBackend,
-    "openhands": OpenHandsBackend,
-    "continue": ContinueBackend,
-}
-
-
-def get_backend(name: str | None = None) -> KnowledgeBackend:
-    key = (name or settings.knowledge_backend).strip().lower()
-    if key not in BACKENDS:
-        raise BackendError(
-            f"Unknown KNOWLEDGE_BACKEND '{key}'. Choose one of: "
-            f"{', '.join(sorted(BACKENDS))}, or 'builtin'."
-        )
-    return BACKENDS[key]()
-
-
-def probe_all() -> dict[str, BackendStatus]:
-    """What is actually installed on this machine? Surfaced in the UI."""
-    return {name: cls().check() for name, cls in BACKENDS.items()}
+            try:
+                data = json.loads(conv)
+                readiness = (data.get("overall") or {}).get("agentic_readiness_score")
+                candidates = len(data.get("candidates") or [])
+            except json.JSONDecodeError:
+                pass
+        stats = run.get("stats") or {}
+        summary.append({
+            "repo_name": run["repo_name"],
+            "run_id": run["run_id"],
+            "started_at": run.get("started_at"),
+            "stacks": stats.get("stacks") or [],
+            "languages": list((stats.get("languages") or {}).keys())[:6],
+            "source_files": stats.get("total_source_files"),
+            "lines": stats.get("total_lines"),
+            "readiness": readiness,
+            "candidates": candidates,
+        })
+    return {"portfolio": summary}
