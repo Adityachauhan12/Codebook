@@ -1,154 +1,468 @@
+"""Model providers.
+
+The three agents never talk to a vendor SDK directly - they call
+`LLMClient.json()` and get back a dict. This module is the only place that
+knows whether that dict came from Azure OpenAI, Anthropic, or a stub.
+
+Adding a provider means implementing `complete()` and registering it below.
 """
-Step 3: send real source files to the AI and get back structured notes
-about each one. Works the same way regardless of what language the file
-is written in -- the questions we ask are language-neutral.
+from __future__ import annotations
 
-To keep the number of API calls sane on a repo with 1000+ small files,
-files are packed into batches (by total character count) and analyzed
-several at a time in one call, rather than one call per file.
-"""
+import json
+import logging
+import random
+import time
+from abc import ABC, abstractmethod
+from typing import Any
 
-from dataclasses import dataclass, asdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from ..config import settings
 
-from .ai_client import chat_json
-
-# This app is currently configured for a free-tier Groq account with an
-# 8,000-tokens-PER-MINUTE budget shared across every request. Small batches
-# and one request at a time keep us under that ceiling instead of tripping
-# it on every call. Raise these once running against a paid tier / higher
-# rate limit.
-MAX_BATCH_CHARS = 8_000
-MAX_WORKERS = 1
-
-SYSTEM_PROMPT = """You are analyzing files from an old business application, one \
-batch of files at a time. You do not know what language or framework each file \
-uses in advance -- figure it out from the content.
-
-For EACH file in the batch, answer these four questions:
-1. starts_action: does this file get triggered directly by something outside \
-the app -- a web request, a button click, a scheduled job, a queue message? \
-(true/false)
-2. talks_to_external: does this file directly read or write a database, call \
-another service over the network, or read/write a file? (true/false)
-3. rule_pile: does this file contain a large set of hardcoded conditions, \
-keyword checks, or lookup rules that look like someone's rough guess at human \
-judgement (as opposed to simple, obviously-correct logic like basic CRUD or \
-validation)? (true/false)
-4. summary: one plain-English sentence describing what this file does.
-
-Respond with ONLY a JSON array, one object per file, in this exact shape:
-[{"file": "<relative path as given>", "starts_action": true, \
-"talks_to_external": false, "rule_pile": false, "summary": "..."}]
-
-No prose outside the JSON array."""
+log = logging.getLogger(__name__)
 
 
-@dataclass
-class FileFacts:
-    file: str
-    starts_action: bool
-    talks_to_external: bool
-    rule_pile: bool
-    summary: str
+class ProviderError(RuntimeError):
+    pass
 
 
-def _make_batches(kept_files, read_content_fn):
-    """Group files into batches under MAX_BATCH_CHARS. A single very large
-    file becomes its own batch rather than being dropped."""
-    batches = []
-    current_batch = []
-    current_chars = 0
+class Provider(ABC):
+    name: str = "abstract"
 
-    for entry in kept_files:
-        content = read_content_fn(entry)
-        content_len = len(content)
+    @abstractmethod
+    def check(self) -> tuple[bool, str]:
+        """Is this provider configured well enough to make a call?"""
 
-        if current_batch and current_chars + content_len > MAX_BATCH_CHARS:
-            batches.append(current_batch)
-            current_batch = []
-            current_chars = 0
-
-        current_batch.append((entry, content))
-        current_chars += content_len
-
-    if current_batch:
-        batches.append(current_batch)
-
-    return batches
+    @abstractmethod
+    def complete(
+        self,
+        *,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any] | None,
+        model: str,
+        effort: str,
+        max_tokens: int,
+        label: str,
+    ) -> tuple[str, dict[str, int]]:
+        """Return (text, usage). When `schema` is given, text must be JSON."""
 
 
-def _read_file_text(entry) -> str:
-    try:
-        with open(entry.absolute_path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()
-    except OSError:
-        return ""
+# ===========================================================================
+# Azure OpenAI
+# ===========================================================================
+
+# Our effort vocabulary is Anthropic's five levels; OpenAI reasoning models
+# take four. Map rather than leak vendor vocabulary into the agents.
+_EFFORT_TO_OPENAI = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "high",
+    "max": "high",
+}
 
 
-def _build_user_prompt(batch) -> str:
-    parts = []
-    for entry, content in batch:
-        parts.append(f"--- FILE: {entry.relative_path} ---\n{content}\n")
-    return "\n".join(parts)
+class AzureOpenAIProvider(Provider):
+    """Azure OpenAI, via either the Responses API or Chat Completions.
 
-
-def _max_tokens_for_batch(batch) -> int:
-    """A batch with many small files needs proportionally more room for the
-    AI's answer -- one JSON object per file, roughly 80-100 tokens each.
-    Without this, a batch bundling 20-30 tiny files (common in repos full of
-    small interface/model files) gets its answer cut off mid-file, which
-    breaks JSON parsing entirely."""
-    per_file_budget = 120
-    fixed_overhead = 300
-    return max(1200, fixed_overhead + per_file_budget * len(batch))
-
-
-def _analyze_batch(batch, on_error):
-    prompt = _build_user_prompt(batch)
-    try:
-        raw_list = chat_json(SYSTEM_PROMPT, prompt, max_tokens=_max_tokens_for_batch(batch))
-        return [FileFacts(**item) for item in raw_list]
-    except Exception as exc:  # noqa: BLE001 - we want to keep going on any failure
-        on_error(exc, [entry.relative_path for entry, _ in batch])
-        return [
-            FileFacts(
-                file=entry.relative_path,
-                starts_action=False,
-                talks_to_external=False,
-                rule_pile=False,
-                summary="(AI analysis failed for this file, see log)",
-            )
-            for entry, _ in batch
-        ]
-
-
-def analyze_files(kept_files, progress_callback=None, error_callback=None):
-    """Runs Step 3 over every kept file. Returns a list[FileFacts].
-
-    progress_callback(done_batches, total_batches) is called after each batch.
-    error_callback(exception, list_of_filenames) is called if a batch fails.
+    Azure's API surface moves between versions and between model families -
+    GPT-5.x reasoning deployments in particular rejected several parameters
+    that older deployments required. Rather than pin to one exact shape, every
+    call goes through `_attempt_with_fallbacks`, which drops a parameter and
+    retries when the service says it is unsupported. That turns a hard failure
+    on an unexpected API version into a slightly less capable call.
     """
-    batches = _make_batches(kept_files, _read_file_text)
 
-    all_facts = []
-    done = 0
+    name = "azure_openai"
 
-    def _noop_error(exc, filenames):
-        print(f"  [warning] batch failed ({exc}): {filenames}")
+    def __init__(self) -> None:
+        self._client = None
 
-    error_callback = error_callback or _noop_error
+    def check(self) -> tuple[bool, str]:
+        if not settings.azure_endpoint:
+            return False, "AZURE_OPENAI_ENDPOINT is not set in .env"
+        if settings.azure_key_is_placeholder:
+            return False, "AZURE_OPENAI_API_KEY is not set in .env"
+        if not settings.azure_deployment:
+            return False, "AZURE_OPENAI_DEPLOYMENT is not set in .env"
+        return True, (
+            f"Azure OpenAI ready - deployment '{settings.azure_deployment}', "
+            f"API version {settings.azure_api_version}, "
+            f"{'Responses' if settings.azure_use_responses_api else 'Chat Completions'} API"
+        )
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(_analyze_batch, b, error_callback): b for b in batches}
-        for future in as_completed(futures):
-            all_facts.extend(future.result())
-            done += 1
-            if progress_callback:
-                progress_callback(done, len(batches))
+    def _get_client(self):
+        if self._client is not None:
+            return self._client
+        ok, detail = self.check()
+        if not ok:
+            raise ProviderError(detail)
+        try:
+            from openai import AzureOpenAI
+        except ImportError as exc:
+            raise ProviderError(
+                "The 'openai' package is not installed. Run:\n"
+                "  backend\\.venv\\Scripts\\python.exe -m pip install -r backend\\requirements.txt"
+            ) from exc
 
-    return all_facts
+        self._client = AzureOpenAI(
+            azure_endpoint=settings.azure_endpoint,
+            api_key=settings.azure_api_key,
+            api_version=settings.azure_api_version,
+            timeout=900.0,
+            max_retries=3,
+        )
+        return self._client
+
+    # -- public -----------------------------------------------------------
+
+    def complete(
+        self,
+        *,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any] | None,
+        model: str,
+        effort: str,
+        max_tokens: int,
+        label: str,
+    ) -> tuple[str, dict[str, int]]:
+        client = self._get_client()
+        deployment = model or settings.azure_deployment
+
+        if settings.azure_use_responses_api:
+            return self._via_responses(client, deployment, system, prompt, schema,
+                                       effort, max_tokens, label)
+        return self._via_chat(client, deployment, system, prompt, schema,
+                              effort, max_tokens, label)
+
+    # -- Responses API ----------------------------------------------------
+
+    def _via_responses(self, client, deployment, system, prompt, schema,
+                       effort, max_tokens, label):
+        kwargs: dict[str, Any] = {
+            "model": deployment,
+            "instructions": system,
+            "input": prompt,
+            "max_output_tokens": max_tokens,
+            "reasoning": {"effort": _EFFORT_TO_OPENAI.get(effort, "medium")},
+        }
+        if schema:
+            kwargs["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": "analysis_result",
+                    "schema": schema,
+                    "strict": True,
+                }
+            }
+
+        response = self._attempt_with_fallbacks(
+            lambda payload: client.responses.create(**payload),
+            kwargs,
+            optional_keys=["reasoning", "max_output_tokens", "text"],
+            label=label,
+        )
+
+        text = getattr(response, "output_text", None)
+        if not text:
+            text = _harvest_responses_text(response)
+        return text or "", _usage_from(response)
+
+    # -- Chat Completions -------------------------------------------------
+
+    def _via_chat(self, client, deployment, system, prompt, schema,
+                  effort, max_tokens, label):
+        kwargs: dict[str, Any] = {
+            "model": deployment,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "max_completion_tokens": max_tokens,
+            "reasoning_effort": _EFFORT_TO_OPENAI.get(effort, "medium"),
+        }
+        if schema:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "analysis_result",
+                    "schema": schema,
+                    "strict": True,
+                },
+            }
+
+        response = self._attempt_with_fallbacks(
+            lambda payload: client.chat.completions.create(**payload),
+            kwargs,
+            # If this deployment predates the newer names, fall back in this
+            # order; `max_tokens` is retried explicitly below.
+            optional_keys=["reasoning_effort", "response_format"],
+            label=label,
+            rename_on_failure={"max_completion_tokens": "max_tokens"},
+        )
+
+        text = ""
+        if getattr(response, "choices", None):
+            text = response.choices[0].message.content or ""
+        return text, _usage_from(response)
+
+    # -- resilience -------------------------------------------------------
+
+    def _attempt_with_fallbacks(
+        self,
+        call,
+        kwargs: dict[str, Any],
+        optional_keys: list[str],
+        label: str,
+        rename_on_failure: dict[str, str] | None = None,
+        max_attempts: int = 5,
+    ):
+        """Call the API, shedding unsupported parameters as the service objects."""
+        import openai
+
+        payload = dict(kwargs)
+        dropped: list[str] = []
+        attempt = 0
+        last_error: Exception | None = None
+
+        while attempt < max_attempts:
+            try:
+                return call(payload)
+
+            except openai.BadRequestError as exc:
+                message = str(exc)
+                changed = False
+
+                # Some API versions want the older parameter name.
+                for new_name, old_name in (rename_on_failure or {}).items():
+                    if new_name in payload and new_name in message:
+                        payload[old_name] = payload.pop(new_name)
+                        log.warning("[%s] %s rejected, retrying as %s", label, new_name, old_name)
+                        changed = True
+                        break
+
+                if not changed:
+                    for key in optional_keys:
+                        if key in payload and (key in message or "unsupported" in message.lower()):
+                            payload.pop(key)
+                            dropped.append(key)
+                            log.warning(
+                                "[%s] deployment rejected '%s' - retrying without it", label, key
+                            )
+                            changed = True
+                            break
+
+                if not changed:
+                    raise ProviderError(
+                        f"[{label}] Azure rejected the request: {message}\n\n"
+                        f"Check that AZURE_OPENAI_DEPLOYMENT ('{settings.azure_deployment}') and "
+                        f"AZURE_OPENAI_API_VERSION ('{settings.azure_api_version}') in .env match "
+                        f"your Azure resource."
+                    ) from exc
+
+                attempt += 1
+                last_error = exc
+                continue
+
+            except openai.AuthenticationError as exc:
+                raise ProviderError(
+                    "Azure rejected your API key. Check AZURE_OPENAI_API_KEY in .env, and that "
+                    "AZURE_OPENAI_ENDPOINT points at the same resource the key belongs to."
+                ) from exc
+
+            except openai.NotFoundError as exc:
+                raise ProviderError(
+                    f"Azure could not find deployment '{payload.get('model')}'. The value of "
+                    f"AZURE_OPENAI_DEPLOYMENT must be the *deployment name* you chose in Azure "
+                    f"(Azure AI Foundry > Deployments), which is often different from the "
+                    f"underlying model name."
+                ) from exc
+
+            except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError) as exc:
+                last_error = exc
+                delay = min(2.0 * (2**attempt) + random.uniform(0, 1.5), 60.0)
+                log.warning("[%s] transient error, retry in %.1fs", label, delay)
+                time.sleep(delay)
+                attempt += 1
+
+            except openai.APIStatusError as exc:
+                if exc.status_code < 500:
+                    raise ProviderError(f"[{label}] Azure error {exc.status_code}: {exc}") from exc
+                last_error = exc
+                time.sleep(min(2.0 * (2**attempt), 60.0))
+                attempt += 1
+
+        raise ProviderError(f"[{label}] gave up after {max_attempts} attempts: {last_error}")
 
 
-def facts_to_dicts(facts):
-    return [asdict(f) for f in facts]
+def _harvest_responses_text(response: Any) -> str:
+    """Pull assistant text out of a Responses API result without output_text."""
+    chunks: list[str] = []
+    for item in getattr(response, "output", None) or []:
+        for block in getattr(item, "content", None) or []:
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                chunks.append(text)
+    return "".join(chunks)
+
+
+def _usage_from(response: Any) -> dict[str, int]:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+    return {
+        # Responses API uses input/output; Chat Completions uses prompt/completion.
+        "input_tokens": getattr(usage, "input_tokens", None)
+        or getattr(usage, "prompt_tokens", 0) or 0,
+        "output_tokens": getattr(usage, "output_tokens", None)
+        or getattr(usage, "completion_tokens", 0) or 0,
+        "cache_read_tokens": 0,
+    }
+
+
+# ===========================================================================
+# Anthropic
+# ===========================================================================
+
+
+class AnthropicProvider(Provider):
+    name = "anthropic"
+
+    def __init__(self) -> None:
+        self._client = None
+
+    def check(self) -> tuple[bool, str]:
+        if settings.anthropic_key_is_placeholder:
+            return False, "ANTHROPIC_API_KEY is not set in .env"
+        return True, "Anthropic ready"
+
+    def _get_client(self):
+        if self._client is not None:
+            return self._client
+        ok, detail = self.check()
+        if not ok:
+            raise ProviderError(detail)
+        try:
+            import anthropic
+        except ImportError as exc:
+            raise ProviderError("The 'anthropic' package is not installed.") from exc
+        self._client = anthropic.Anthropic(
+            api_key=settings.anthropic_api_key, timeout=900.0, max_retries=3
+        )
+        return self._client
+
+    def complete(
+        self,
+        *,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any] | None,
+        model: str,
+        effort: str,
+        max_tokens: int,
+        label: str,
+    ) -> tuple[str, dict[str, int]]:
+        import anthropic
+
+        client = self._get_client()
+        output_config: dict[str, Any] = {"effort": effort}
+        if schema:
+            output_config["format"] = {"type": "json_schema", "schema": schema}
+
+        kwargs = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": [{"role": "user", "content": prompt}],
+            "output_config": output_config,
+        }
+
+        for attempt in range(5):
+            try:
+                with client.messages.stream(**kwargs) as stream:
+                    response = stream.get_final_message()
+                if response.stop_reason == "refusal":
+                    raise ProviderError(f"[{label}] the model declined this request")
+                text = "".join(b.text for b in response.content if b.type == "text")
+                usage = response.usage
+                return text, {
+                    "input_tokens": usage.input_tokens or 0,
+                    "output_tokens": usage.output_tokens or 0,
+                    "cache_read_tokens": getattr(usage, "cache_read_input_tokens", 0) or 0,
+                }
+            except anthropic.AuthenticationError as exc:
+                raise ProviderError("Anthropic rejected your API key.") from exc
+            except anthropic.BadRequestError as exc:
+                raise ProviderError(f"[{label}] request rejected: {exc}") from exc
+            except (anthropic.RateLimitError, anthropic.APIConnectionError,
+                    anthropic.APITimeoutError, anthropic.APIStatusError) as exc:
+                if isinstance(exc, anthropic.APIStatusError) and exc.status_code < 500:
+                    raise ProviderError(f"[{label}] API error: {exc}") from exc
+                time.sleep(min(2.0 * (2**attempt) + random.uniform(0, 1.5), 60.0))
+
+        raise ProviderError(f"[{label}] gave up after 5 attempts")
+
+
+# ===========================================================================
+# Offline stub
+# ===========================================================================
+
+
+class StubProvider(Provider):
+    """DRY_RUN. Produces schema-shaped placeholder data so the whole pipeline,
+    the renderers and the UI can be exercised without a key or a bill."""
+
+    name = "stub"
+
+    def check(self) -> tuple[bool, str]:
+        return True, "DRY_RUN - offline stub, no API calls"
+
+    def complete(self, *, system, prompt, schema, model, effort, max_tokens, label):
+        if schema is None:
+            return f"[DRY_RUN stub output for: {label}]", _zero_usage()
+        return json.dumps(_shape(schema, label)), _zero_usage()
+
+
+def _zero_usage() -> dict[str, int]:
+    return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+
+
+def _shape(node: dict[str, Any], label: str, name: str = "") -> Any:
+    node_type = node.get("type")
+    if node_type == "object":
+        return {k: _shape(v, label, k) for k, v in node.get("properties", {}).items()}
+    if node_type == "array":
+        return [_shape(node.get("items", {"type": "string"}), label, name)]
+    if node_type == "integer":
+        return 3
+    if node_type == "number":
+        return 3.0
+    if node_type == "boolean":
+        return True
+    if "enum" in node:
+        return node["enum"][0]
+    return f"[DRY_RUN placeholder: {name or label}]"
+
+
+# ===========================================================================
+# Registry
+# ===========================================================================
+
+PROVIDERS: dict[str, type[Provider]] = {
+    "azure": AzureOpenAIProvider,
+    "azure_openai": AzureOpenAIProvider,
+    "anthropic": AnthropicProvider,
+}
+
+
+def get_provider() -> Provider:
+    if settings.dry_run:
+        return StubProvider()
+    key = settings.llm_provider.strip().lower()
+    if key not in PROVIDERS:
+        raise ProviderError(
+            f"Unknown LLM_PROVIDER '{key}'. Valid values: azure, anthropic."
+        )
+    return PROVIDERS[key]()
