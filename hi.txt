@@ -1,165 +1,325 @@
-"""Central configuration, loaded from the .env file at the project root."""
+"""Adapters for the open-source coding agents that do the actual code reading.
+
+Each adapter knows three things: how to check the tool is installed, how to
+build one non-interactive command, and which environment variables the tool
+needs for model access.
+
+A note on prompt delivery. These prompts are large (schema + file list), and
+Windows caps a command line at ~8,191 characters. So every adapter writes the
+prompt to a file and passes either the tool's native task-file flag or a short
+pointer prompt. Never pass the full prompt as an argument.
+
+If a tool changes its flags between versions, override the command in .env
+rather than editing this file - see `<TOOL>_CMD` below.
+"""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+import shlex
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-# backend/app/config.py -> backend/app -> backend -> <project root>
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-load_dotenv(PROJECT_ROOT / ".env")
-
-PLACEHOLDER_MARKERS = ("paste-your", "your-key-here", "<your", "changeme", "xxxx")
-
-
-def _str(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+from ..config import settings
+from .base import (
+    BackendError,
+    BackendStatus,
+    KnowledgeBackend,
+    KnowledgeTask,
+    probe_version,
+    resolve_executable,
+)
 
 
-def _int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, "").strip() or default)
-    except ValueError:
-        return default
+def _litellm_env() -> dict[str, str]:
+    """Credentials for tools built on LiteLLM (Aider, OpenHands).
+
+    LiteLLM reads Azure config from AZURE_API_KEY / AZURE_API_BASE /
+    AZURE_API_VERSION and addresses the deployment as `azure/<deployment>`.
+    We pass these explicitly rather than relying on each tool's own config
+    file, so there is exactly one place to put credentials: the project .env.
+    """
+    env: dict[str, str] = {}
+    if settings.is_azure:
+        if not settings.azure_key_is_placeholder:
+            env["AZURE_API_KEY"] = settings.azure_api_key
+            env["AZURE_OPENAI_API_KEY"] = settings.azure_api_key
+        env["AZURE_API_BASE"] = settings.azure_endpoint
+        env["AZURE_OPENAI_ENDPOINT"] = settings.azure_endpoint
+        env["AZURE_API_VERSION"] = settings.azure_api_version
+    elif not settings.anthropic_key_is_placeholder:
+        env["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+    return env
 
 
-def _bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name, "").strip().lower()
-    if raw in ("1", "true", "yes", "on"):
-        return True
-    if raw in ("0", "false", "no", "off"):
-        return False
-    return default
+def _model_ref() -> str:
+    """How the OSS agent should name the model on its command line."""
+    if settings.is_azure:
+        # LiteLLM/Aider convention: the deployment name, not the model name.
+        return f"azure/{settings.knowledge_model}"
+    return f"anthropic/{settings.knowledge_model}"
 
 
-def _is_placeholder(value: str) -> bool:
-    if not value:
-        return True
-    lowered = value.lower()
-    return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
+def _write_prompt_file(task: KnowledgeTask) -> Path:
+    prompt_path = task.output_file.parent / f"{task.task_id}.prompt.md"
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text(task.render_prompt(), encoding="utf-8")
+    return prompt_path
 
 
-@dataclass
-class Settings:
-    # --- which vendor serves the models -----------------------------------
-    llm_provider: str = field(default_factory=lambda: _str("LLM_PROVIDER", "azure").lower())
-
-    # --- Azure OpenAI ------------------------------------------------------
-    azure_endpoint: str = field(
-        default_factory=lambda: _str("AZURE_OPENAI_ENDPOINT").rstrip("/")
-    )
-    azure_api_key: str = field(default_factory=lambda: _str("AZURE_OPENAI_API_KEY"))
-    azure_deployment: str = field(
-        default_factory=lambda: _str("AZURE_OPENAI_DEPLOYMENT", "gpt-5.3-codex")
-    )
-    azure_api_version: str = field(
-        default_factory=lambda: _str("AZURE_OPENAI_API_VERSION", "2025-04-01")
-    )
-    azure_use_responses_api: bool = field(
-        default_factory=lambda: _bool("AZURE_USE_RESPONSES_API", True)
-    )
-    # Optional second deployment for the cheap high-volume reading pass. Most
-    # Azure resources have one deployment, so this defaults to the same one.
-    azure_worker_deployment: str = field(
-        default_factory=lambda: _str("AZURE_OPENAI_WORKER_DEPLOYMENT")
+def _pointer_prompt(prompt_path: Path) -> str:
+    return (
+        f"Read the file at {prompt_path.as_posix()} and carry out the instructions "
+        f"in it exactly. It is a read-only analysis task that ends by writing one "
+        f"JSON file. Do not modify any other file."
     )
 
-    # --- Anthropic (alternative provider) ---------------------------------
-    anthropic_api_key: str = field(default_factory=lambda: _str("ANTHROPIC_API_KEY"))
-    anthropic_deep_model: str = field(
-        default_factory=lambda: _str("DEEP_MODEL", "claude-opus-5")
-    )
-    anthropic_worker_model: str = field(
-        default_factory=lambda: _str("WORKER_MODEL", "claude-sonnet-5")
-    )
 
-    # --- reasoning effort --------------------------------------------------
-    deep_effort: str = field(default_factory=lambda: _str("DEEP_EFFORT", "high"))
-    worker_effort: str = field(default_factory=lambda: _str("WORKER_EFFORT", "medium"))
-
-    # --- knowledge stage: which open-source coding agent reads the code ---
-    knowledge_backend: str = field(
-        default_factory=lambda: _str("KNOWLEDGE_BACKEND", "aider").lower()
-    )
-    knowledge_task_timeout: int = field(
-        default_factory=lambda: _int("KNOWLEDGE_TASK_TIMEOUT", 1800)
-    )
-    max_modules: int = field(default_factory=lambda: _int("MAX_MODULES", 0))
-
-    # --- pipeline tuning ---------------------------------------------------
-    max_concurrency: int = field(default_factory=lambda: _int("MAX_CONCURRENCY", 4))
-    module_char_budget: int = field(default_factory=lambda: _int("MODULE_CHAR_BUDGET", 110_000))
-    max_files_per_module: int = field(default_factory=lambda: _int("MAX_FILES_PER_MODULE", 40))
-    llm_cache: bool = field(default_factory=lambda: _bool("LLM_CACHE", True))
-    dry_run: bool = field(default_factory=lambda: _bool("DRY_RUN", False))
-
-    target_dir: Path = field(
-        default_factory=lambda: PROJECT_ROOT / _str("TARGET_DIR", "target")
-    )
-    reports_dir: Path = field(
-        default_factory=lambda: PROJECT_ROOT / _str("REPORTS_DIR", "reports")
-    )
-
-    # -- derived -----------------------------------------------------------
-
-    @property
-    def cache_dir(self) -> Path:
-        return self.reports_dir / "_llm_cache"
-
-    @property
-    def is_azure(self) -> bool:
-        return self.llm_provider in ("azure", "azure_openai")
-
-    @property
-    def azure_key_is_placeholder(self) -> bool:
-        return _is_placeholder(self.azure_api_key)
-
-    @property
-    def anthropic_key_is_placeholder(self) -> bool:
-        return _is_placeholder(self.anthropic_api_key)
-
-    @property
-    def key_is_placeholder(self) -> bool:
-        """Is the key for the *selected* provider missing?"""
-        if self.is_azure:
-            return self.azure_key_is_placeholder
-        return self.anthropic_key_is_placeholder
-
-    @property
-    def deep_model(self) -> str:
-        """Model id for synthesis / BRD / convertibility."""
-        return self.azure_deployment if self.is_azure else self.anthropic_deep_model
-
-    @property
-    def worker_model(self) -> str:
-        """Model id for the high-volume pass."""
-        if self.is_azure:
-            return self.azure_worker_deployment or self.azure_deployment
-        return self.anthropic_worker_model
-
-    @property
-    def knowledge_model(self) -> str:
-        """What the external OSS coding agent should use."""
-        return self.worker_model
-
-    @property
-    def api_key(self) -> str:
-        return self.azure_api_key if self.is_azure else self.anthropic_api_key
-
-    def ready(self) -> tuple[bool, str]:
-        """Can the pipeline actually call a model right now?"""
-        if self.dry_run:
-            return True, "DRY_RUN=1 - running with the offline stub model, no API calls."
-
-        from .llm.providers import get_provider  # local import: avoids a cycle
-
-        try:
-            return get_provider().check()
-        except Exception as exc:
-            return False, str(exc)
+def _override_command(env_key: str, **placeholders: str) -> list[str] | None:
+    """Let .env replace a whole command line, e.g. when a tool changes its flags."""
+    template = os.getenv(env_key, "").strip()
+    if not template:
+        return None
+    parts = shlex.split(template, posix=(os.name != "nt"))
+    return [p.format(**placeholders) for p in parts]
 
 
-settings = Settings()
+# --------------------------------------------------------------------------
+# OpenCode - default. Lightest install, first-class non-interactive `run`.
+# --------------------------------------------------------------------------
+
+
+class OpenCodeBackend(KnowledgeBackend):
+    name = "opencode"
+    docs_url = "https://opencode.ai  (install: npm i -g opencode-ai)"
+
+    def check(self) -> BackendStatus:
+        exe = resolve_executable("opencode", "opencode.cmd", "opencode.exe")
+        if not exe:
+            return BackendStatus(
+                False,
+                "OpenCode not found on PATH. Install with:  npm install -g opencode-ai",
+            )
+        return BackendStatus(True, "ready", exe, probe_version(exe, "--version"))
+
+    def build_command(self, repo_path: Path, task: KnowledgeTask) -> list[str]:
+        status = self.check()
+        if not status.available:
+            raise BackendError(status.detail)
+        prompt_file = _write_prompt_file(task)
+        model = _model_ref()
+
+        override = _override_command(
+            "OPENCODE_CMD",
+            exe=status.executable,
+            model=model,
+            prompt=_pointer_prompt(prompt_file),
+            prompt_file=prompt_file.as_posix(),
+            repo=repo_path.as_posix(),
+            out=task.output_file.as_posix(),
+        )
+        if override:
+            return override
+
+        return [status.executable, "run", "--model", model, _pointer_prompt(prompt_file)]
+
+    def environment(self) -> dict[str, str]:
+        env = _litellm_env()
+        if settings.is_azure:
+            # OpenCode's Azure provider is configured through its own config
+            # file rather than env vars alone. These help, but if OpenCode
+            # cannot reach Azure on your machine, switch to KNOWLEDGE_BACKEND=aider
+            # - LiteLLM's Azure support is purely env-var driven and needs no setup.
+            env["AZURE_RESOURCE_NAME"] = _azure_resource_name()
+            env["OPENAI_API_KEY"] = settings.azure_api_key
+            env["OPENAI_BASE_URL"] = settings.azure_endpoint
+        return env
+
+
+def _azure_resource_name() -> str:
+    """Extract `myresource` from https://myresource.openai.azure.com"""
+    endpoint = settings.azure_endpoint.replace("https://", "").replace("http://", "")
+    return endpoint.split(".")[0] if endpoint else ""
+
+
+# --------------------------------------------------------------------------
+# Aider - strongest repo map (tree-sitter); pip install, very Windows friendly.
+# --------------------------------------------------------------------------
+
+
+class AiderBackend(KnowledgeBackend):
+    name = "aider"
+    docs_url = "https://aider.chat  (install: pip install aider-install && aider-install)"
+
+    def check(self) -> BackendStatus:
+        exe = resolve_executable("aider", "aider.exe", "aider.cmd")
+        if not exe:
+            return BackendStatus(
+                False, "Aider not found on PATH. Install with:  python -m pip install aider-chat"
+            )
+        return BackendStatus(True, "ready", exe, probe_version(exe, "--version"))
+
+    def build_command(self, repo_path: Path, task: KnowledgeTask) -> list[str]:
+        status = self.check()
+        if not status.available:
+            raise BackendError(status.detail)
+        prompt_file = _write_prompt_file(task)
+        model = _model_ref()
+
+        override = _override_command(
+            "AIDER_CMD",
+            exe=status.executable,
+            model=model,
+            prompt=_pointer_prompt(prompt_file),
+            prompt_file=prompt_file.as_posix(),
+            repo=repo_path.as_posix(),
+            out=task.output_file.as_posix(),
+        )
+        if override:
+            return override
+
+        return [
+            status.executable,
+            "--model", model,
+            "--message-file", str(prompt_file),
+            "--yes-always",          # non-interactive
+            "--no-auto-commits",     # never touch the target repo's history
+            "--no-gitignore",
+            "--no-check-update",
+            "--no-show-model-warnings",
+            "--map-tokens", "4096",  # aider's repo map is the reason to use it
+        ]
+
+    def environment(self) -> dict[str, str]:
+        env = _litellm_env()
+        env["AIDER_ANALYTICS"] = "false"
+        return env
+
+
+# --------------------------------------------------------------------------
+# OpenHands - heaviest, most autonomous. Needs Docker Desktop on Windows.
+# --------------------------------------------------------------------------
+
+
+class OpenHandsBackend(KnowledgeBackend):
+    name = "openhands"
+    docs_url = "https://docs.all-hands.dev  (install: pip install openhands-ai)"
+
+    def check(self) -> BackendStatus:
+        exe = resolve_executable("openhands", "openhands.exe", "openhands.cmd")
+        if exe:
+            return BackendStatus(True, "ready", exe, probe_version(exe, "--version"))
+        # Fall back to the module entry point if the console script is absent.
+        import importlib.util
+
+        if importlib.util.find_spec("openhands") is not None:
+            import sys
+
+            return BackendStatus(True, "ready (module entry point)", sys.executable, None)
+        return BackendStatus(
+            False,
+            "OpenHands not found. Install with:  python -m pip install openhands-ai "
+            "(Docker Desktop must also be running for its sandbox).",
+        )
+
+    def build_command(self, repo_path: Path, task: KnowledgeTask) -> list[str]:
+        status = self.check()
+        if not status.available:
+            raise BackendError(status.detail)
+        prompt_file = _write_prompt_file(task)
+
+        override = _override_command(
+            "OPENHANDS_CMD",
+            exe=status.executable,
+            model=settings.knowledge_model,
+            prompt=_pointer_prompt(prompt_file),
+            prompt_file=prompt_file.as_posix(),
+            repo=repo_path.as_posix(),
+            out=task.output_file.as_posix(),
+        )
+        if override:
+            return override
+
+        if status.detail.startswith("ready (module"):
+            return [status.executable, "-m", "openhands.core.main", "-f", str(prompt_file)]
+        return [status.executable, "headless", "-f", str(prompt_file)]
+
+    def environment(self) -> dict[str, str]:
+        env = _litellm_env()
+        env["LLM_MODEL"] = _model_ref()
+        env["LLM_API_KEY"] = settings.api_key
+        if settings.is_azure:
+            env["LLM_BASE_URL"] = settings.azure_endpoint
+            env["LLM_API_VERSION"] = settings.azure_api_version
+        env["WORKSPACE_BASE"] = str(settings.target_dir)
+        env["LOG_ALL_EVENTS"] = "false"
+        return env
+
+
+# --------------------------------------------------------------------------
+# Continue CLI - headless mode of the Continue project.
+# --------------------------------------------------------------------------
+
+
+class ContinueBackend(KnowledgeBackend):
+    name = "continue"
+    docs_url = "https://continue.dev  (install: npm i -g @continuedev/cli)"
+
+    def check(self) -> BackendStatus:
+        exe = resolve_executable("cn", "cn.cmd", "continue", "continue.cmd")
+        if not exe:
+            return BackendStatus(
+                False, "Continue CLI not found. Install with:  npm install -g @continuedev/cli"
+            )
+        return BackendStatus(True, "ready", exe, probe_version(exe, "--version"))
+
+    def build_command(self, repo_path: Path, task: KnowledgeTask) -> list[str]:
+        status = self.check()
+        if not status.available:
+            raise BackendError(status.detail)
+        prompt_file = _write_prompt_file(task)
+
+        override = _override_command(
+            "CONTINUE_CMD",
+            exe=status.executable,
+            model=settings.knowledge_model,
+            prompt=_pointer_prompt(prompt_file),
+            prompt_file=prompt_file.as_posix(),
+            repo=repo_path.as_posix(),
+            out=task.output_file.as_posix(),
+        )
+        if override:
+            return override
+
+        return [status.executable, "-p", _pointer_prompt(prompt_file)]
+
+    def environment(self) -> dict[str, str]:
+        # Continue reads its model config from ~/.continue/config.yaml. Env vars
+        # alone are not enough for Azure - configure the provider there, or use
+        # KNOWLEDGE_BACKEND=aider instead.
+        return _litellm_env()
+
+
+# --------------------------------------------------------------------------
+# Registry
+# --------------------------------------------------------------------------
+
+BACKENDS: dict[str, type[KnowledgeBackend]] = {
+    "opencode": OpenCodeBackend,
+    "aider": AiderBackend,
+    "openhands": OpenHandsBackend,
+    "continue": ContinueBackend,
+}
+
+
+def get_backend(name: str | None = None) -> KnowledgeBackend:
+    key = (name or settings.knowledge_backend).strip().lower()
+    if key not in BACKENDS:
+        raise BackendError(
+            f"Unknown KNOWLEDGE_BACKEND '{key}'. Choose one of: "
+            f"{', '.join(sorted(BACKENDS))}, or 'builtin'."
+        )
+    return BACKENDS[key]()
+
+
+def probe_all() -> dict[str, BackendStatus]:
+    """What is actually installed on this machine? Surfaced in the UI."""
+    return {name: cls().check() for name, cls in BACKENDS.items()}
