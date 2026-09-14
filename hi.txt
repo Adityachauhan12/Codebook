@@ -1,170 +1,119 @@
-"""FastAPI service behind the React console."""
+"""Command-line entry point.
+
+    python run_cli.py --list
+    python run_cli.py --repo "target\\My_Repo"
+    python run_cli.py --all
+    python run_cli.py --check
+
+Useful when you want to run the pipeline without starting the web UI - for
+example overnight across every repository in target/.
+"""
 from __future__ import annotations
 
-import logging
-import threading
+import argparse
+import sys
 from pathlib import Path
-from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from .config import settings
-from .knowledge.backends import probe_all
-from .pipeline import STAGES, Pipeline, RunStore, discover_repos
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-7s %(name)s  %(message)s",
-)
-
-app = FastAPI(title="Agentic Codebase Analyzer", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-store = RunStore()
-pipeline = Pipeline(store)
-
-# run_id -> thread, so a second start request on the same run is rejected
-_active: dict[str, threading.Thread] = {}
-_active_lock = threading.Lock()
+from app.config import settings              # noqa: E402
+from app.knowledge.backends import probe_all  # noqa: E402
+from app.pipeline import Pipeline, discover_repos  # noqa: E402
 
 
-class StartRunRequest(BaseModel):
-    repo_path: str
-    run_id: str | None = None
-
-
-@app.get("/api/health")
-def health() -> dict[str, Any]:
+def check() -> int:
+    print("Agentic Codebase Analyzer - environment check\n")
     ok, detail = settings.ready()
-    backends = {
-        name: {
-            "available": status.available,
-            "detail": status.detail,
-            "executable": status.executable,
-            "version": status.version,
-        }
-        for name, status in probe_all().items()
-    }
-    provider_detail = settings.llm_provider
+    print(f"  Provider       : {settings.llm_provider}")
     if settings.is_azure:
-        provider_detail = (
-            f"Azure OpenAI · {settings.azure_deployment} · "
-            f"{'Responses' if settings.azure_use_responses_api else 'Chat'} API "
-            f"· {settings.azure_api_version}"
-        )
+        print(f"    endpoint     : {settings.azure_endpoint or '(NOT SET)'}")
+        print(f"    deployment   : {settings.azure_deployment or '(NOT SET)'}")
+        print(f"    api version  : {settings.azure_api_version}")
+        print(f"    api style    : "
+              f"{'Responses' if settings.azure_use_responses_api else 'Chat Completions'}")
+        print(f"    api key      : "
+              f"{'OK' if not settings.azure_key_is_placeholder else 'NOT SET'}")
+    else:
+        print(f"    api key      : "
+              f"{'OK' if not settings.anthropic_key_is_placeholder else 'NOT SET'}")
+    print(f"  Dry run        : {settings.dry_run}")
+    print(f"  Knowledge agent: {settings.knowledge_backend}")
+    print(f"  Models         : deep={settings.deep_model}  worker={settings.worker_model}")
+    print(f"  Target dir     : {settings.target_dir}")
+    print(f"  Reports dir    : {settings.reports_dir}\n")
 
-    return {
-        "ok": ok,
-        "detail": detail,
-        "api_key_configured": not settings.key_is_placeholder,
-        "dry_run": settings.dry_run,
-        "provider": settings.llm_provider,
-        "provider_detail": provider_detail,
-        "azure_endpoint": settings.azure_endpoint if settings.is_azure else None,
-        "knowledge_backend": settings.knowledge_backend,
-        "knowledge_model": settings.knowledge_model,
-        "deep_model": settings.deep_model,
-        "worker_model": settings.worker_model,
-        "backends": backends,
-        "target_dir": str(settings.target_dir),
-        "reports_dir": str(settings.reports_dir),
-        "stages": [{"key": k, "label": l} for k, l in STAGES],
-    }
+    print("  Open-source code-reading agents detected on this machine:")
+    for name, status in probe_all().items():
+        mark = "yes" if status.available else "no "
+        version = f" - {status.version}" if status.version else ""
+        print(f"    [{mark}] {name:<10}{version}")
+        if not status.available:
+            print(f"           {status.detail}")
+
+    print()
+    repos = discover_repos()
+    print(f"  Repositories in target/: {len(repos)}")
+    for repo in repos:
+        print(f"    - {repo['name']}")
+
+    print()
+    print(f"  Status: {detail}")
+    return 0 if ok else 1
 
 
-@app.get("/api/repos")
-def repos() -> dict[str, Any]:
-    return {"repos": discover_repos()}
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Analyse a codebase for agentic convertibility.")
+    parser.add_argument("--repo", help="Path to a repository to analyse")
+    parser.add_argument("--all", action="store_true", help="Analyse every repo in target/")
+    parser.add_argument("--list", action="store_true", help="List repositories in target/")
+    parser.add_argument("--check", action="store_true", help="Check environment and exit")
+    args = parser.parse_args()
 
+    if args.check:
+        return check()
 
-@app.get("/api/runs")
-def runs() -> dict[str, Any]:
-    return {"runs": store.list_runs()}
-
-
-@app.post("/api/runs")
-def start_run(request: StartRunRequest) -> dict[str, Any]:
-    repo_path = Path(request.repo_path)
-    if not repo_path.exists() or not repo_path.is_dir():
-        raise HTTPException(404, f"Repository not found: {request.repo_path}")
+    if args.list:
+        for repo in discover_repos():
+            print(f"{repo['name']}\t{repo['path']}")
+        return 0
 
     ok, detail = settings.ready()
     if not ok:
-        raise HTTPException(400, detail)
+        print(f"\nCannot start: {detail}\n")
+        return 1
 
-    run_id = request.run_id or pipeline.new_run_id()
+    pipeline = Pipeline()
+    targets: list[Path] = []
+    if args.all:
+        targets = [Path(r["path"]) for r in discover_repos()]
+    elif args.repo:
+        targets = [Path(args.repo)]
+    else:
+        parser.print_help()
+        return 1
 
-    with _active_lock:
-        if run_id in _active and _active[run_id].is_alive():
-            raise HTTPException(409, f"Run {run_id} is already in progress")
+    if not targets:
+        print("Nothing to analyse. Put a repository folder inside target/.")
+        return 1
 
-        thread = threading.Thread(
-            target=pipeline.execute,
-            kwargs={"repo_path": repo_path, "run_id": run_id},
-            daemon=True,
-            name=f"run-{run_id}",
-        )
-        _active[run_id] = thread
-        thread.start()
-
-    return {"run_id": run_id, "repo_name": repo_path.name, "status": "running"}
-
-
-@app.get("/api/runs/{repo_name}/{run_id}")
-def get_run(repo_name: str, run_id: str) -> dict[str, Any]:
-    record = store.load(repo_name, run_id)
-    if record is None:
-        raise HTTPException(404, "Run not found")
-    return record.to_dict()
-
-
-@app.get("/api/runs/{repo_name}/{run_id}/artifacts/{name}", response_class=PlainTextResponse)
-def get_artifact(repo_name: str, run_id: str, name: str) -> str:
-    if "/" in name or "\\" in name or ".." in name:
-        raise HTTPException(400, "Invalid artifact name")
-    content = store.read_artifact(repo_name, run_id, name)
-    if content is None:
-        raise HTTPException(404, f"Artifact not found: {name}")
-    return content
-
-
-@app.get("/api/portfolio")
-def portfolio() -> dict[str, Any]:
-    """Cross-repository view - the reason this is a platform and not a script."""
-    summary: list[dict[str, Any]] = []
-    for run in store.list_runs():
-        if run.get("status") != "completed":
+    failures = 0
+    for repo_path in targets:
+        if not repo_path.exists():
+            print(f"SKIP (not found): {repo_path}")
+            failures += 1
             continue
-        conv = store.read_artifact(run["repo_name"], run["run_id"], "convertibility.json")
-        readiness, candidates = None, 0
-        if conv:
-            import json
+        print(f"\n{'=' * 70}\n  {repo_path.name}\n{'=' * 70}")
+        record = pipeline.execute(repo_path, on_event=lambda m: print(f"  {m}"))
+        print(f"\n  -> {record.status}")
+        if record.status == "completed":
+            directory = Path(settings.reports_dir) / record.repo_name / record.run_id
+            print(f"  -> reports in {directory}")
+        else:
+            print(f"  -> error: {record.error}")
+            failures += 1
 
-            try:
-                data = json.loads(conv)
-                readiness = (data.get("overall") or {}).get("agentic_readiness_score")
-                candidates = len(data.get("candidates") or [])
-            except json.JSONDecodeError:
-                pass
-        stats = run.get("stats") or {}
-        summary.append({
-            "repo_name": run["repo_name"],
-            "run_id": run["run_id"],
-            "started_at": run.get("started_at"),
-            "stacks": stats.get("stacks") or [],
-            "languages": list((stats.get("languages") or {}).keys())[:6],
-            "source_files": stats.get("total_source_files"),
-            "lines": stats.get("total_lines"),
-            "readiness": readiness,
-            "candidates": candidates,
-        })
-    return {"portfolio": summary}
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
