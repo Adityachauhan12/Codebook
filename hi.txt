@@ -1,115 +1,943 @@
-# ===========================================================================
-#  STEP THAT NEEDS YOUR CREDENTIALS
-#  Copy this file to  .env  and fill in the Azure block below.
-#      Windows:  copy .env.example .env
-# ===========================================================================
+# How the Agentic Codebase Analyzer Works
 
-# Which vendor serves the models:  azure  |  anthropic
-LLM_PROVIDER=azure
+A detailed walkthrough of what happens between dropping a repository into a
+folder and getting four reports out.
 
+Written in plain language. Every number and example in this document is real
+output from the first repository we processed — nothing here is invented for
+illustration.
 
-# ===========================================================================
-#  AZURE OPENAI  -  fill these four in
-# ===========================================================================
+---
 
-# The full resource URL, e.g. https://my-resource.openai.azure.com
-# Find it in Azure AI Foundry > your resource > Overview ("Endpoint").
-# No trailing slash, no /openai path segment.
-AZURE_OPENAI_ENDPOINT=
+## Contents
 
-# Azure AI Foundry > your resource > Keys and Endpoint > KEY 1
-AZURE_OPENAI_API_KEY=
+- [What it does](#what-it-does)
+- [The example repository](#the-example-repository)
+- [The whole flow at a glance](#the-whole-flow-at-a-glance)
+- [Step 1 — Scan](#step-1--scan-what-is-actually-here)
+- [Step 2 — Cut into modules](#step-2--cut-into-modules)
+- [Step 3 — Knowledge Agent](#step-3--knowledge-agent-what-does-this-code-do)
+- [Step 4 — Merge](#step-4--merge-45-local-views-into-one-system-view)
+- [Step 5 — BRD Agent](#step-5--brd-agent-what-does-the-business-need)
+- [Step 6 — Convertibility Agent](#step-6--convertibility-agent-what-should-become-an-agent)
+- [Step 7 — Reports](#step-7--reports)
+- [Follow one file all the way through](#follow-one-file-all-the-way-through)
+- [Follow one finding all the way through](#follow-one-finding-all-the-way-through)
+- [Time and cost](#time-and-cost)
+- [What we learned running it](#what-we-learned-running-it)
 
-# The DEPLOYMENT NAME you chose in Azure, not the model name. Check under
-# Azure AI Foundry > Deployments. These are often different.
-AZURE_OPENAI_DEPLOYMENT=gpt-5.3-codex
+---
 
-AZURE_OPENAI_API_VERSION=2025-04-01
+## What it does
 
-# Your deployment supports the Responses API. If a call ever fails with an
-# unknown-route error, set this to false to use Chat Completions instead.
-AZURE_USE_RESPONSES_API=true
+You give it a codebase — any language, any age. It:
 
-# Optional: a cheaper/faster second deployment for the high-volume reading
-# pass. Leave blank to use AZURE_OPENAI_DEPLOYMENT for everything.
-AZURE_OPENAI_WORKER_DEPLOYMENT=
+1. works out what the software actually does for the business,
+2. writes that up as a requirements document with architecture diagrams,
+3. tells you which parts should become AI agents, which should just be ordinary
+   scripts, and which should be left alone.
 
+The last point is the one that matters. Most tools that look at code tell you
+about the *code*. This tells you about the **work the code makes people do**,
+and which of that work a machine could take over.
 
-# ===========================================================================
-#  ANTHROPIC  -  only used when LLM_PROVIDER=anthropic. Ignore otherwise.
-# ===========================================================================
-ANTHROPIC_API_KEY=
-DEEP_MODEL=claude-opus-5
-WORKER_MODEL=claude-sonnet-5
+---
 
+## The example repository
 
-# ===========================================================================
-#  REASONING EFFORT
-#  Mapped to your provider's own scale.  low | medium | high | xhigh | max
-# ===========================================================================
-# Synthesis, BRD and convertibility - the passes whose quality you feel.
-DEEP_EFFORT=high
-# The high-volume per-module reading pass.
-WORKER_EFFORT=medium
+```
+IFS Employee Diary (EIS)
+An ASP.NET system for HR and security teams to manage employee records
 
+1,246 files
+295,259 lines
+C#, JavaScript, ASP.NET WebForms, Razor
+Built around 2015-2018, still in production
+```
 
-# ===========================================================================
-#  KNOWLEDGE STAGE - which open-source coding agent reads the codebase
-# ===========================================================================
-# We do not implement code comprehension ourselves. An external OSS agent
-# explores the repo with its own tools and writes structured JSON back to us.
-#
-#   aider      (default for Azure)  pip install aider-chat
-#              Uses LiteLLM, so Azure works from environment variables alone -
-#              nothing else to configure. Also has the best repo map.
-#   opencode                        npm install -g opencode-ai
-#              Lightest install, but its Azure provider may need setup in
-#              OpenCode's own config file.
-#   openhands                       pip install openhands-ai  (+ Docker Desktop)
-#   continue                        npm install -g @continuedev/cli
-#              Needs the Azure provider declared in ~/.continue/config.yaml
-#   builtin    no external tool; our own fallback reader
-#
-KNOWLEDGE_BACKEND=aider
+Nobody on the team had documentation for it. That is the normal case.
 
-# Seconds allowed for one module-reading task before it is abandoned.
-KNOWLEDGE_TASK_TIMEOUT=1800
+---
 
-# Cap modules analysed per run (0 = no cap). Set to 3 for a first smoke test
-# on a large repo, confirm the reports look right, then set back to 0.
-MAX_MODULES=0
+## The whole flow at a glance
 
-# --- Escape hatches -------------------------------------------------------
-# If a tool changes its CLI flags, override the whole command here instead of
-# editing Python. Placeholders: {exe} {model} {prompt} {prompt_file} {repo} {out}
-# AIDER_CMD={exe} --model {model} --message-file {prompt_file} --yes-always
-# OPENCODE_CMD={exe} run --model {model} {prompt}
-# OPENHANDS_CMD={exe} headless -f {prompt_file}
-# CONTINUE_CMD={exe} -p {prompt}
+```
+   target/YourRepo/
+          │
+          ▼
+   ┌─────────────────┐
+   │ 1. SCAN         │  ordinary code · no AI · free · instant
+   │                 │  What files exist? Which are yours?
+   └────────┬────────┘
+            ▼
+   ┌─────────────────┐
+   │ 2. CUT          │  ordinary code · no AI · free · instant
+   │                 │  Split into chunks small enough to read
+   └────────┬────────┘
+            ▼
+   ┌─────────────────┐
+   │ 3. KNOWLEDGE    │  AI · one call per chunk · 45 calls
+   │    AGENT        │  What does each chunk do?
+   └────────┬────────┘
+            ▼
+   ┌─────────────────┐
+   │ 4. MERGE        │  AI · one call
+   │                 │  Combine 45 answers into one picture
+   └────────┬────────┘
+            ▼
+   ┌─────────────────┐
+   │ 5. BRD AGENT    │  AI · two calls
+   │                 │  Requirements + architecture diagrams
+   └────────┬────────┘
+            ▼
+   ┌─────────────────┐
+   │ 6. CONVERT-     │  AI · one call
+   │    IBILITY      │  What should become an agent?
+   └────────┬────────┘
+            ▼
+   ┌─────────────────┐
+   │ 7. REPORTS      │  ordinary code · no AI · free
+   └─────────────────┘
+            │
+            ▼
+       4 documents
+```
 
+**Important:** steps 1, 2 and 7 involve no AI at all. They are ordinary
+programs. They are free, they run in under a second, and they produce
+*identical* results every single time. Only steps 3–6 call a model and cost
+money.
 
-# ===========================================================================
-#  PIPELINE TUNING
-# ===========================================================================
-# How many modules are read in parallel. Lower this if Azure rate-limits you.
-MAX_CONCURRENCY=4
-# Character budget for one module's code bundle (~4 chars per token).
-MODULE_CHAR_BUDGET=110000
-# Max files bundled per module before it is split into several modules.
-MAX_FILES_PER_MODULE=40
-# Cache responses on disk so re-runs are cheap. 1 = on, 0 = off.
-LLM_CACHE=1
+That split is deliberate. Anything that can be decided by a rule *is* decided by
+a rule, so the AI is only used where judgement is genuinely needed.
 
+---
 
-# ===========================================================================
-#  OFFLINE MODE
-#  Set to 1 to run the WHOLE pipeline with a stub model and no credentials -
-#  proves the plumbing and the UI work before you spend anything. Reports
-#  will be obviously fake.
-# ===========================================================================
-DRY_RUN=0
+## Step 1 — Scan: what is actually here?
 
+The scanner opens the repository folder and walks through every single file,
+asking three questions about each one.
 
-# Where repos are read from and reports are written to (relative to this file)
-TARGET_DIR=target
-REPORTS_DIR=reports
+### Question 1: "What language is this written in?"
+
+It looks at the file extension and checks a table of **96 extensions covering
+69 languages**:
+
+```
+.cs      →  C#
+.aspx    →  ASP.NET WebForms
+.cshtml  →  Razor
+.js      →  JavaScript
+.cbl     →  COBOL
+.abap    →  ABAP
+.rpgle   →  RPG
+.pas     →  Delphi
+```
+
+If the extension is not in the table, the file is ignored completely.
+
+**Why a table and not something cleverer?** Because supporting a new technology
+then means adding one line to a list. No logic changes. That is how the same
+system handles a modern React app and a 1980s COBOL mainframe program.
+
+Old and unusual languages are included on purpose — COBOL, JCL, ABAP, VB6,
+Delphi, RPG — because those are exactly the systems nobody understands any more.
+
+### Question 2: "What technology stack is this?"
+
+Knowing the language is not enough. A folder of `.cs` files could be a desktop
+application, a website, or a background service. So the scanner also looks for
+**project files**, using 38 rules:
+
+```
+*.sln, *.csproj      →  .NET
+pom.xml              →  Java / Maven
+package.json         →  Node.js
+requirements.txt     →  Python
+go.mod               →  Go
+composer.json        →  PHP
+```
+
+And then it looks *inside* some of those files to spot the framework:
+
+```
+package.json containing "react"       →  React
+requirements.txt containing "django"  →  Django
+pom.xml containing "spring-boot"      →  Spring Boot
+```
+
+**What it found in our example:**
+
+```
+EIS.UI.sln  +  8 .csproj files  +  packages.config
+→  .NET Solution, .NET (C#), NuGet (legacy)
+```
+
+### Question 3: "Is this actually YOUR code?"
+
+This is the most valuable question the scanner asks, and the least obvious.
+
+Most repositories are mostly **other people's code** — libraries downloaded from
+the internet and committed alongside your own work. Analysing those is pure
+waste: you did not write them, you will not change them, and they tell you
+nothing about your business.
+
+Three separate tests catch them. A file is excluded if **any one** matches.
+
+**Test A — known library filenames** (53 patterns):
+
+```
+jquery-1.10.2.js        →  excluded
+angular.min.js          →  excluded
+bootstrap.css           →  excluded
+moment.js, lodash.js, knockout.js, modernizr.js, kendo.js ...
+```
+
+**Test B — library folders** (20 folder names):
+
+```
+Scripts/    Content/    lib/    vendor/    wwwroot/    node_modules/
+```
+
+But — and this detail matters — **only for front-end file types**:
+
+```
+EIS.UI/Scripts/angular.js       JavaScript in "Scripts"  →  excluded
+EIS.UI/Content/Employee.cs      C# in "Content"          →  KEPT
+```
+
+A `.js` file under `Scripts/` is almost certainly a downloaded library. A `.cs`
+file in the same folder is your business logic, wherever it happens to sit.
+
+**Test C — the line-length trick**:
+
+```
+average line longer than 200 characters   →  excluded
+any single line longer than 5,000 chars   →  excluded
+```
+
+This one is elegant. Humans wrap code at roughly 80 characters so it is readable.
+Minified library code is compressed into one enormous line to save bandwidth. So
+**line length alone identifies machine-generated code** — even for libraries
+nobody has ever heard of and that are not on any list.
+
+**Plus** 12 patterns for framework scaffolding — files Microsoft or Rails or
+Django generate identically in every single project (`Areas/HelpPage/`,
+`Migrations/`, `AssemblyInfo.cs`).
+
+### What Step 1 produced
+
+```
+1,246 files catalogued
+
+    908 files were libraries or generated code
+        →  240,596 lines discarded
+
+    308 files were YOUR code
+        →   51,022 lines kept
+```
+
+**83% of the repository was thrown away.**
+
+Sit with that number. Every line kept is a line you pay a model to read. Without
+this step, this run would have cost about **$31 instead of $5** — and roughly
+five-sixths of that money would have been spent writing summaries of jQuery.
+
+This is also why the "how big is your codebase" question is misleading. 295,000
+lines sounds enormous. 51,000 lines of actual business logic is very manageable.
+
+---
+
+## Step 2 — Cut into modules
+
+51,022 lines is still far too much to send in one request. So it gets cut into
+**modules** — chunks small enough for a model to read carefully in one go.
+
+### The basic idea: follow the folders
+
+Developers already organised this code, years ago, by feature. The scanner just
+reads that decision:
+
+```
+EIS.UI/UserManagement/Users.aspx.cs         ┐
+EIS.UI/UserManagement/Roles.aspx.cs         ├─→  module "EIS.UI/UserManagement"
+EIS.UI/UserManagement/AccessRights.aspx.cs  ┘
+```
+
+It takes the first two folder levels and groups by that.
+
+### Why two levels?
+
+We tested. On this repository:
+
+| Grouping | What happened |
+|---|---|
+| 1 folder level | ~6 giant modules. `EIS.UI` alone would be 25,000 lines — far too big |
+| **2 folder levels** | **Right size. About 600 lines each on average** |
+| 3 folder levels | ~200 tiny modules. Related files split apart, 200 separate API calls |
+
+### But what if the folders are useless?
+
+Plenty of repositories are not tidy. So the system does not blindly use two
+levels — it **tries depths 1, 2 and 3, scores each result, and picks the best**.
+
+The score punishes four things:
+
+- **dominance** — one chunk holding most of the code (the grouping explained nothing)
+- **oversize** — chunks too big to read in one request
+- **undersize** — dozens of trivial chunks, each costing an API call
+- **sprawl** — too many chunks overall
+
+And if folders *still* cannot separate the code — say every file sits in one
+giant `src/` folder — it **ignores folders entirely** and groups by what the
+filenames are about:
+
+```
+EmployeeController.cs    ┐
+EmployeeService.cs       ├─→  module "employee"
+IEmployeeRepository.cs   ┘
+
+UserMaster.cs            ┐
+UserAccessRights.cs      ├─→  module "user"
+UserStation.cs           ┘
+```
+
+It does this by splitting the name at capital letters, dropping the leading `I`
+that interfaces use, then removing about 40 words that describe a *technical
+layer* rather than a subject — `Controller`, `Service`, `Repository`, `Manager`,
+`Master`, `Detail`, `Helper`, `Impl`. Whatever business word is left becomes the
+module name.
+
+**We tested this properly** by building three deliberately messy repositories out
+of real source files:
+
+| Repository shape | Before this feature | After |
+|---|---|---|
+| Everything in one flat folder | 3 meaningless chunks: "src part 1, 2, 3" | 6 real modules: user, employee, access… |
+| Filed by layer, not feature | The Employee feature scattered across 4 modules | Employee feature reunited in one |
+| Monorepo (`packages/app/src/`) | **0 files — complete failure** | 95 files, 6 modules |
+
+That last row was a genuine bug we only found by testing. The folder name
+`packages` was on the ignore list because Microsoft's NuGet dumps downloaded
+libraries there — but npm, Lerna and Nx put *your own source code* there. Every
+JavaScript monorepo would have scanned as an empty repository.
+
+### Two more refinements
+
+**Split by size, not just file count.** A folder with 20 enormous files needs
+splitting just as much as one with 200 small ones.
+
+**Absorb tiny modules.** A module of 15 lines is not worth an API call, so it
+gets merged into a neighbour.
+
+### Biggest first
+
+Modules are sorted largest-first. This matters more than it sounds: if you cap a
+run at 3 modules to test cheaply, you get the **three most substantial parts of
+the system**, not three random folders.
+
+### What Step 2 produced
+
+```
+308 files  →  45 modules
+
+  16 files ·  7,304 lines   EIS.UI/EmployeeBasicDetail
+   4 files ·  5,694 lines   EIS.UI/ApplicationJS
+  18 files ·  5,093 lines   EIS.UI/UserManagement
+  27 files ·  4,866 lines   EIS.WebApi/Controllers
+  36 files ·  4,047 lines   EIS.UI/EmployeeDetail
+  10 files ·  3,597 lines   EIS.DataAccess/UserManagement
+  ... 39 more
+```
+
+Verified: all 308 files appear in exactly one module. None lost, none duplicated.
+
+---
+
+## Step 3 — Knowledge Agent: what does this code do?
+
+Now the AI starts working. Each of the 45 modules is analysed separately.
+
+### It asks for specific things, not "a summary"
+
+If you ask an AI to "summarise this code" you get an essay about classes and
+methods. Useless. So the instruction asks six concrete questions:
+
+```
+1. What business capability does this deliver, and to whom?
+2. What operations does it expose (web pages, API endpoints,
+   scheduled jobs) and what does each one actually do, step by step?
+3. What data does it own? Real table names, real fields.
+4. What business rules are enforced here? Validations, thresholds,
+   approval conditions, status changes.
+   QUOTE THE RULE AND NAME THE FILE.
+5. What does it connect to? Databases, web services, email,
+   file drops, message queues.
+6. Where does a human currently have to do something by hand?
+
+Do not summarise the folder structure. Describe behaviour.
+```
+
+That last line was added after early tests came back describing folders.
+
+### It must answer in a fixed format
+
+The AI cannot reply with prose. It must fill in **13 specific fields**:
+
+```
+purpose                 business_capabilities    key_components
+entities                operations               business_rules
+integrations            data_stores              ui_surfaces
+human_touchpoints       pain_points              confidence
+```
+
+**Why force this?** Because an essay cannot be merged with 44 other essays, or
+scored, or traced back to a file. A fixed shape can. Everything downstream
+depends on this format, which is also what lets us swap out *which* AI tool does
+the reading without changing anything else.
+
+### The field that carries the whole product
+
+One field does more work than all the others:
+
+```
+human_touchpoints:
+    description    what the person does by hand
+    who            which role does it
+    frequency      how often
+    why_manual     why has this not been automated already
+```
+
+**Real output from the UserManagement module:**
+
+```
+What:        Manual user maintenance - create user, choose role, set
+             active flag, edit/delete via grid
+Who:         User-management or security admin
+How often:   As users join, leave or change responsibilities
+Why manual:  No automated identity feed exists in this module;
+             the admin operates the CRUD screens directly
+```
+
+Remember this record. It comes back in Step 6.
+
+Across all 45 modules, **286 human touchpoints** were found.
+
+### It must show its evidence
+
+The instruction demands real names from the real code. So business rules come
+back like this:
+
+```
+Rule:   User must be logged in. If Session["LoginUserId"] is empty
+        or null, redirect to ~/frmLogIn.aspx
+
+Files:  AccessRights.aspx.cs, Stations.aspx.cs, PageManager.aspx.cs,
+        Users.aspx.cs, Roles.aspx.cs, FormManagement.aspx.cs,
+        Role.aspx.cs
+
+Where:  Checked in Page_Load before the page binds its data
+```
+
+You can open those seven files and check it yourself. **That is the difference
+between a report you trust and one you do not.**
+
+### It rates its own confidence
+
+```
+"Medium. Core behaviours are directly evidenced by the handlers,
+ bindings and endpoint strings shown. Some CRUD details inferred."
+```
+
+So you know what it read versus what it guessed.
+
+### Who actually does the reading
+
+By design this step hands each module to an **external open-source coding agent**
+— OpenCode, Aider, OpenHands or Continue — which explores the files using its own
+tools, following references and searching as it goes.
+
+If none is installed, a simpler built-in reader takes over: it gathers the files
+the scanner picked, bundles them, and asks the model once.
+
+Either way **the output format is identical**, so nothing downstream notices the
+difference.
+
+### Practical details that matter
+
+- Modules run **4 at a time** in parallel
+- **One failure does not sink the run** — a module that times out is logged and
+  skipped, the other 44 carry on
+- Every response is **cached to disk**, so re-running costs nothing for unchanged
+  files
+- The exact prompt used for each module is **saved next to its answer**, so if a
+  result looks wrong you can see precisely what was asked
+
+---
+
+## Step 4 — Merge: 45 local views into one system view
+
+Each module report describes one corner of the system. Now they get combined.
+
+### Three rules keep it honest
+
+```
+1. Work ONLY from the findings supplied. Do not invent modules,
+   tables or integrations that are not in the input.
+
+2. Merge duplicates. The same capability seen from three modules
+   is ONE capability with three sources.
+
+3. Where the module reports disagree or are thin, SAY SO in the
+   open-questions list rather than papering over it.
+```
+
+It is also given the scanner's **hard facts** — exact file counts, languages,
+stacks. Those are guaranteed correct because a program counted them, and they
+anchor the AI so it cannot drift.
+
+### A size limit that bit us
+
+45 module reports total about 563,000 characters. There is a configured ceiling
+on how much can go into this one request. Ours was set at 400,000 — so the system
+**dropped 23 of the 45 modules** to make it fit.
+
+It drops the least informative ones first, and all 45 reports stay safely on
+disk. But the merged picture was built from only half the system.
+
+We caught this, raised the ceiling to 650,000, and re-ran. Details in
+[What we learned](#what-we-learned-running-it).
+
+### What Step 4 produced
+
+```
+System:   EIS Employee Diary Web
+Domain:   Employee information diary, performance and risk visibility,
+          document handling, access governance
+
+Who uses it:
+  · Employee Diary End User (HR / Operations / Manager)
+  · Security and User Management Administrator
+  · Authenticated Employee User
+
+Data it manages:
+  User, Role, Page, FormMaster, AccessRight, UserStation,
+  UserDepartment, EmployeeBasicDetail, SynopsisCategory
+
+Problems found:
+  [High] Synchronous AJAX calls (async:false) freezing the browser
+  [High] Errors silently swallowed by empty catch {} blocks
+  [High] Session values read before checking whether they exist
+```
+
+Those three problems are real defects sitting in the code right now. Nobody told
+the system to look for them.
+
+---
+
+## Step 5 — BRD Agent: what does the business need?
+
+This step **never looks at code**. It only reads Step 4's output.
+
+Its job is to turn "what the code does" into "what the business requires."
+
+### Why write requirements for software that already exists?
+
+Because this *is* the specification — the one nobody wrote down. These
+requirements state **what the business currently depends on this system to do**.
+That is the baseline any replacement, rewrite or AI project has to honour.
+
+### The one strict rule
+
+> If a fact is not in the knowledge base, it does not go in the requirements.
+> It goes in the open questions list.
+
+### What Step 5 produced
+
+```
+55 functional requirements
+12 non-functional requirements
+12 business rules
+11 data requirements
+11 integrations
+14 open questions
+```
+
+Sample requirements:
+
+```
+FR-001 [High]  Federated authentication shall initialise application
+               user context
+FR-002 [High]  Secured pages shall enforce session presence
+FR-004 [High]  System shall provide state-based navigation across
+               employee diary views
+FR-005 [High]  Employee search shall support the current filter set
+```
+
+And an honest open question, because the code genuinely could not answer it:
+
+```
+"Which authoritative backend data stores persist User, Role,
+ AccessRight, BA Positive, PEP, rewards and document metadata?"
+```
+
+A BRD with twelve sharp open questions is far more useful than one with twelve
+invented answers.
+
+### It also writes the architecture document
+
+The same stage produces a current-state architecture description with **five
+diagrams**:
+
+| Diagram | Shows |
+|---|---|
+| System context | The system as one box, surrounded by users and external systems |
+| Container view | The deployable pieces and what talks to what |
+| Component view | The internal layers |
+| Primary sequence | The single most important business flow, end to end |
+| Data model | The core entities and how they relate |
+
+These are written as Mermaid text, which draws itself in the browser. No image
+files, no diagramming tool.
+
+Alongside: **16 components** identified, plus quality attributes, technical debt,
+and modernisation considerations.
+
+---
+
+## Step 6 — Convertibility Agent: what should become an agent?
+
+The final and most important step.
+
+### What it is actually looking for
+
+**Not** "which code is complicated." Complexity is a poor signal.
+
+The signal is **where humans are manually carrying the process** — the 286
+touchpoints collected in Step 3. Re-keying data between screens. Chasing
+approvals. Deciding from a rulebook. Assembling a report by hand.
+
+### Seven questions per candidate
+
+| Question | Why it matters |
+|---|---|
+| How much thinking per case? | A simple lookup does not need an agent |
+| How fuzzy are the rules? | Clear rules → write a script instead |
+| Is the data actually there? | An agent cannot use data that does not exist |
+| Can existing code be given as tools? | Reusing beats rebuilding |
+| How much human judgement is required? | Some decisions should not be delegated |
+| How bad is a mistake? | Irreversible damage means keep a human |
+| How often does this happen? | Rare work is not worth automating |
+
+### Five possible verdicts
+
+| Verdict | Meaning |
+|---|---|
+| **Deterministic automation** | Rules are clear. A plain script is better, cheaper and more reliable than any AI |
+| **Assisted copilot** | Human drives; AI drafts, retrieves and suggests |
+| **Supervised agent** | AI does the work; a human approves before anything permanent happens |
+| **Autonomous agent** | AI completes it within strict limits, with spot-checks rather than per-case review |
+| **Not suitable** | Leave it alone |
+
+The instructions explicitly push toward the first and last options:
+
+> *"Recommend deterministic automation often; it is the honest answer for most
+> CRUD. Be willing to fill in `not_recommended`. A report that says everything is
+> agentic is worthless."*
+
+### What Step 6 produced
+
+```
+Overall agentic readiness: 62 / 100
+
+C5  90  Deterministic automation  Document upload pre-flight validation
+C1  84  Autonomous agent          Application log triage and escalation
+C7  78  Deterministic automation  Config drift sentinel for integrations
+C2  67  Assisted copilot          Pilot review copilot for comment drafting
+C6  60  Assisted copilot          Crew contact copilot
+C3  54  Assisted copilot          Employee synopsis risk summarisation
+C4  51  Supervised agent          Access-change proposal and execution
+```
+
+**Two things are worth pausing on.**
+
+**The top recommendation says "do not build an agent."** The highest-scoring
+opportunity, at 90/100, is to unify the document-upload validation rules in
+ordinary code. Cheaper, faster and more reliable than any AI. The system is
+willing to tell you that.
+
+**It refused the tempting one.** Automatically granting and revoking user access
+scored **15 out of 100** in an earlier run and landed in "not recommended":
+
+```
+"High blast radius, ambiguous policy boundaries, and current
+ audit and exception-handling weaknesses."
+```
+
+That is exactly right for a security system. A tool that recommended agents for
+everything would be worse than useless — it would be dangerous.
+
+### Each candidate comes with a design
+
+Not just a name. For every candidate:
+
+```
+Goal                what it is trying to achieve
+Trigger             what starts it
+Inputs / Outputs
+Tools required      and which EXISTING service backs each one
+Guardrails          specific, enforceable limits
+Human checkpoints   where a person must sign off
+Success metrics     how you know it worked
+Risks
+```
+
+The "which existing service backs each tool" field is the practical one. It means
+the plan reuses code you already have rather than proposing a rebuild.
+
+### It also sequences the work
+
+```
+Wave 1  (0-6 weeks)    Low-risk quick wins           C5, C1
+Wave 2  (6-12 weeks)   Human-in-control assistants   C2, C4, C6
+Wave 3  (12-20 weeks)  Limited autonomy              C3
+```
+
+Starting with something that ships in weeks and proves value — not the most
+ambitious idea on the list.
+
+---
+
+## Step 7 — Reports
+
+Ordinary code turns the AI's structured answers into readable documents. No AI
+here, so the same data always produces the same document and nothing new is
+invented at the last moment.
+
+```
+reports/<repo>/<run-id>/
+    01_knowledge.md                 what the system does
+    02_brd.md                       business requirements
+    03_architecture.md              architecture + 5 diagrams
+    04_agentic_convertibility.md    what should become an agent
+
+    knowledge.json                  ┐
+    brd.json                        │  the same content,
+    architecture.json               │  machine-readable
+    convertibility.json             ┘
+
+    scan.json                       the full file inventory
+    run.json                        status, event log, token usage
+
+    modules/
+        <module>.json               each module's findings
+        <module>.prompt.md          the exact prompt that produced it
+```
+
+Those saved prompts matter. If a module's report looks wrong, you can read
+exactly what was asked before blaming the answer.
+
+---
+
+## Follow one file all the way through
+
+Take `EIS.UI/UserManagement/Users.aspx.cs`.
+
+```
+STEP 1  extension .cs          →  C#, a "source" language           KEPT
+        not a known library                                         KEPT
+        C# is not a front-end type, so the folder rule
+          does not apply                                            KEPT
+        lines average 45 characters, not minified                   KEPT
+
+STEP 2  path EIS.UI/UserManagement/Users.aspx.cs
+        first two folders  →  module "EIS.UI/UserManagement"
+        module holds 18 files, 5,093 lines
+        ranked 3rd largest of 45
+
+STEP 3  bundled with its 17 siblings, sent to the model
+        returns: 6 capabilities, 7 entities, 13 operations,
+                 7 business rules, 4 integrations,
+                 6 human touchpoints
+
+STEP 4  merged with 44 other module reports
+        contributes: the "User", "Role", "AccessRight" entities
+                     and the Security Administrator actor
+
+STEP 5  becomes FR-008 "HR administrators shall create, edit and
+        deactivate user accounts"
+        and FR-009 "role-based assignment of page access rights"
+
+STEP 6  its human touchpoints become candidate C4,
+        "Access-change proposal and controlled execution",
+        a supervised agent scoring 51/100
+```
+
+Meanwhile `EIS.UI/Scripts/jquery-1.10.2.js` stopped at Step 1, matched on the
+filename pattern `jquery*`, and cost nothing.
+
+---
+
+## Follow one finding all the way through
+
+This is the chain the whole system exists to produce.
+
+```
+THE CODE
+  Users.aspx.cs contains a grid with Add / Edit / Delete buttons
+  wired to a role dropdown and an "active" checkbox.
+        │
+        ▼
+STEP 3 — the reader notices a human is doing this by hand
+  "Manual user maintenance - create user, choose role, set active
+   flag, edit/delete via grid. Done by the security admin, as users
+   join or leave. No automated identity feed exists in this module."
+        │
+        ▼
+STEP 4 — merged into the system picture
+  Capability: "User and access administration"
+  Actor: "Security / User Management Administrator"
+        │
+        ▼
+STEP 5 — becomes a stated business requirement
+  FR-008 [High] The system shall allow HR administrators to create,
+                edit and deactivate user accounts
+        │
+        ▼
+STEP 6 — scored as an agentic opportunity
+  C4 · Access-change proposal and controlled execution
+     · Supervised agent · 51/100
+     · Impact: large admin time saving for joiner/mover/leaver
+     · Guardrail: every change requires human approval before commit
+     · Reuses: the existing user-management API endpoints
+```
+
+A line of code became a business recommendation, with the evidence attached at
+every step.
+
+---
+
+## Time and cost
+
+Measured on the real run — 51,022 lines of first-party code, 45 modules:
+
+```
+49 AI calls
+508,430 tokens in  ·  322,684 tokens out
+about $5
+6 to 10 minutes
+```
+
+A rule of thumb for planning: **about 16 tokens per line of first-party code.**
+
+```
+ 20,000 lines  →  about  $2
+ 50,000 lines  →  about  $5
+100,000 lines  →  about $11
+250,000 lines  →  about $27
+```
+
+### Two things that change the number a lot
+
+**Filtering saves most of the money.** Without Step 1, this run would have cost
+roughly **$31 instead of $5** — and most of it would have gone on describing
+jQuery.
+
+**Repeat runs are nearly free.** Every response is cached on disk. Re-running an
+unchanged repository costs cents; only modules whose files actually changed get
+re-read. On our second run, all 45 module reads returned instantly at zero cost.
+
+---
+
+## What we learned running it
+
+Honest findings from actually using this, not theory.
+
+### Testing on a small slice first genuinely works
+
+Setting `MAX_MODULES=3` analyses only the three largest modules. Because modules
+are sorted biggest-first, that gives a real sense of quality for about $1 before
+committing to a full run. We caught two configuration problems this way.
+
+### Vendor filtering was the single highest-value feature
+
+83% of the repository was other people's code. Nothing else came close to that
+impact — not model choice, not prompt wording.
+
+### Judge coverage by content, not by row counts
+
+We compared a 3-module run against a full 45-module run, and the first
+comparison was misleading. On raw counts the full run looked *worse* — 13
+capabilities became 12, 16 entities became 11, 16 open questions became 14.
+
+Reading the actual content reversed that conclusion completely.
+
+**Capabilities.** The 3-module run's 13 entries were all sub-features of two
+areas — employee-detail screens and user administration — because that is all it
+had seen. The full run's 12 entries are twelve *distinct business domains*, six
+of which the smaller run never knew existed:
+
+```
+Crew On Board Lookup
+Folder Utility and Bulk Folder-creation Intake
+PEP and Medical Endorsement Reporting
+Cruuz Document Metadata + Blob File Lifecycle
+Application Logging
+Authentication and Token Mediation
+```
+
+**Entities.** The drop from 16 to 11 was consolidation, not loss. The full run
+merged four related entities into one entry, `User/Role/Page/AccessRight`, which
+is exactly what the merge step is instructed to do — and separately added six
+genuinely new ones (`CrewBoard`, `Feedback`, `FolderStructure`,
+`MedicalEndorsement`, `PilotDashboard`, `CruuzDocumentDetailsType`).
+
+**Open questions.** The most revealing difference. The 3-module run asked:
+
+> *"Several code excerpts are truncated (notably EIS.js, UploadDocument.aspx.cs)"*
+
+That is not a business question — it means "I could not see enough." The full run
+asked:
+
+> *"What are the exact DB schema and table owners behind stored procedures
+> `UDPEIS*` and `USP_*`?"*
+> *"Is the mixed use of session-based and token-based identity intentional?"*
+
+Those are architectural questions you can only ask once you understand the
+system. It stopped asking to see more code and started asking about design
+decisions.
+
+**The lesson:** comparing report quality by counting rows is actively
+misleading. A shallow run produces many narrow items; a thorough run consolidates
+duplicates and covers more ground with fewer, broader ones. Read the content.
+
+### One thing genuinely did not scale
+
+Both runs produced exactly **55 functional requirements**, despite one having
+fifteen times the input. With more ground to cover, each requirement became more
+general rather than the list getting longer.
+
+That is a real limit of generating a whole document in one request. The fix is
+chunked generation — requirements produced per capability area and stitched
+together. It is recorded as an open item.
+
+### A configured limit silently reduced quality
+
+The merge step has a ceiling on input size. Ours was set too low, so it quietly
+dropped 23 of 45 module reports to fit. Nothing failed; the report was just
+thinner than it should have been, and the log line saying so was easy to miss.
+
+Worth checking the run log for "trimming synthesis input" on any large
+repository.
+
+### The open-source reader is still unfinished
+
+Runs so far used the built-in fallback reader rather than an external agent like
+OpenCode. Aider turned out to be the wrong kind of tool entirely — it is a
+pair-programming editor and will not explore a repository on its own; asked to
+read a file it replies *"could you please provide the file?"*.
+
+OpenCode is the right shape but has been unstable on our development machine.
+
+The practical difference is thoroughness of exploration, not output format. See
+`DESIGN-DECISIONS.md` for the detail and current status.
